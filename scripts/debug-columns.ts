@@ -1,0 +1,39 @@
+/**
+ * Debug column count issue
+ */
+
+import { Pool } from 'pg';
+import * as dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import { dirname, resolve } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+dotenv.config({ path: resolve(__dirname, '../.env') });
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL?.includes('ondigitalocean.com')
+    ? { rejectUnauthorized: false }
+    : undefined,
+});
+
+async function debugColumns() {
+  const result = await pool.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_name = 'clients'
+    ORDER BY column_name;
+  `);
+
+  console.log(`Total columns in clients table: ${result.rows.length}\n`);
+
+  result.rows.forEach((row, index) => {
+    console.log(`${index + 1}. ${row.column_name}`);
+  });
+
+  await pool.end();
+}
+
+debugColumns().catch(console.error);
