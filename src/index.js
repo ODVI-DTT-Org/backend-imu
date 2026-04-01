@@ -47,6 +47,19 @@ const app = new Hono();
 // CORS configuration for web and mobile app
 app.use('*', cors({
     origin: (origin) => {
+        // In development, allow all origins
+        if (process.env.NODE_ENV !== 'production') {
+            return origin || '*';
+        }
+
+        // If CORS_ORIGIN env var is set, use it
+        if (process.env.CORS_ORIGIN) {
+            const allowedOrigins = process.env.CORS_ORIGIN.split(',').map(o => o.trim());
+            if (origin && allowedOrigins.includes(origin)) {
+                return origin;
+            }
+        }
+
         // Allow all localhost ports, local network IPs, and mobile app origins
         const allowedPatterns = [
             /^http:\/\/localhost(:\d+)?$/,
@@ -56,11 +69,9 @@ app.use('*', cors({
             /^capacitor:\/\/localhost$/,
             /^ionic:\/\/localhost$/,
             /^https?:\/\/.*\.preview\.app\.github\.dev$/, // GitHub Codespaces
+            /^https:\/\/imu\.cfbtools\.app$/, // Production frontend
+            /^https:\/\/imu-api\.cfbtools\.app$/, // Production backend (same-origin)
         ];
-        // In development, allow all origins
-        if (process.env.NODE_ENV !== 'production') {
-            return origin || '*';
-        }
         // Check if origin matches any allowed pattern
         if (origin && allowedPatterns.some(pattern => pattern.test(origin))) {
             return origin;
