@@ -6,6 +6,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { authMiddleware, requireRole } from './middleware/auth.js';
+import { debugLogger, debugErrorHandler } from './middleware/debug-logger.js';
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
 import clientsRoutes from './routes/clients.js';
@@ -84,6 +85,8 @@ app.use('*', cors({
     credentials: true,
     maxAge: 86400,
 }));
+// Debug logging middleware (logs all requests/responses)
+app.use('*', debugLogger);
 // Health check endpoint
 app.get('/api/health', async (c) => {
     let dbStatus = 'unknown';
@@ -348,20 +351,18 @@ app.route('/api/search', searchRoutes);
 app.notFound((c) => {
     return c.json({ message: 'Not Found' }, 404);
 });
-// Error handler
+// Error handler with debug logging
 app.onError((err, c) => {
-    console.error('Server error:', err);
-    return c.json({
-        message: 'Internal Server Error',
-        error: process.env.NODE_ENV === 'development' ? err.message : undefined,
-    }, 500);
+    return debugErrorHandler(err, c);
 });
 // Start server
 const port = parseInt(process.env.PORT || '3000');
+const debugEnabled = process.env.DEBUG_LOGS === 'true' || process.env.NODE_ENV !== 'production';
 console.log('🚀 Starting IMU Backend API...');
 console.log(`📡 Server running on http://localhost:${port}`);
 console.log(`🔑 JWT Secret: ${process.env.JWT_SECRET ? 'configured' : 'NOT SET'}`);
 console.log(`📊 Database: ${process.env.DATABASE_URL ? 'configured' : 'NOT SET'}`);
+console.log(`🐛 Debug Logging: ${debugEnabled ? 'ENABLED' : 'DISABLED (set DEBUG_LOGS=true to enable)'}`);
 serve({
     fetch: app.fetch,
     port,
