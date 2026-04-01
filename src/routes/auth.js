@@ -158,23 +158,23 @@ auth.post('/login', async (c) => {
 
         const accessToken = sign({
             sub: user.id,
-            aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             email: user.email,
             first_name: user.first_name,
             last_name: user.last_name,
             role: user.role,
         }, privateKey, {
             algorithm: 'RS256',
-            keyid: 'imu-production-key-20260326',
+            keyid: 'imu-production-key-20260401',
             expiresIn: `${expiryHours}h`,
         });
         const refreshToken = sign({
             sub: user.id,
-            aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             type: 'refresh',
         }, privateKey, {
             algorithm: 'RS256',
-            keyid: 'imu-production-key-20260326',
+            keyid: 'imu-production-key-20260401',
             expiresIn: '7d',
         });
 
@@ -250,24 +250,24 @@ auth.post('/refresh', async (c) => {
         // Generate new access token
         const accessToken = sign({
             sub: user.id,
-            aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             email: user.email,
             first_name: user.first_name,
             last_name: user.last_name,
             role: user.role,
         }, privateKey, {
             algorithm: 'RS256',
-            keyid: 'imu-production-key-20260326',
+            keyid: 'imu-production-key-20260401',
             expiresIn: `${expiryHours}h`,
         });
         // Generate new refresh token
         const newRefreshToken = sign({
             sub: user.id,
-            aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             type: 'refresh',
         }, privateKey, {
             algorithm: 'RS256',
-            keyid: 'imu-production-key-20260326',
+            keyid: 'imu-production-key-20260401',
             expiresIn: '7d',
         });
         return c.json({
