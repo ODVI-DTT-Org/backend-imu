@@ -3,39 +3,21 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditAuth } from '../middleware/audit.js';
 import { emailService } from '../services/email.js';
 import { pool } from '../db/index.js';
 
-// Load PowerSync RSA private key for JWT signing
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const privateKeyPath = path.join(__dirname, '../../powersync-private-key.pem');
-const publicKeyPath = path.join(__dirname, '../../powersync-public-key.pem');
+// Load PowerSync RSA keys from environment variable for JWT signing
+const privateKey = process.env.POWERSYNC_PRIVATE_KEY;
+const publicKey = process.env.POWERSYNC_PUBLIC_KEY || privateKey; // Fallback to private key for verification
+const powerSyncUrl = process.env.POWERSYNC_URL || 'http://localhost:8080';
 
-let privateKey: string;
-let publicKey: string;
-
-try {
-  privateKey = fs.readFileSync(privateKeyPath, 'utf-8');
-  console.log('✅ PowerSync private key loaded successfully');
-} catch (error) {
-  console.error('❌ Failed to load PowerSync private key:', error);
-  throw new Error('PowerSync private key not found at ' + privateKeyPath);
+if (!privateKey) {
+  throw new Error('POWERSYNC_PRIVATE_KEY environment variable is required for JWT signing');
 }
 
-try {
-  publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
-  console.log('✅ PowerSync public key loaded successfully');
-} catch (error) {
-  console.warn('⚠️ Failed to load PowerSync public key, will use private key for verification');
-  // Fallback to private key if public key is not available (not recommended for production)
-  publicKey = privateKey;
-}
+console.log('✅ PowerSync keys loaded from environment');
 
 const { sign, verify } = jwt;
 const { hash, compare } = bcrypt;
@@ -101,7 +83,7 @@ auth.post('/login', async (c) => {
     const accessToken = sign(
       {
         sub: user.id,
-        aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+        aud: powerSyncUrl,
         email: user.email,
         first_name: user.first_name,
         last_name: user.last_name,
@@ -118,7 +100,7 @@ auth.post('/login', async (c) => {
     const refreshToken = sign(
       {
         sub: user.id,
-        aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+        aud: powerSyncUrl,
         type: 'refresh',
       },
       privateKey,
@@ -200,7 +182,7 @@ auth.post('/refresh', async (c) => {
     const accessToken = sign(
       {
         sub: user.id,
-        aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+        aud: powerSyncUrl,
         email: user.email,
         first_name: user.first_name,
         last_name: user.last_name,
@@ -218,7 +200,7 @@ auth.post('/refresh', async (c) => {
     const newRefreshToken = sign(
       {
         sub: user.id,
-        aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
+        aud: powerSyncUrl,
         type: 'refresh',
       },
       privateKey,
