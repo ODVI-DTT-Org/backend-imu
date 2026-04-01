@@ -62,6 +62,7 @@ else {
         publicKey = privateKey;
     }
 }
+const { sign, verify } = jwt;
 // Test RSA keys by attempting a simple sign/verify
 console.log('🔑 TESTING RSA KEYS...');
 try {
@@ -79,7 +80,6 @@ catch (error) {
     console.error('   publicKey length:', publicKey?.length);
     throw new Error('RSA key validation failed: ' + error.message);
 }
-const { sign, verify } = jwt;
 const { hash, compare } = bcrypt;
 const auth = new Hono();
 // Validation schemas
