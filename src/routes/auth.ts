@@ -9,13 +9,17 @@ import { emailService } from '../services/email.js';
 import { pool } from '../db/index.js';
 
 // Load PowerSync RSA keys from environment variable for JWT signing
-const privateKey = process.env.POWERSYNC_PRIVATE_KEY;
-const publicKey = process.env.POWERSYNC_PUBLIC_KEY || privateKey; // Fallback to private key for verification
+const privateKeyInput = process.env.POWERSYNC_PRIVATE_KEY;
+const publicKeyInput = process.env.POWERSYNC_PUBLIC_KEY;
 const powerSyncUrl = process.env.POWERSYNC_URL || 'http://localhost:8080';
 
-if (!privateKey) {
+if (!privateKeyInput) {
   throw new Error('POWERSYNC_PRIVATE_KEY environment variable is required for JWT signing');
 }
+
+// Handle escaped newlines in environment variables (DigitalOcean format)
+const privateKey = privateKeyInput.trim().replace(/\\n/g, '\n');
+const publicKey = (publicKeyInput || privateKeyInput).trim().replace(/\\n/g, '\n');
 
 // Type assertions for TypeScript (runtime check above ensures these are defined)
 const signingKey = privateKey as string;

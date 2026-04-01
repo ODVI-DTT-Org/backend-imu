@@ -1,23 +1,19 @@
 import jwt from 'jsonwebtoken';
 import { Context, Next } from 'hono';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 const { verify } = jwt;
 
-// Load PowerSync RSA public key for JWT verification
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const publicKeyPath = path.join(__dirname, '../../powersync-public-key.pem');
+// Load PowerSync RSA public key from environment variable for JWT verification
+const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
 
 let publicKey: string;
-try {
-  publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
-  console.log('✅ Auth middleware: PowerSync public key loaded');
-} catch (error) {
-  console.error('❌ Auth middleware: Failed to load PowerSync public key:', error);
-  throw new Error('PowerSync public key not found at ' + publicKeyPath);
+if (envPublicKey && envPublicKey.trim().length > 0) {
+  // Handle escaped newlines in environment variable (DigitalOcean format)
+  publicKey = envPublicKey.trim().replace(/\\n/g, '\n');
+  console.log('✅ Auth middleware: PowerSync public key loaded from environment');
+} else {
+  console.error('❌ Auth middleware: POWERSYNC_PUBLIC_KEY environment variable not set');
+  throw new Error('POWERSYNC_PUBLIC_KEY environment variable is required');
 }
 
 interface JwtPayload {
