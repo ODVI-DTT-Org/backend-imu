@@ -17,6 +17,10 @@ if (!privateKey) {
   throw new Error('POWERSYNC_PRIVATE_KEY environment variable is required for JWT signing');
 }
 
+// Type assertions for TypeScript (runtime check above ensures these are defined)
+const signingKey = privateKey as string;
+const verificationKey = publicKey as string;
+
 console.log('✅ PowerSync keys loaded from environment');
 
 const { sign, verify } = jwt;
@@ -89,7 +93,7 @@ auth.post('/login', async (c) => {
         last_name: user.last_name,
         role: user.role,
       },
-      privateKey,
+      signingKey,
       {
         algorithm: 'RS256',
         keyid: 'imu-production-key-20260326',
@@ -103,7 +107,7 @@ auth.post('/login', async (c) => {
         aud: powerSyncUrl,
         type: 'refresh',
       },
-      privateKey,
+      signingKey,
       {
         algorithm: 'RS256',
         keyid: 'imu-production-key-20260326',
@@ -149,7 +153,7 @@ auth.post('/refresh', async (c) => {
     let decoded: { sub: string; type: string };
     try {
       // Try verifying with new RS256 public key
-      decoded = verify(refresh_token, publicKey, { algorithms: ['RS256'] }) as { sub: string; type: string };
+      decoded = verify(refresh_token, verificationKey, { algorithms: ['RS256'] }) as { sub: string; type: string };
     } catch (rs256Error) {
       try {
         // Fall back to old HS256 with JWT_SECRET for backward compatibility
@@ -188,7 +192,7 @@ auth.post('/refresh', async (c) => {
         last_name: user.last_name,
         role: user.role,
       },
-      privateKey,
+      signingKey,
       {
         algorithm: 'RS256',
         keyid: 'imu-production-key-20260326',
@@ -203,7 +207,7 @@ auth.post('/refresh', async (c) => {
         aud: powerSyncUrl,
         type: 'refresh',
       },
-      privateKey,
+      signingKey,
       {
         algorithm: 'RS256',
         keyid: 'imu-production-key-20260326',
@@ -408,7 +412,7 @@ auth.post('/logout', async (c) => {
       // Try verifying with new RS256 public key first
       let decoded: { sub: string } | null = null;
       try {
-        decoded = verify(token, publicKey, { algorithms: ['RS256'] }) as { sub: string };
+        decoded = verify(token, verificationKey, { algorithms: ['RS256'] }) as { sub: string };
       } catch {
         // Fall back to old HS256 with JWT_SECRET for backward compatibility
         try {
