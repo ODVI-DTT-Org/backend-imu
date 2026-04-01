@@ -12,6 +12,11 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
+    "@types/bcrypt": "^6.0.0",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.7",
+    "@types/node": "^22.10.5",
+    "@types/pg": "^8.11.10",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.7",
@@ -19,17 +24,12 @@
     "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1",
     "posthog-node": "^5.28.2",
+    "typescript": "^5.7.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/bcrypt": "^6.0.0",
-    "@types/bcryptjs": "^2.4.6",
-    "@types/jsonwebtoken": "^9.0.7",
-    "@types/node": "^22.10.5",
-    "@types/pg": "^8.11.10",
     "@vitest/ui": "^4.1.2",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3",
     "vitest": "^4.1.2"
   }
 }
