@@ -1,37 +1,127 @@
 # Dependencies
 node_modules/
+jspm_packages/
 
-# Build
+# Build output
 dist/
+build/
+out/
 
-# Environment files
+# Environment variables
 .env
 .env.local
 .env.*.local
-.env.qa
-
-# Uploads
-uploads/
+.env.development
+.env.production
+.env.test
 
 # Logs
+logs/
 *.log
-import-log.txt
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
 
-# Certificates and keys
-*.crt
+# Testing
+coverage/
+.nyc_output/
+*.lcov
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Uploads and temporary files
+uploads/
+temp/
+tmp/
+*.tmp
+
+# SSL certificates and keys
 *.pem
 *.key
+*.cert
+*.crt
+powersync-private-key.pem
 
 # OS files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+desktop.ini
 
-# IDE
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
 .idea/
-.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
 *.swp
-*.swo
+*~
+.project
+.classpath
+.settings/
 
-# Misc
-nul
-et --soft HEAD~1
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# parcel-bundler cache
+.cache
+.parcel-cache
+
+# Next.js build output
+.next/
+out/
+
+# Nuxt.js build / generate output
+.nuxt/
+
+# Storybook build outputs
+.out
+.storybook-out
+
+# Runtime data
+pids/
+*.pid
+*.seed
+*.pid.lock
+
+# Backup files
+*.bak
+*.backup
+*.old
+
+# TypeScript
+*.tsbuildinfo
+
+# PowerSync specific
+powersync-*.db
+*.powersync*
+
+# Import scripts (temporary)
+import-*.txt
+import-*.log
