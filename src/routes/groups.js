@@ -499,25 +499,6 @@ groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROL
                 // Continue with next municipality
             }
         }
-                const wasInserted = result.rows[0].inserted;
-                if (wasInserted) {
-                    caravanAssigned++;
-                }
-            }
-            catch (error) {
-                // If constraint doesn't exist yet, fall back to manual check
-                if (error.code === '42710' || error.code === '23505') {
-                    const existing = await pool.query('SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2 AND deleted_at IS NULL LIMIT 1', [caravanId, municipalityId]);
-                    if (existing.rows.length === 0) {
-                        await pool.query('INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)', [caravanId, municipalityId, currentUser.sub]);
-                        caravanAssigned++;
-                    }
-                }
-                else {
-                    throw error;
-                }
-            }
-        }
         return c.json({
             message: `Municipalities assigned successfully to group and caravan`,
             group_assigned_count: groupAssigned,
