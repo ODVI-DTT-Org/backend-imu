@@ -8,6 +8,7 @@ dist/
 .env
 .env.local
 .env.*.local
+.env.qa
 
 # Uploads
 uploads/
@@ -33,3 +34,5 @@ Thumbs.db
 
 # Misc
 nul
+Procfile
+et --soft HEAD~1
