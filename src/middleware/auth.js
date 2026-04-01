@@ -14,7 +14,8 @@ const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
 console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY env var exists:', !!envPublicKey);
 console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY length:', envPublicKey?.length || 0);
 if (envPublicKey && envPublicKey.trim().length > 0) {
-    publicKey = envPublicKey.trim();
+    // Handle escaped newlines in environment variable
+    publicKey = envPublicKey.trim().replace(/\\n/g, '\n');
     console.log('✅ Auth middleware: PowerSync public key loaded from environment variable');
 }
 else {

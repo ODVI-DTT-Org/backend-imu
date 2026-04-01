@@ -23,12 +23,14 @@ const envPrivateKey = process.env.POWERSYNC_PRIVATE_KEY;
 console.log('🔍 DEBUG: POWERSYNC_PRIVATE_KEY env var exists:', !!envPrivateKey);
 console.log('🔍 DEBUG: POWERSYNC_PRIVATE_KEY length:', envPrivateKey?.length || 0);
 if (envPrivateKey && envPrivateKey.trim().length > 0) {
-    privateKey = envPrivateKey.trim();
+    // Handle escaped newlines in environment variable
+    privateKey = envPrivateKey.trim().replace(/\\n/g, '\n');
     console.log('✅ PowerSync private key loaded from environment variable');
     // Validate the key format
     console.log('🔍 DEBUG: Private key starts with:', privateKey.substring(0, 20) + '...');
     console.log('🔍 DEBUG: Private key ends with:', '...' + privateKey.substring(privateKey.length - 20));
     console.log('🔍 DEBUG: Contains BEGIN PRIVATE KEY:', privateKey.includes('BEGIN PRIVATE KEY') || privateKey.includes('BEGIN RSA PRIVATE KEY'));
+    console.log('🔍 DEBUG: Private key line count:', privateKey.split('\n').length);
 }
 else {
     console.log('⚠️ POWERSYNC_PRIVATE_KEY not set or empty, trying file...');
@@ -47,8 +49,10 @@ const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
 console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY env var exists (routes):', !!envPublicKey);
 console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY length:', envPublicKey?.length || 0);
 if (envPublicKey && envPublicKey.trim().length > 0) {
-    publicKey = envPublicKey.trim();
+    // Handle escaped newlines in environment variable
+    publicKey = envPublicKey.trim().replace(/\\n/g, '\n');
     console.log('✅ PowerSync public key loaded from environment variable');
+    console.log('🔍 DEBUG: Public key line count:', publicKey.split('\n').length);
 }
 else {
     console.log('⚠️ POWERSYNC_PUBLIC_KEY not set or empty, trying file...');
