@@ -10,8 +10,12 @@ if (!rawConnectionString) {
     throw new Error('DATABASE_URL is not set');
 }
 // Prefer validating with a provided CA cert when available.
+// Can be provided as a file path (DB_CA_CERT_PATH) or direct content (DB_CA_CERT)
+const dbCaCertContent = process.env.DB_CA_CERT;
 const dbCaCertPath = process.env.DB_CA_CERT_PATH || process.env.PGSSLROOTCERT;
-const ca = dbCaCertPath ? (await import('fs')).readFileSync(dbCaCertPath, 'utf-8') : undefined;
+const ca = dbCaCertContent
+    ? dbCaCertContent
+    : (dbCaCertPath ? (await import('fs')).readFileSync(dbCaCertPath, 'utf-8') : undefined);
 // Ensure sslmode/ssl* query params don't force stricter behavior than our ssl config.
 let connectionString = rawConnectionString;
 try {

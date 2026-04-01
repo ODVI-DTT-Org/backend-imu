@@ -399,40 +399,81 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
         if (userCheck.rows.length === 0) {
             return c.json({ message: 'User not found' }, 404);
         }
-        // Check if user_locations table exists
+        // Check if user_locations table exists and has new columns
         const tableCheck = await pool.query(`
       SELECT EXISTS (
         SELECT 1 FROM information_schema.tables
         WHERE table_name = 'user_locations'
-      )
+      ) as table_exists,
+      EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'user_locations' AND column_name = 'province'
+      ) as has_province_column
     `);
-        if (!tableCheck.rows[0].exists) {
+        if (!tableCheck.rows[0].table_exists) {
             return c.json({ items: [] });
         }
-        // Get assigned municipalities (not deleted)
-        const result = await pool.query(`SELECT
-        ums.id,
-        ums.municipality_id,
-        ums.assigned_at,
-        ums.assigned_by,
-        p.region,
-        p.province,
-        p.mun_city as municipality_name
-       FROM user_locations ums
-       LEFT JOIN psgc p ON TRIM(p.province) || '-' || TRIM(p.mun_city) = ums.municipality_id
-       WHERE ums.user_id = $1 AND ums.deleted_at IS NULL
-       ORDER BY ums.assigned_at DESC`, [userId]);
+        const hasNewColumns = tableCheck.rows[0].has_province_column;
+
+        // Get assigned municipalities (not deleted) - use new columns if available
+        let result;
+        if (hasNewColumns) {
+            result = await pool.query(`SELECT
+            ums.id,
+            ums.province,
+            ums.municipality,
+            ums.assigned_at,
+            ums.assigned_by,
+            p.region
+           FROM user_locations ums
+           LEFT JOIN psgc p ON p.province = ums.province AND p.mun_city = ums.municipality
+           WHERE ums.user_id = $1 AND ums.deleted_at IS NULL
+           ORDER BY ums.assigned_at DESC`, [userId]);
+        } else {
+            result = await pool.query(`SELECT
+            ums.id,
+            ums.municipality_id,
+            ums.assigned_at,
+            ums.assigned_by,
+            p.region,
+            p.province,
+            p.mun_city as municipality_name
+           FROM user_locations ums
+           LEFT JOIN psgc p ON TRIM(p.province) || '-' || TRIM(p.mun_city) = ums.municipality_id
+           WHERE ums.user_id = $1 AND ums.deleted_at IS NULL
+           ORDER BY ums.assigned_at DESC`, [userId]);
+        }
+
         // Map results to expected format
-        const items = result.rows.map(row => ({
-            id: row.id,
-            municipality_id: row.municipality_id,
-            municipality_name: row.municipality_name || row.municipality_id,
-            municipality_code: row.municipality_id,
-            region_name: row.region || '',
-            region_code: row.region || '',
-            assigned_at: row.assigned_at,
-            assigned_by: row.assigned_by,
-        }));
+        const items = result.rows.map(row => {
+            if (hasNewColumns) {
+                return {
+                    id: row.id,
+                    province: row.province,
+                    municipality: row.municipality,
+                    municipality_id: `${row.province}-${row.municipality}`, // Legacy format for frontend compatibility
+                    municipality_name: row.municipality,
+                    municipality_code: `${row.province}-${row.municipality}`,
+                    region_name: row.region || '',
+                    region_code: row.region || '',
+                    assigned_at: row.assigned_at,
+                    assigned_by: row.assigned_by,
+                };
+            } else {
+                return {
+                    id: row.id,
+                    province: row.province,
+                    municipality: row.municipality_name,
+                    municipality_id: row.municipality_id,
+                    municipality_name: row.municipality_name || row.municipality_id,
+                    municipality_code: row.municipality_id,
+                    region_name: row.region || '',
+                    region_code: row.region || '',
+                    assigned_at: row.assigned_at,
+                    assigned_by: row.assigned_by,
+                };
+            }
+        });
         return c.json({ items });
     }
     catch (error) {
@@ -441,45 +482,131 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
     }
 });
 // POST /api/users/:id/municipalities - Assign municipalities to user (admin, area_manager, assistant_area_manager)
+// Supports both legacy format ("Province-Municipality") and new format ({province, municipality} objects)
 users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
     try {
         const currentUser = c.get('user');
         const userId = c.req.param('id');
         const body = await c.req.json();
-        const schema = z.object({
+
+        // Support both legacy string array and new object array formats
+        const legacySchema = z.object({
             municipality_ids: z.array(z.string()).min(1),
         });
-        const validated = schema.parse(body);
+        const newSchema = z.object({
+            locations: z.array(z.object({
+                province: z.string().min(1),
+                municipality: z.string().min(1),
+            })).min(1),
+        });
+
+        let validated;
+        let useNewFormat = false;
+        try {
+            validated = newSchema.parse(body);
+            useNewFormat = true;
+        } catch {
+            validated = legacySchema.parse(body);
+            useNewFormat = false;
+        }
+
         // Verify user exists
         const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
         if (userCheck.rows.length === 0) {
             return c.json({ message: 'User not found' }, 404);
         }
-        // Verify all municipalities exist in PSGC table
-        for (const municipalityId of validated.municipality_ids) {
-            if (!municipalityId || !municipalityId.includes('-')) {
-                return c.json({ message: `Invalid municipality ID format: ${municipalityId}` }, 400);
-            }
-            const check = await pool.query(`SELECT 1 FROM psgc WHERE TRIM(province) || '-' || TRIM(mun_city) = $1 LIMIT 1`, [municipalityId]);
-            if (check.rows.length === 0) {
-                return c.json({ message: `Municipality not found: ${municipalityId}` }, 400);
-            }
-        }
-        // Insert user assignments (upsert - handle re-assignments)
+
+        // Check if user_locations table has new columns
+        const columnCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'user_locations' AND column_name = 'province'
+      ) as has_province_column
+    `);
+        const hasNewColumns = columnCheck.rows[0].has_province_column;
+
         let assignedCount = 0;
-        for (const municipalityId of validated.municipality_ids) {
-            const existing = await pool.query('SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2', [userId, municipalityId]);
-            if (existing.rows.length > 0) {
-                if (existing.rows[0].deleted_at) {
-                    await pool.query('UPDATE user_locations SET deleted_at = NULL, assigned_at = NOW(), assigned_by = $1 WHERE id = $2', [currentUser.sub, existing.rows[0].id]);
-                    assignedCount++;
+
+        // Helper function to insert a location assignment
+        const insertLocation = async (province, municipality) => {
+            try {
+                // Verify the location exists in PSGC table
+                const check = await pool.query(
+                    `SELECT 1 FROM psgc WHERE TRIM(province) = $1 AND TRIM(mun_city) = $2 LIMIT 1`,
+                    [province.trim(), municipality.trim()]
+                );
+                if (check.rows.length === 0) {
+                    throw new Error(`Location not found: ${province}-${municipality}`);
                 }
+
+                // Insert using the new columns if available
+                if (hasNewColumns) {
+                    const existing = await pool.query(
+                        'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
+                        [userId, province.trim(), municipality.trim()]
+                    );
+                    if (existing.rows.length > 0) {
+                        if (existing.rows[0].deleted_at) {
+                            await pool.query(
+                                'UPDATE user_locations SET deleted_at = NULL, assigned_at = NOW(), assigned_by = $1 WHERE id = $2',
+                                [currentUser.sub, existing.rows[0].id]
+                            );
+                            assignedCount++;
+                        }
+                    } else {
+                        await pool.query(
+                            'INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
+                            [userId, province.trim(), municipality.trim(), currentUser.sub]
+                        );
+                        assignedCount++;
+                    }
+                } else {
+                    // Fallback to old municipality_id format
+                    const municipalityId = `${province.trim()}-${municipality.trim()}`;
+                    const existing = await pool.query(
+                        'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2',
+                        [userId, municipalityId]
+                    );
+                    if (existing.rows.length > 0) {
+                        if (existing.rows[0].deleted_at) {
+                            await pool.query(
+                                'UPDATE user_locations SET deleted_at = NULL, assigned_at = NOW(), assigned_by = $1 WHERE id = $2',
+                                [currentUser.sub, existing.rows[0].id]
+                            );
+                            assignedCount++;
+                        }
+                    } else {
+                        await pool.query(
+                            'INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)',
+                            [userId, municipalityId, currentUser.sub]
+                        );
+                        assignedCount++;
+                    }
+                }
+            } catch (error) {
+                console.error('Error inserting location:', error);
+                throw error;
             }
-            else {
-                await pool.query('INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)', [userId, municipalityId, currentUser.sub]);
-                assignedCount++;
+        };
+
+        // Process locations based on format
+        if (useNewFormat) {
+            for (const location of validated.locations) {
+                await insertLocation(location.province, location.municipality);
+            }
+        } else {
+            // Legacy format: parse "Province-Municipality" strings
+            for (const municipalityId of validated.municipality_ids) {
+                if (!municipalityId || !municipalityId.includes('-')) {
+                    return c.json({ message: `Invalid municipality ID format: ${municipalityId}` }, 400);
+                }
+                const parts = municipalityId.split('-');
+                const province = parts[0];
+                const municipality = parts.slice(1).join('-'); // Handle cases with multiple dashes
+                await insertLocation(province, municipality);
             }
         }
+
         if (assignedCount === 0) {
             return c.json({
                 message: 'No new municipalities were assigned. All selected municipalities are already assigned to this user.'
@@ -495,7 +622,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
             return c.json({ message: 'Invalid input', errors: error.errors }, 400);
         }
         console.error('Assign municipalities error:', error);
-        return c.json({ message: 'Internal server error' }, 500);
+        return c.json({ message: error.message || 'Internal server error' }, 500);
     }
 });
 // POST /api/users/:id/municipalities/bulk - Bulk unassign municipalities (admin, area_manager, assistant_area_manager)

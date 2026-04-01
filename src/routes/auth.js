@@ -17,22 +17,40 @@ const privateKeyPath = path.join(__dirname, '../../powersync-private-key.pem');
 const publicKeyPath = path.join(__dirname, '../../powersync-public-key.pem');
 let privateKey;
 let publicKey;
-try {
-    privateKey = fs.readFileSync(privateKeyPath, 'utf-8');
-    console.log('✅ PowerSync private key loaded successfully');
+
+// Load private key from env var or file
+const envPrivateKey = process.env.POWERSYNC_PRIVATE_KEY;
+if (envPrivateKey) {
+    privateKey = envPrivateKey;
+    console.log('✅ PowerSync private key loaded from environment variable');
 }
-catch (error) {
-    console.error('❌ Failed to load PowerSync private key:', error);
-    throw new Error('PowerSync private key not found at ' + privateKeyPath);
+else {
+    try {
+        privateKey = fs.readFileSync(privateKeyPath, 'utf-8');
+        console.log('✅ PowerSync private key loaded from file');
+    }
+    catch (error) {
+        console.error('❌ Failed to load PowerSync private key:', error);
+        throw new Error('PowerSync private key not found. Set POWERSYNC_PRIVATE_KEY env var or add file at ' + privateKeyPath);
+    }
 }
-try {
-    publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
-    console.log('✅ PowerSync public key loaded successfully');
+
+// Load public key from env var or file
+const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
+if (envPublicKey) {
+    publicKey = envPublicKey;
+    console.log('✅ PowerSync public key loaded from environment variable');
 }
-catch (error) {
-    console.warn('⚠️ Failed to load PowerSync public key, will use private key for verification');
-    // Fallback to private key if public key is not available (not recommended for production)
-    publicKey = privateKey;
+else {
+    try {
+        publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
+        console.log('✅ PowerSync public key loaded from file');
+    }
+    catch (error) {
+        console.warn('⚠️ Failed to load PowerSync public key, will use private key for verification');
+        // Fallback to private key if public key is not available (not recommended for production)
+        publicKey = privateKey;
+    }
 }
 const { sign, verify } = jwt;
 const { hash, compare } = bcrypt;

@@ -8,13 +8,23 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const publicKeyPath = path.join(__dirname, '../../powersync-public-key.pem');
 let publicKey;
-try {
-    publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
-    console.log('✅ Auth middleware: PowerSync public key loaded');
+
+// Try environment variable first (for DigitalOcean deployment), then file
+const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
+if (envPublicKey) {
+    publicKey = envPublicKey;
+    console.log('✅ Auth middleware: PowerSync public key loaded from environment variable');
 }
-catch (error) {
-    console.error('❌ Auth middleware: Failed to load PowerSync public key:', error);
-    throw new Error('PowerSync public key not found at ' + publicKeyPath);
+else {
+    try {
+        publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
+        console.log('✅ Auth middleware: PowerSync public key loaded from file');
+    }
+    catch (error) {
+        console.error('❌ Auth middleware: Failed to load PowerSync public key:', error);
+        console.error('   Set POWERSYNC_PUBLIC_KEY environment variable or place file at:', publicKeyPath);
+        throw new Error('PowerSync public key not found. Set POWERSYNC_PUBLIC_KEY env var or add file at ' + publicKeyPath);
+    }
 }
 export const authMiddleware = async (c, next) => {
     const authHeader = c.req.header('Authorization');

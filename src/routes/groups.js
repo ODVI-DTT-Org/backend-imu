@@ -449,19 +449,56 @@ groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROL
                 groupAssigned++;
             }
         }
-        // Also assign to the caravan (user_locations table)
+        // Also assign to the caravan (user_locations table) - use new format if available
         let caravanAssigned = 0;
+
+        // Check if user_locations has new columns
+        const columnCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'user_locations' AND column_name = 'province'
+      ) as has_province_column
+    `);
+        const hasNewColumns = columnCheck.rows[0].has_province_column;
+
         for (const municipalityId of validated.municipality_ids) {
             try {
-                // Use INSERT ... ON CONFLICT to prevent duplicates
-                const result = await pool.query(`INSERT INTO user_locations (user_id, municipality_id, assigned_at, assigned_by, deleted_at)
-           VALUES ($1, $2, NOW(), $3, NULL)
-           ON CONFLICT (user_id, municipality_id)
-           DO UPDATE SET
-             deleted_at = NULL,
-             assigned_at = NOW(),
-             assigned_by = $3
-           RETURNING (xmax = 0) as inserted`, [caravanId, municipalityId, currentUser.sub]);
+                // Parse the municipalityId to get province and municipality
+                const parts = municipalityId.split('-');
+                const province = parts[0];
+                const municipality = parts.slice(1).join('-');
+
+                if (hasNewColumns) {
+                    // Use new format with province and municipality columns
+                    const result = await pool.query(`INSERT INTO user_locations (user_id, province, municipality, assigned_at, assigned_by, deleted_at)
+               VALUES ($1, $2, $3, NOW(), $4, NULL)
+               ON CONFLICT (user_id, province, municipality)
+               DO UPDATE SET
+                 deleted_at = NULL,
+                 assigned_at = NOW(),
+                 assigned_by = $4
+               RETURNING (xmax = 0) as inserted`, [caravanId, province.trim(), municipality.trim(), currentUser.sub]);
+                    const wasInserted = result.rows[0].inserted;
+                    if (wasInserted) caravanAssigned++;
+                } else {
+                    // Use legacy format with municipality_id
+                    const result = await pool.query(`INSERT INTO user_locations (user_id, municipality_id, assigned_at, assigned_by, deleted_at)
+               VALUES ($1, $2, NOW(), $3, NULL)
+               ON CONFLICT (user_id, municipality_id)
+               DO UPDATE SET
+                 deleted_at = NULL,
+                 assigned_at = NOW(),
+                 assigned_by = $3
+               RETURNING (xmax = 0) as inserted`, [caravanId, municipalityId, currentUser.sub]);
+                    const wasInserted = result.rows[0].inserted;
+                    if (wasInserted) caravanAssigned++;
+                }
+            }
+            catch (error) {
+                console.error('Error assigning to caravan:', error);
+                // Continue with next municipality
+            }
+        }
                 const wasInserted = result.rows[0].inserted;
                 if (wasInserted) {
                     caravanAssigned++;
