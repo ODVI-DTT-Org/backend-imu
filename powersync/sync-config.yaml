@@ -5,11 +5,23 @@ config:
   edition: 3
 
 streams:
-  # Global data - sync to all users
+  # ============================================================
+  # GLOBAL DATA - Sync to all users
+  # ============================================================
+
+  # PSGC (Philippine Standard Geographic Code) - for location picker
   psgc:
     auto_subscribe: true
-    query: SELECT id, code, name, region, province, municipality, level FROM psgc
+    query: |
+      SELECT id, region, province, mun_city, mun_city_kind, barangay, zip_code
+      FROM psgc
 
+  # Touchpoint Reasons - categorized reasons for touchpoints
+  # Categories: e.g., "Follow-up", "Closing", "Information Gathering", etc.
+  # Used to group touchpoint reasons by business purpose in the mobile app
   touchpoint_reasons:
     auto_subscribe: true
-    query: SELECT id, reason, category, is_active, sort_order, created_at FROM touchpoint_reasons WHERE is_active = true
+    query: |
+      SELECT id, reason_code, label, touchpoint_type, role, category, sort_order, is_active
+      FROM touchpoint_reasons
+      WHERE is_active = true
