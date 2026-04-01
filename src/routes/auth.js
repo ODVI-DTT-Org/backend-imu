@@ -81,24 +81,60 @@ auth.post('/login', async (c) => {
     try {
         const body = await c.req.json();
         const { email, password } = loginSchema.parse(body);
+
+        // DEBUG: Log login attempt
+        console.log('🔐 LOGIN ATTEMPT:', {
+            email,
+            timestamp: new Date().toISOString(),
+            ip: c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown'
+        });
+
         // Find user by email
         const result = await pool.query('SELECT id, email, password_hash, first_name, last_name, role FROM users WHERE email = $1', [email]);
+
+        console.log('🔍 DB QUERY RESULT:', {
+            userFound: result.rows.length > 0,
+            rowCount: result.rows.length,
+            emailSearched: email
+        });
+
         if (result.rows.length === 0) {
+            console.log('❌ LOGIN FAILED: User not found');
             // Audit log failed login (no user found)
             // Note: We pass undefined for userId since no user exists
             // In production, you might want to log the email for security monitoring
             return c.json({ message: 'Invalid credentials' }, 401);
         }
+
         const user = result.rows[0];
+        console.log('✅ USER FOUND:', {
+            id: user.id,
+            email: user.email,
+            role: user.role,
+            hasPasswordHash: !!user.password_hash,
+            passwordHashLength: user.password_hash?.length || 0
+        });
+
         // Verify password
+        console.log('🔑 VERIFYING PASSWORD...');
         const valid = await compare(password, user.password_hash);
+
+        console.log('🔑 PASSWORD VERIFICATION RESULT:', {
+            valid,
+            providedPasswordLength: password.length,
+            storedHashStart: user.password_hash?.substring(0, 10) + '...'
+        });
+
         if (!valid) {
+            console.log('❌ LOGIN FAILED: Invalid password');
             // Audit log failed login
             await auditAuth.login(user.id, c.req.header('x-forwarded-for') || c.req.header('x-real-ip'), c.req.header('user-agent'), false);
             return c.json({ message: 'Invalid credentials' }, 401);
         }
         // Generate tokens
         const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
+        console.log('🎫 GENERATING TOKENS:', { expiryHours });
+
         const accessToken = sign({
             sub: user.id,
             aud: 'https://69ba260fe44c66e817793c98.powersync.journeyapps.com',
@@ -120,8 +156,18 @@ auth.post('/login', async (c) => {
             keyid: 'imu-production-key-20260326',
             expiresIn: '7d',
         });
+
+        console.log('✅ LOGIN SUCCESSFUL:', {
+            userId: user.id,
+            email: user.email,
+            role: user.role,
+            accessTokenGenerated: !!accessToken,
+            refreshTokenGenerated: !!refreshToken
+        });
+
         // Audit log successful login
         await auditAuth.login(user.id, c.req.header('x-forwarded-for') || c.req.header('x-real-ip'), c.req.header('user-agent'), true);
+
         return c.json({
             access_token: accessToken,
             refresh_token: refreshToken,
@@ -135,7 +181,13 @@ auth.post('/login', async (c) => {
         });
     }
     catch (error) {
+        console.error('❌ LOGIN ERROR:', {
+            error: error.message,
+            stack: error.stack,
+            name: error.name
+        });
         if (error instanceof z.ZodError) {
+            console.log('❌ VALIDATION ERROR:', error.errors);
             return c.json({ message: 'Invalid input', errors: error.errors }, 400);
         }
         console.error('Login error:', error);
