@@ -43,6 +43,8 @@ app.use('*', cors({
       /^capacitor:\/\/localhost$/,
       /^ionic:\/\/localhost$/,
       /^https?:\/\/.*\.preview\.app\.github\.dev$/, // GitHub Codespaces
+      /^https:\/\/imu\.cfbtools\.app$/, // Production web app
+      /^https:\/\/.*\.cfbtools\.app$/, // Any subdomain of cfbtools.app
     ];
 
     // In development, allow all origins
@@ -55,6 +57,13 @@ app.use('*', cors({
       return origin;
     }
 
+    // If origin is null (like mobile apps or curl requests), allow it
+    if (!origin) {
+      return '*';
+    }
+
+    // Log blocked origins for debugging
+    console.warn('CORS: Blocked origin:', origin);
     return null;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
