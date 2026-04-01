@@ -9,13 +9,27 @@ const rawConnectionString = process.env.DATABASE_URL;
 if (!rawConnectionString) {
     throw new Error('DATABASE_URL is not set');
 }
+console.log('🔍 DEBUG: DATABASE_URL exists:', !!rawConnectionString);
+console.log('🔍 DEBUG: DATABASE_URL length:', rawConnectionString.length);
+// Log safe preview of DATABASE_URL (hide password)
+try {
+    const urlPreview = new URL(rawConnectionString);
+    const safeUrl = `${urlPreview.protocol}//${urlPreview.username}:***@${urlPreview.host}${urlPreview.pathname}`;
+    console.log('🔍 DEBUG: DATABASE_URL preview:', safeUrl);
+} catch (e) {
+    console.log('🔍 DEBUG: DATABASE_URL parse error:', e.message);
+    console.log('🔍 DEBUG: DATABASE_URL starts with:', rawConnectionString.substring(0, 50) + '...');
+}
 // Prefer validating with a provided CA cert when available.
 // Can be provided as a file path (DB_CA_CERT_PATH) or direct content (DB_CA_CERT)
 const dbCaCertContent = process.env.DB_CA_CERT;
 const dbCaCertPath = process.env.DB_CA_CERT_PATH || process.env.PGSSLROOTCERT;
+console.log('🔍 DEBUG: DB_CA_CERT env var exists:', !!dbCaCertContent);
+console.log('🔍 DEBUG: DB_CA_CERT length:', dbCaCertContent?.length || 0);
 const ca = dbCaCertContent
     ? dbCaCertContent
     : (dbCaCertPath ? (await import('fs')).readFileSync(dbCaCertPath, 'utf-8') : undefined);
+console.log('🔍 DEBUG: CA cert loaded from:', dbCaCertContent ? 'env var' : (dbCaCertPath ? 'file' : 'none (using rejectUnauthorized=false for DO)'));
 // Ensure sslmode/ssl* query params don't force stricter behavior than our ssl config.
 let connectionString = rawConnectionString;
 try {
