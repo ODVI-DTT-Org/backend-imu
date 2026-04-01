@@ -5,6 +5,7 @@ import 'dotenv/config';
 
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
+import { simpleRequestLogger } from './middleware/request-logger.js';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -30,6 +31,9 @@ import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
 
 const app = new Hono();
+
+// Request logging - log all incoming requests
+app.use('*', simpleRequestLogger());
 
 // CORS configuration for web and mobile app
 app.use('*', cors({
