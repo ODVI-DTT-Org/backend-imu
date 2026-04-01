@@ -1,0 +1,15 @@
+# PowerSync Sync Configuration for IMU
+# Minimal configuration to get started
+
+config:
+  edition: 3
+
+streams:
+  # Global data - sync to all users
+  psgc:
+    auto_subscribe: true
+    query: SELECT id, code, name, region, province, municipality, level FROM psgc
+
+  touchpoint_reasons:
+    auto_subscribe: true
+    query: SELECT id, reason, category, is_active, sort_order, created_at FROM touchpoint_reasons WHERE is_active = true

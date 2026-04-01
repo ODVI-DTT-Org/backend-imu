@@ -1,0 +1,90 @@
+# PowerSync Cloud config (fetched from cloud)
+# yaml-language-server: $schema=https://unpkg.com/@powersync/cli-schemas@latest/json-schema/service-config.json
+
+# PowerSync Cloud config – source-of-truth template with all schema options as valid YAML.
+# Docs: https://docs.powersync.com/sync/overview
+
+# [required] Service type identifier.
+_type: cloud
+
+# [required] Instance name for display in the PowerSync Cloud dashboard.
+name: QA
+
+# [required] Deployment region, e.g. us. Cannot be changed after initial deployment.
+region: jp
+
+# -------------------------------------------------------------------------
+# Replication (required): database connections for sync
+# Note: only a single connection is currently supported.
+# Connection: `uri` and `password` are required for a complete connection. Alternatively omit `uri`
+# and provide individual fields (hostname, port, database, username, password, etc.); they are used
+# to construct the connection URI. For MongoDB, `uri` is required.
+# -------------------------------------------------------------------------
+replication:
+  connections:
+    - type: postgresql
+      # [optional] Connection string using environment variables for security
+      uri: |
+        postgresql://doadmin:{{POWERSYNC_DATABASE_PASSWORD}}@imu-do-user-21438450-0.j.db.ondigitalocean.com:25060/qa?sslmode=require
+      password:
+        secret_ref: default_password
+      # [optional] Alternative to uri: individual connection parameters.
+      hostname: imu-do-user-21438450-0.j.db.ondigitalocean.com
+      port: 25060
+      database: qa
+      username: doadmin
+      # [optional] Connection identifiers.
+      name: Default
+      tag: default
+      # [optional] TLS mode. Options: verify-full | verify-ca. Default: verify-full. Use verify-full for production.
+      sslmode: verify-full
+      # [optional] TLS certificates (PEM). Required for verify-ca; optional for verify-full.
+      cacert: |
+        -----BEGIN CERTIFICATE-----
+        MIIEUDCCArigAwIBAgIUMaS20SbRbqIxh5ZtiR3TU5ZDvhIwDQYJKoZIhvcNAQEM
+        BQAwQDE+MDwGA1UEAww1YjY1Mjk2M2EtZTA2NC00ZWRiLTg1MzYtMTk3ZjA3NDNk
+        NzEyIEdFTiAxIFByb2plY3QgQ0EwHhcNMjUwNzE0MDY0MjQ0WhcNMzUwNzEyMDY0
+        MjQ0WjBAMT4wPAYDVQQDDDViNjUyOTYzYS1lMDY0LTRlZGItODUzNi0xOTdmMDc0
+        M2Q3MTIgR0VOIDEgUHJvamVjdCBDQTCCAaIwDQYJKoZIhvcNAQEBBQADggGPADCC
+        AYoCggGBAMONfo9dN8wBh/sSPwVGVm+sYArJz3j5FA0K9fTa/SDlIP0uBTQX6bPv
+        Rft+9hy06AbxkKneP4/Go0ebm+lIiZY88ySduLagyLkLUByJsELJJVgDEjXnI4p1
+        xJWlVJZ9Ur7sp+sp3j96WxkHXX+DtEiHFW3wa1OJ/qQ131GxYuAH89OqCDx9Mm3P
+        Dq25Waz1u0I6TLZvNCaWcvJbItT1XtqBOBxQ4YKq6Ls9ySeVdWwB6P8bWpthQaRP
+        VmG7CgjritPlCcJhBbrERyNOf/j6bfI29pDkrMwFJmhn8NMwyDD41P0hF4YT3j80
+        owSc3N+BUcQjvOr/AxPhcseZHwqm2g5gFidqbb5JkiiO5L4FOQSdnRble06uq03k
+        ab9WtAqcvx0YCZGgZdtKbvJwcfdd1AMjHphtlkJEZJLQ2/n8Ge+zfe5bqOmqi4zj
+        m+v/HSQWTYrrgdSkoW7KB3EWA+tplEZgfga2o9mBpa79mVttiPuNVYjo9o8R0j/U
+        pGbCvEuinQIDAQABo0IwQDAdBgNVHQ4EFgQUwwZ0INaSvZJBIK0BJyh4/3pPNL0w
+        EgYDVR0TAQH/BAgwBgEB/wIBADALBgNVHQ8EBAMCAQYwDQYJKoZIhvcNAQEMBQAD
+        ggGBAGetueprnc7IoF7oArkKg0tSwmvsQDRNuIKSswMzAy4omnCqEcUpyaJrHOGJ
+        kzKFx8mkqmjBDgXmcwjeb7OZxes0w6SAA0A2v658e8UWciG7qb6Pc9itcCfWvvOs
+        3XutuW7txX/WvDdwWNKb99LBgjlZ3ChAWstgs4Kxycq+bqyEcOt9laEDxjk/u0oX
+        lTL7djHsPB9hzP8TtKAA2VPXtFkDta62tnZFpJaZhnvZO8NMCtZOnrH2jouEzHSp
+        /uR5eE1jC/WK6GBx7gUW1aP9eplnd2CzSJ9JnSyG/DEkhz8eTeM5jZZQHvK1sPD+
+        mvqgXt39wUa1KqIujYXplhC/TYGnyAinuTLpwLnISKHDp8Nx/L6tYkmoZaYjYX4u
+        Qo6s0l456K1+J3m+xnwZ57Ws0EQZxd+FDfHOW3v6G64G/eWtJK0tL5L7mZM6YJZs
+        XKVzq28CqKya4ClSY5rvCI3EQYd2r6nAsyjLq5GIzS/DsStQGC+9UrIVY3RWkVoC
+        WybZZA==
+        -----END CERTIFICATE-----
+      debug_api: false
+      #id: string
+      #client_certificate: string
+      #client_private_key:
+      #  secret: !env POWERSYNC_DATABASE_CLIENT_KEY
+      ## [optional] Cloud VPC endpoint hostname.
+      #vpc_endpoint_hostname: string
+# -------------------------------------------------------------------------
+# Client Authentication (required for mobile apps to sync)
+# -------------------------------------------------------------------------
+client_auth:
+  # [optional] JWKS; provide RSA public keys directly for JWT verification.
+  jwks:
+    keys:
+      # RSA key for IMU JWT authentication (RS256)
+      - kty: RSA
+        kid: imu-production-key-20260402
+        n: x2hmzZ3M8nMgfJvYjY531Geac7KcAJVhqGjXpCvogEP1G25-5aYs_4H2EXlLBH_jEwI85YHbPrkfZuJNzMt2Jbdyh9vqzcq6hzVrPaVLgfsV-YKgxc57725qx9M_uY-DjHt_ZFXaVsAOnqDju_r0lZV3Xk25HriaWzR8I6VrW9_tO9HSs9YfpTHwyi-3wskofu9YOOYvbeg6RyT8GBgpBjbBAoadabQfexzxfLOfww9XcW7dI8YSLHw_J8RsePUCUjijWFYjuIS9RT2Bn20cojsJ3CHWaQ2m_9u_60mCwYBJizsxiqKUxY1GFMw5GPfTjLCS8MJM9fECEFW0rKGFyw
+        e: AQAB
+        alg: RS256
+  # [optional] Allow development/temporary tokens. Default: false.
+  allow_temporary_tokens: false
