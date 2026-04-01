@@ -20,11 +20,14 @@ let publicKey;
 
 // Load private key from env var or file
 const envPrivateKey = process.env.POWERSYNC_PRIVATE_KEY;
-if (envPrivateKey) {
-    privateKey = envPrivateKey;
+console.log('🔍 DEBUG: POWERSYNC_PRIVATE_KEY env var exists:', !!envPrivateKey);
+console.log('🔍 DEBUG: POWERSYNC_PRIVATE_KEY length:', envPrivateKey?.length || 0);
+if (envPrivateKey && envPrivateKey.trim().length > 0) {
+    privateKey = envPrivateKey.trim();
     console.log('✅ PowerSync private key loaded from environment variable');
 }
 else {
+    console.log('⚠️ POWERSYNC_PRIVATE_KEY not set or empty, trying file...');
     try {
         privateKey = fs.readFileSync(privateKeyPath, 'utf-8');
         console.log('✅ PowerSync private key loaded from file');
@@ -37,11 +40,14 @@ else {
 
 // Load public key from env var or file
 const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
-if (envPublicKey) {
-    publicKey = envPublicKey;
+console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY env var exists (routes):', !!envPublicKey);
+console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY length:', envPublicKey?.length || 0);
+if (envPublicKey && envPublicKey.trim().length > 0) {
+    publicKey = envPublicKey.trim();
     console.log('✅ PowerSync public key loaded from environment variable');
 }
 else {
+    console.log('⚠️ POWERSYNC_PUBLIC_KEY not set or empty, trying file...');
     try {
         publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
         console.log('✅ PowerSync public key loaded from file');

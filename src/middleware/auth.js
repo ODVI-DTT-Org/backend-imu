@@ -11,11 +11,14 @@ let publicKey;
 
 // Try environment variable first (for DigitalOcean deployment), then file
 const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
-if (envPublicKey) {
-    publicKey = envPublicKey;
+console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY env var exists:', !!envPublicKey);
+console.log('🔍 DEBUG: POWERSYNC_PUBLIC_KEY length:', envPublicKey?.length || 0);
+if (envPublicKey && envPublicKey.trim().length > 0) {
+    publicKey = envPublicKey.trim();
     console.log('✅ Auth middleware: PowerSync public key loaded from environment variable');
 }
 else {
+    console.log('⚠️ POWERSYNC_PUBLIC_KEY not set or empty, trying file...');
     try {
         publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
         console.log('✅ Auth middleware: PowerSync public key loaded from file');
