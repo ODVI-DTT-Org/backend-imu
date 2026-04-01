@@ -364,14 +364,13 @@ caravans.get('/:id/municipalities', authMiddleware, async (c) => {
     const result = await pool.query(
       `SELECT
         ums.id,
-        ums.municipality_id,
+        ums.province,
+        ums.municipality,
         ums.assigned_at,
         ums.assigned_by,
-        p.region,
-        p.province,
-        p.mun_city as municipality_name
+        p.region
        FROM user_locations ums
-       LEFT JOIN psgc p ON TRIM(p.province) || '-' || TRIM(p.mun_city) = ums.municipality_id
+       LEFT JOIN psgc p ON p.province = ums.province AND p.mun_city = ums.municipality
        WHERE ums.user_id = $1 AND ums.deleted_at IS NULL
        ORDER BY ums.assigned_at DESC`,
       [caravanId]
@@ -380,9 +379,11 @@ caravans.get('/:id/municipalities', authMiddleware, async (c) => {
     // Map results to expected format
     const items = result.rows.map(row => ({
       id: row.id,
-      municipality_id: row.municipality_id,
-      municipality_name: row.municipality_name || row.municipality_id,
-      municipality_code: row.municipality_id,
+      province: row.province,
+      municipality: row.municipality,
+      municipality_id: `${row.province}-${row.municipality}`, // Legacy format for frontend compatibility
+      municipality_name: row.municipality,
+      municipality_code: `${row.province}-${row.municipality}`,
       region_name: row.region || '',
       region_code: row.region || '',
       assigned_at: row.assigned_at,
@@ -392,7 +393,7 @@ caravans.get('/:id/municipalities', authMiddleware, async (c) => {
     console.log('[GET Municipalities] Fetched assignments:', {
       userId: caravanId,
       count: result.rows.length,
-      assignments: result.rows.map(r => r.municipality_id)
+      assignments: result.rows.map(r => r.province + '-' + r.municipality)
     });
 
     console.log('[GET Municipalities] Returning items:', items.length);
@@ -449,16 +450,20 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
     const userId = caravanId;
 
     // Verify all municipalities exist in PSGC table
-    // Municipalities are stored as "province-municipality" format (e.g., "Tawi-Tawi-Bongao")
+    // Parse "province-municipality" format to get separate values
     for (const municipalityId of validated.municipality_ids) {
       if (!municipalityId || !municipalityId.includes('-')) {
         return c.json({ message: `Invalid municipality ID format: ${municipalityId}` }, 400);
       }
 
-      // Query using the full municipality_id format (province || '-' || mun_city)
+      const parts = municipalityId.split('-');
+      const province = parts[0];
+      const municipality = parts.slice(1).join('-');
+
+      // Query using separate province and municipality
       const check = await pool.query(
-        `SELECT 1 FROM psgc WHERE TRIM(province) || '-' || TRIM(mun_city) = $1 LIMIT 1`,
-        [municipalityId]
+        `SELECT 1 FROM psgc WHERE TRIM(province) = $1 AND TRIM(mun_city) = $2 LIMIT 1`,
+        [province.trim(), municipality.trim()]
       );
 
       if (check.rows.length === 0) {
@@ -472,18 +477,21 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
 
     for (const municipalityId of validated.municipality_ids) {
       try {
+        const parts = municipalityId.split('-');
+        const province = parts[0];
+        const municipality = parts.slice(1).join('-');
+
         // Try to insert - if unique constraint is violated, update the existing record
         const result = await pool.query(
-          `INSERT INTO user_locations (user_id, municipality_id, assigned_at, assigned_by, deleted_at)
-           VALUES ($1, $2, NOW(), $3, NULL)
-           ON CONFLICT (user_id, municipality_id)
+          `INSERT INTO user_locations (user_id, province, municipality, assigned_at, assigned_by, deleted_at)
+           VALUES ($1, $2, $3, NOW(), $4, NULL)
+           ON CONFLICT (user_id, province, municipality)
            DO UPDATE SET
              deleted_at = NULL,
              assigned_at = NOW(),
-             assigned_by = $3,
-             municipality_id = EXCLUDED.municipality_id
+             assigned_by = $4
            RETURNING (xmax = 0) as inserted`,
-          [userId, municipalityId, currentUser.sub]
+          [userId, province.trim(), municipality.trim(), currentUser.sub]
         );
 
         // xmax = 0 means the row was inserted, not updated
@@ -491,32 +499,28 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
 
         if (wasInserted) {
           assigned++;
-          console.log('[Assign Municipalities] Created new assignment:', municipalityId);
+          console.log('[Assign Municipalities] Created new assignment:', province, municipality);
         } else {
-          console.log('[Assign Municipalities] Re-activated existing:', municipalityId);
+          console.log('[Assign Municipalities] Re-activated existing:', province, municipality);
         }
       } catch (error: any) {
-        // If constraint doesn't exist yet (migration not run), fall back to old method
-        if (error.code === '42710' || error.code === '23505') {
-          console.log('[Assign Municipalities] Using fallback for:', municipalityId);
-          // Fallback: check and insert manually
-          const existing = await pool.query(
-            'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2 AND deleted_at IS NULL LIMIT 1',
-            [userId, municipalityId]
-          );
+        console.error('[Assign Municipalities] Error inserting location:', error);
 
-          if (existing.rows.length === 0) {
-            await pool.query(
-              'INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)',
-              [userId, municipalityId, currentUser.sub]
-            );
-            assigned++;
-            console.log('[Assign Municipalities] Created new assignment (fallback):', municipalityId);
-          } else {
-            console.log('[Assign Municipalities] Skipped (already active):', municipalityId);
-          }
+        // Fallback: Try to find existing location
+        const existing = await pool.query(
+          'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2 AND deleted_at IS NULL LIMIT 1',
+          [userId, municipalityId]
+        );
+
+        if (existing.rows.length === 0) {
+          await pool.query(
+            'INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)',
+            [userId, municipalityId, currentUser.sub]
+          );
+          assigned++;
+          console.log('[Assign Municipalities] Created new assignment (fallback):', municipalityId);
         } else {
-          throw error;
+          console.log('[Assign Municipalities] Skipped (already active):', municipalityId);
         }
       }
     }
@@ -560,15 +564,28 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANA
     // caravanId IS the user_id
     const userId = caravanId;
 
-    // Bulk soft delete using ANY() for PostgreSQL array
+    // Bulk soft delete - parse municipality_ids to get province/municipality
+    const locationsToDelete = [];
+    for (const municipalityId of validated.municipality_ids) {
+      const parts = municipalityId.split('-');
+      if (parts.length >= 2) {
+        const province = parts[0];
+        const municipality = parts.slice(1).join('-');
+        locationsToDelete.push(`(province = '${province.replace(/'/g, "''")}' AND municipality = '${municipality.replace(/'/g, "''")}')`);
+      }
+    }
+    if (locationsToDelete.length === 0) {
+      return c.json({ message: 'No valid municipality IDs provided' }, 400);
+    }
+    const whereClause = locationsToDelete.join(' OR ');
     const result = await pool.query(
       `UPDATE user_locations
        SET deleted_at = NOW()
        WHERE user_id = $1
-         AND TRIM(municipality_id) = ANY($2)
-         AND deleted_at IS NULL
+       AND (${whereClause})
+       AND deleted_at IS NULL
        RETURNING id`,
-      [userId, validated.municipality_ids.map(m => m.trim())]
+      [userId]
     );
 
     return c.json({
@@ -584,11 +601,12 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANA
   }
 });
 
-// DELETE /api/caravans/:id/municipalities/:municipalityId - Unassign municipality (admin, area_manager, assistant_area_manager)
-caravans.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+// DELETE /api/caravans/:id/municipalities/:province/:municipality - Unassign municipality (admin, area_manager, assistant_area_manager)
+caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
   try {
     const caravanId = c.req.param('id');
-    const municipalityId = c.req.param('municipalityId');
+    const province = c.req.param('province');
+    const municipality = c.req.param('municipality');
 
     // Check if user_locations table exists
     const tableCheck = await pool.query(`
@@ -607,8 +625,8 @@ caravans.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAn
 
     // Check if assignment exists (including deleted records for idempotency)
     const existing = await pool.query(
-      'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND TRIM(municipality_id) = TRIM($2)',
-      [userId, municipalityId]
+      'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
+      [userId, province, municipality]
     );
 
     if (existing.rows.length === 0) {
