@@ -83,7 +83,7 @@ client_auth:
       # RSA key for IMU JWT authentication (RS256)
       - kty: RSA
         kid: imu-production-key-20260402
-        n: x2hmzZ3M8nMgfJvYjY531Geac7KcAJVhqGjXpCvogEP1G25-5aYs_4H2EXlLBH_jEwI85YHbPrkfZuJNzMt2Jbdyh9vqzcq6hzVrPaVLgfsV-YKgxc57725qx9M_uY-DjHt_ZFXaVsAOnqDju_r0lZV3Xk25HriaWzR8I6VrW9_tO9HSs9YfpTHwyi-3wskofu9YOOYvbeg6RyT8GBgpBjbBAoadabQfexzxfLOfww9XcW7dI8YSLHw_J8RsePUCUjijWFYjuIS9RT2Bn20cojsJ3CHWaQ2m_9u_60mCwYBJizsxiqKUxY1GFMw5GPfTjLCS8MJM9fECEFW0rKGFyw
+        n: omX5GoYmUBEMENMHB5Ds2Q9iX5E2oKXG03pio4FB40gJTLNP3D0XVQfNfFdJTFMFbHnx5OkfVqT71sdTPmLv9V-64hPkKDoMPb98F62biVz079TGP7AQ4iU9OjoJXc337CgDjAjuykOmWPzCIjJRtqMUKpTrB2vil2VmzBIG6YsWrKt2fSZvlq6NthsFWkiWOGG9K5lGyJIUi6QJR8urkCYiAlUvvxE3jag4dwb_BZfmtIS1rn0zNjgbrwIEHZiI9hlk_ykOvTu8Ujccnuebu3m4EydOYkvSOvYjOQl98W0ffbVvSA6wR0VCHNaZvnZ21bvz71etWX_mG4vgmSObFQ
         e: AQAB
         alg: RS256
   # [optional] Allow development/temporary tokens. Default: false.
