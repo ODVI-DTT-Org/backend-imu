@@ -1,0 +1,12 @@
+Key ID: imu-production-key-20260401
+
+JWK output for PowerSync:
+client_auth:
+  jwks:
+    keys:
+      - kty: RSA
+        alg: RS256
+        kid: imu-production-key-20260401
+        use: sig
+        n: wktpbLKZu8yH-BJWuE_SmEdVc_euFmfQeIRoJAG9_buW8nVYyo5VVa_l76QU7Sx72G0PV-nBPnvxpezmm_F4ceIRkRxWQQumQ2CPvixTtyYFz6QNUJ-OvygNcpnFvMm5epf9dErI4ldhSaqwAQbyeGQhXkvpaOfBljkBg0oXqzIy_J3b-y-cwLGxyNsFvw5UnuHUlTuh8L4pB86PuERdwZdyY9PzKkcHjo7mHaXR-D2oTK_ywyxZlmrdWDCHjmKGEaPSIM7EaETP9KGpS1Izz40PeLlwPfADRJBvYMiLPPfA8GdXWazkv6P185PGHrujurZaNuj53R0VQ2_G3nUx1_CikddPso0j6HLidunzMYy7kcnxSR5rdPmLFDNB08tWTU5MZF6HDxZezU27xk1_e_VJ4pcIyraKlXcV0mlNYYQCZzJ0PPeYyEzmqgdQP0yO-smIh2YsemFyt0NRVnuitW198BZo-kMC0zlz8LK2kPcUNRceIDMlcRlJykCc4ZV1rK9toyK4AdaDRlg_2W28PYnxX3dm5NsvvWFnC2qxetVwT7lSfv6JBUCf-51Znws73jmJhK8nbk9fz2oIhTyDKfF640ECci3MbxCQtdyvJDOCMS0R9jHbGbjTgu84LlihICjOsSIZMBcvX8DFsRgJHShCHC73mujJDlHUFpC8f40
+        e: AQAB

@@ -159,7 +159,7 @@ auth.post('/login', async (c) => {
         const accessToken = sign({
             sub: user.id,
             iss: 'imu-backend',
-            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
+            aud: 'https://imu-api.cfbtools.app', // Backend API URL
             email: user.email,
             first_name: user.first_name,
             last_name: user.last_name,
@@ -172,7 +172,7 @@ auth.post('/login', async (c) => {
         const refreshToken = sign({
             sub: user.id,
             iss: 'imu-backend',
-            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
+            aud: 'https://imu-api.cfbtools.app', // Backend API URL
             type: 'refresh',
         }, privateKey, {
             algorithm: 'RS256',
@@ -253,7 +253,7 @@ auth.post('/refresh', async (c) => {
         const accessToken = sign({
             sub: user.id,
             iss: 'imu-backend',
-            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
+            aud: 'https://imu-api.cfbtools.app', // Backend API URL
             email: user.email,
             first_name: user.first_name,
             last_name: user.last_name,
@@ -267,7 +267,7 @@ auth.post('/refresh', async (c) => {
         const newRefreshToken = sign({
             sub: user.id,
             iss: 'imu-backend',
-            aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
+            aud: 'https://imu-api.cfbtools.app', // Backend API URL
             type: 'refresh',
         }, privateKey, {
             algorithm: 'RS256',
