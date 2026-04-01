@@ -25,6 +25,10 @@ console.log('🔍 DEBUG: POWERSYNC_PRIVATE_KEY length:', envPrivateKey?.length |
 if (envPrivateKey && envPrivateKey.trim().length > 0) {
     privateKey = envPrivateKey.trim();
     console.log('✅ PowerSync private key loaded from environment variable');
+    // Validate the key format
+    console.log('🔍 DEBUG: Private key starts with:', privateKey.substring(0, 20) + '...');
+    console.log('🔍 DEBUG: Private key ends with:', '...' + privateKey.substring(privateKey.length - 20));
+    console.log('🔍 DEBUG: Contains BEGIN PRIVATE KEY:', privateKey.includes('BEGIN PRIVATE KEY') || privateKey.includes('BEGIN RSA PRIVATE KEY'));
 }
 else {
     console.log('⚠️ POWERSYNC_PRIVATE_KEY not set or empty, trying file...');
@@ -57,6 +61,23 @@ else {
         // Fallback to private key if public key is not available (not recommended for production)
         publicKey = privateKey;
     }
+}
+// Test RSA keys by attempting a simple sign/verify
+console.log('🔑 TESTING RSA KEYS...');
+try {
+    const testPayload = { test: 'data', timestamp: Date.now() };
+    const testToken = sign(testPayload, privateKey, { algorithm: 'RS256', keyid: 'test' });
+    const testDecoded = verify(testToken, publicKey, { algorithms: ['RS256'] });
+    console.log('✅ RSA keys validated successfully (sign/verify test passed)');
+}
+catch (error) {
+    console.error('❌ RSA KEY VALIDATION FAILED:', error.message);
+    console.error('   This means the private/public key pair is invalid or mismatched!');
+    console.error('   privateKey type:', typeof privateKey);
+    console.error('   privateKey length:', privateKey?.length);
+    console.error('   publicKey type:', typeof publicKey);
+    console.error('   publicKey length:', publicKey?.length);
+    throw new Error('RSA key validation failed: ' + error.message);
 }
 const { sign, verify } = jwt;
 const { hash, compare } = bcrypt;
