@@ -5,11 +5,12 @@
   "main": "src/index.js",
   "type": "module",
   "scripts": {
+    "build": "echo 'No build step needed for JavaScript project'",
     "start": "node src/index.js",
     "dev": "node --watch src/index.js"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": "22.x"
   },
   "dependencies": {
     "@hono/node-server": "^1.13.7",
