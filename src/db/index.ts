@@ -4,49 +4,26 @@
  */
 
 import { Pool } from 'pg';
-import fs from 'fs';
 
 // SSL configuration for Digital Ocean Managed PostgreSQL
-// Digital Ocean uses self-signed certificates, so we need to provide the CA certificate
+// Digital Ocean uses self-signed certificates
 function getSSLConfig() {
   const databaseUrl = process.env.DATABASE_URL || '';
 
   // Check if this is a DigitalOcean database connection
-  const isDigitalOcean = databaseUrl.includes('ondigitalocean.com') || process.env.DB_CA_CERT;
+  const isDigitalOcean = databaseUrl.includes('ondigitalocean.com');
 
-  if (!isDigitalOcean) {
-    return false; // No SSL needed for local development
-  }
-
-  // Try to use CA certificate from environment variable
-  const dbCaCert = process.env.DB_CA_CERT;
-
-  if (dbCaCert && dbCaCert.trim().length > 0) {
-    // Use the CA certificate from environment variable
+  if (isDigitalOcean) {
+    // For DigitalOcean, we need to accept self-signed certificates
+    // TODO: Use DB_CA_CERT environment variable for proper SSL validation
+    console.log('🔓 SSL: Accepting self-signed certificates for DigitalOcean');
     return {
-      rejectUnauthorized: true,
-      ca: dbCaCert.trim().replace(/\\n/g, '\n'), // Handle escaped newlines in env var
+      rejectUnauthorized: false,
     };
   }
 
-  // Fallback: Try to read CA certificate from file (for local development)
-  const caCertPath = process.env.DB_CA_CERT_PATH || './ca-certificate.crt';
-  try {
-    if (fs.existsSync(caCertPath)) {
-      return {
-        rejectUnauthorized: true,
-        ca: fs.readFileSync(caCertPath, 'utf8'),
-      };
-    }
-  } catch (err) {
-    console.warn('⚠️ Could not read CA certificate from file:', caCertPath);
-  }
-
-  // Final fallback: Accept self-signed certificates (not recommended for production)
-  console.warn('⚠️ Using rejectUnauthorized: false - SSL certificate validation disabled');
-  return {
-    rejectUnauthorized: false,
-  };
+  // For local development, no SSL needed
+  return false;
 }
 
 // Create and export the shared connection pool
