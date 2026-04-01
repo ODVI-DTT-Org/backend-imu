@@ -53,6 +53,12 @@ app.use('*', cors({
             return origin || '*';
         }
 
+        // Allow mobile apps with null origin (Flutter, React Native, etc.)
+        // Mobile apps making direct HTTP requests typically don't send an Origin header
+        if (!origin) {
+            return '*'; // Allow null origin for mobile apps
+        }
+
         // If CORS_ORIGIN env var is set, use it
         if (process.env.CORS_ORIGIN) {
             const allowedOrigins = process.env.CORS_ORIGIN.split(',').map(o => o.trim());

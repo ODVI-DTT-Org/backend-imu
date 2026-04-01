@@ -158,6 +158,7 @@ auth.post('/login', async (c) => {
 
         const accessToken = sign({
             sub: user.id,
+            iss: 'imu-backend',
             aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             email: user.email,
             first_name: user.first_name,
@@ -170,6 +171,7 @@ auth.post('/login', async (c) => {
         });
         const refreshToken = sign({
             sub: user.id,
+            iss: 'imu-backend',
             aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             type: 'refresh',
         }, privateKey, {
@@ -250,6 +252,7 @@ auth.post('/refresh', async (c) => {
         // Generate new access token
         const accessToken = sign({
             sub: user.id,
+            iss: 'imu-backend',
             aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             email: user.email,
             first_name: user.first_name,
@@ -263,6 +266,7 @@ auth.post('/refresh', async (c) => {
         // Generate new refresh token
         const newRefreshToken = sign({
             sub: user.id,
+            iss: 'imu-backend',
             aud: 'https://69cb46b4f69619e9d4830ea1.powersync.journeyapps.com',
             type: 'refresh',
         }, privateKey, {
