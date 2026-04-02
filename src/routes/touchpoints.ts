@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import { validateTouchpointLocation } from '../services/gps-validation.js';
@@ -175,7 +176,7 @@ function mapRowToTouchpoint(row: Record<string, any>) {
 }
 
 // GET /api/touchpoints - List touchpoints with filters
-touchpoints.get('/', authMiddleware, async (c) => {
+touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const page = parseInt(c.req.query('page') || '1');
@@ -290,7 +291,7 @@ touchpoints.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/touchpoints/reasons - Get all touchpoint reasons
-touchpoints.get('/reasons', authMiddleware, async (c) => {
+touchpoints.get('/reasons', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   try {
     const result = await pool.query(
       `SELECT id, code, label, color, sort_order
@@ -315,7 +316,7 @@ touchpoints.get('/reasons', authMiddleware, async (c) => {
 });
 
 // GET /api/touchpoints/next/:clientId - Get next expected touchpoint info for a client
-touchpoints.get('/next/:clientId', authMiddleware, async (c) => {
+touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const clientId = c.req.param('clientId');
@@ -371,7 +372,7 @@ touchpoints.get('/next/:clientId', authMiddleware, async (c) => {
 });
 
 // GET /api/touchpoints/:id/gps-validate - Validate touchpoint GPS location
-touchpoints.get('/:id/gps-validate', authMiddleware, async (c) => {
+touchpoints.get('/:id/gps-validate', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   const touchpointId = c.req.param('id');
 
   try {
@@ -417,7 +418,7 @@ touchpoints.get('/:id/gps-validate', authMiddleware, async (c) => {
 });
 
 // GET /api/touchpoints/:id - Get single touchpoint
-touchpoints.get('/:id', authMiddleware, async (c) => {
+touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -466,7 +467,7 @@ touchpoints.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/touchpoints - Create new touchpoint (requires admin approval)
-touchpoints.post('/', authMiddleware, auditMiddleware('touchpoint'), async (c) => {
+touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create'), auditMiddleware('touchpoint'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -639,7 +640,7 @@ touchpoints.post('/', authMiddleware, auditMiddleware('touchpoint'), async (c) =
 });
 
 // PUT /api/touchpoints/:id - Update touchpoint
-touchpoints.put('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c) => {
+touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update'), auditMiddleware('touchpoint'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -739,7 +740,7 @@ touchpoints.put('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c)
 });
 
 // DELETE /api/touchpoints/:id - Delete touchpoint
-touchpoints.delete('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c) => {
+touchpoints.delete('/:id', authMiddleware, requirePermission('touchpoints', 'delete'), auditMiddleware('touchpoint'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');

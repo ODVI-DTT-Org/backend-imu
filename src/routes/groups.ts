@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireAnyRole, requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -30,7 +31,7 @@ const bulkDeleteSchema = z.object({
 });
 
 // GET /api/groups - List all groups
-groups.get('/', authMiddleware, async (c) => {
+groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const page = parseInt(c.req.query('page') || '1');
@@ -104,7 +105,7 @@ groups.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/groups/:id - Get single group with members
-groups.get('/:id', authMiddleware, async (c) => {
+groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -156,7 +157,7 @@ groups.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/groups - Create group
-groups.post('/', authMiddleware, auditMiddleware('group'), async (c) => {
+groups.post('/', authMiddleware, requirePermission('groups', 'create'), auditMiddleware('group'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -201,7 +202,7 @@ groups.post('/', authMiddleware, auditMiddleware('group'), async (c) => {
 });
 
 // PUT /api/groups/:id - Update group
-groups.put('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
+groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditMiddleware('group'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -297,7 +298,7 @@ groups.put('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
 });
 
 // DELETE /api/groups/:id - Delete group
-groups.delete('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
+groups.delete('/:id', authMiddleware, requirePermission('groups', 'delete'), auditMiddleware('group'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -321,7 +322,7 @@ groups.delete('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
 });
 
 // POST /api/groups/bulk-delete - Bulk delete groups
-groups.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('group', 'bulk_delete'), async (c) => {
+groups.post('/bulk-delete', authMiddleware, requirePermission('groups', 'delete'), auditMiddleware('group', 'bulk_delete'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
 
@@ -370,7 +371,7 @@ groups.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddlewar
 });
 
 // POST /api/groups/:id/members - Add members to group
-groups.post('/:id/members', authMiddleware, async (c) => {
+groups.post('/:id/members', authMiddleware, requirePermission('groups', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -414,7 +415,7 @@ groups.post('/:id/members', authMiddleware, async (c) => {
 });
 
 // DELETE /api/groups/:id/members/:clientId - Remove member from group
-groups.delete('/:id/members/:clientId', authMiddleware, async (c) => {
+groups.delete('/:id/members/:clientId', authMiddleware, requirePermission('groups', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -447,7 +448,7 @@ groups.delete('/:id/members/:clientId', authMiddleware, async (c) => {
 const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as const;
 
 // GET /api/groups/:id/municipalities - Get assigned municipalities
-groups.get('/:id/municipalities', authMiddleware, async (c) => {
+groups.get('/:id/municipalities', authMiddleware, requirePermission('groups', 'read'), async (c) => {
   try {
     const groupId = c.req.param('id');
 
@@ -494,7 +495,7 @@ groups.get('/:id/municipalities', authMiddleware, async (c) => {
 });
 
 // POST /api/groups/:id/municipalities - Assign municipalities
-groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+groups.post('/:id/municipalities', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const currentUser = c.get('user');
     const groupId = c.req.param('id');
@@ -621,7 +622,7 @@ groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROL
 
 // POST /api/groups/:id/municipalities/bulk - Bulk unassign municipalities (admin, area_manager, assistant_area_manager)
 // IMPORTANT: This route must be defined BEFORE the GET /municipalities route
-groups.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+groups.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const groupId = c.req.param('id');
     const body = await c.req.json();
@@ -684,7 +685,7 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGE
 });
 
 // DELETE /api/groups/:id/municipalities/:municipalityId - Unassign municipality
-groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const groupId = c.req.param('id');
     const municipalityId = c.req.param('municipalityId');

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -44,7 +45,7 @@ function mapRowToItinerary(row: Record<string, any>) {
 }
 
 // GET /api/itineraries - List itineraries with filters
-itineraries.get('/', authMiddleware, async (c) => {
+itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const page = parseInt(c.req.query('page') || '1');
@@ -152,7 +153,7 @@ itineraries.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/itineraries/:id - Get single itinerary
-itineraries.get('/:id', authMiddleware, async (c) => {
+itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -210,7 +211,7 @@ itineraries.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/itineraries - Create new itinerary
-itineraries.post('/', authMiddleware, auditMiddleware('itinerary'), async (c) => {
+itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create'), auditMiddleware('itinerary'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -278,7 +279,7 @@ itineraries.post('/', authMiddleware, auditMiddleware('itinerary'), async (c) =>
 });
 
 // PUT /api/itineraries/:id - Update itinerary
-itineraries.put('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) => {
+itineraries.put('/:id', authMiddleware, requirePermission('itineraries', 'update'), auditMiddleware('itinerary'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -353,7 +354,7 @@ itineraries.put('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) 
 });
 
 // DELETE /api/itineraries/:id - Delete itinerary
-itineraries.delete('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) => {
+itineraries.delete('/:id', authMiddleware, requirePermission('itineraries', 'delete'), auditMiddleware('itinerary'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -393,7 +394,7 @@ const bulkDeleteSchema = z.object({
 });
 
 // POST /api/itineraries/bulk-delete - Bulk delete itineraries
-itineraries.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('itinerary', 'bulk_delete'), async (c) => {
+itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'delete'), auditMiddleware('itinerary', 'bulk_delete'), async (c) => {
   try {
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
