@@ -1,5 +1,9 @@
 import jwt from 'jsonwebtoken';
 import { Context, Next } from 'hono';
+import {
+  AuthenticationError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const { verify } = jwt;
 
@@ -36,7 +40,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
   const authHeader = c.req.header('Authorization');
 
   if (!authHeader?.startsWith('Bearer ')) {
-    return c.json({ message: 'Unauthorized - No token provided' }, 401);
+    throw new AuthenticationError('No token provided');
   }
 
   const token = authHeader.slice(7);
@@ -59,7 +63,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
     c.set('user', decoded);
     await next();
   } catch (error) {
-    return c.json({ message: 'Invalid or expired token' }, 401);
+    throw new AuthenticationError('Invalid or expired token');
   }
 };
 
@@ -99,11 +103,11 @@ export const requireRole = (...allowedRoles: string[]) => {
     const user = c.get('user');
 
     if (!user) {
-      return c.json({ message: 'Unauthorized' }, 401);
+      throw new AuthenticationError('Unauthorized');
     }
 
     if (!allowedRoles.includes(user.role)) {
-      return c.json({ message: 'Forbidden - Insufficient permissions' }, 403);
+      throw new AuthorizationError('Insufficient permissions');
     }
 
     await next();
@@ -116,11 +120,11 @@ export const requireAnyRole = (...allowedRoles: string[]) => {
     const user = c.get('user');
 
     if (!user) {
-      return c.json({ message: 'Unauthorized' }, 401);
+      throw new AuthenticationError('Unauthorized');
     }
 
     if (!allowedRoles.includes(user.role)) {
-      return c.json({ message: 'Forbidden - Insufficient permissions' }, 403);
+      throw new AuthorizationError('Insufficient permissions');
     }
 
     await next();
