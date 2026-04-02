@@ -153,88 +153,131 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
     duration: 0,
   };
 
-  // Call original query method using call() to avoid type issues
+  // Call original query method and ensure we get a Promise
   const method = originalQuery as any;
-  const result = method.call(this, ...args) as unknown;
-  const promise = result as Promise<any>;
+  let result: any;
 
-  // Log query completion
-  return promise
-    .then((result: any) => {
-      queryLog.duration = Date.now() - startTime;
-      queryLog.rows = result.rowCount;
+  // Try to detect if this is a callback-based or promise-based call
+  const hasCallback = args.length > 0 && typeof args[args.length - 1] === 'function';
 
-      // Only log SELECT queries and slow queries to reduce noise
-      if (queryLog.duration > 100 || query.toUpperCase().startsWith('SELECT')) {
-        logQuery(queryLog);
-      }
+  if (hasCallback) {
+    // Callback-based call - don't wrap, just call original
+    return method.apply(this, args);
+  } else {
+    // Promise-based call - wrap with logging
+    result = method.apply(this, args);
 
+    // Ensure result is a Promise
+    if (!result || typeof result.then !== 'function') {
+      // Fallback: return original result if it's not a Promise
       return result;
-    })
-    .catch((error: any) => {
-      queryLog.duration = Date.now() - startTime;
-      queryLog.error = error.message;
+    }
 
-      logQuery(queryLog);
+    // Log query completion
+    return result
+      .then((dbResult: any) => {
+        queryLog.duration = Date.now() - startTime;
+        queryLog.rows = dbResult.rowCount;
 
-      throw error;
-    });
+        // Only log SELECT queries and slow queries to reduce noise
+        if (queryLog.duration > 100 || query.toUpperCase().startsWith('SELECT')) {
+          logQuery(queryLog);
+        }
+
+        return dbResult;
+      })
+      .catch((error: any) => {
+        queryLog.duration = Date.now() - startTime;
+        queryLog.error = error.message;
+
+        logQuery(queryLog);
+
+        throw error;
+      });
+  }
 };
 
 /**
  * Wrap Pool.connect to add logging for client queries
  */
 Pool.prototype.connect = function(this: Pool, ...args: any[]) {
-  // Call original connect method using call() to avoid type issues
+  // Call original connect method
   const method = originalConnect as any;
-  const result = method.call(this, ...args) as unknown;
-  const promise = result as Promise<PoolClient>;
+  let result: any;
 
-  return promise.then((client: PoolClient) => {
-    // Wrap client.query to add logging
-    const originalClientQuery = client.query;
-    client.query = function(...clientArgs: any[]) {
-      const startTime = Date.now();
-      const query = typeof clientArgs[0] === 'string' ? clientArgs[0] : clientArgs[0].text;
-      const params = clientArgs[1];
+  // Try to detect if this is a callback-based or promise-based call
+  const hasCallback = args.length > 0 && typeof args[args.length - 1] === 'function';
 
-      const queryLog: QueryLog = {
-        timestamp: new Date().toISOString(),
-        query,
-        params,
-        duration: 0,
-      };
+  if (hasCallback) {
+    // Callback-based call - don't wrap, just call original
+    return method.apply(this, args);
+  } else {
+    // Promise-based call - wrap with logging
+    result = method.apply(this, args);
 
-      // Call original query method using call() to avoid type issues
-      const clientMethod = originalClientQuery as any;
-      const clientResult = clientMethod.call(this, ...clientArgs) as unknown;
-      const clientPromise = clientResult as Promise<any>;
+    // Ensure result is a Promise
+    if (!result || typeof result.then !== 'function') {
+      // Fallback: return original result if it's not a Promise
+      return result;
+    }
 
-      // Log query completion
-      return clientPromise
-        .then((result: any) => {
-          queryLog.duration = Date.now() - startTime;
-          queryLog.rows = result.rowCount;
+    return result.then((client: PoolClient) => {
+      // Wrap client.query to add logging
+      const originalClientQuery = client.query;
+      client.query = function(...clientArgs: any[]) {
+        const startTime = Date.now();
+        const query = typeof clientArgs[0] === 'string' ? clientArgs[0] : clientArgs[0].text;
+        const params = clientArgs[1];
 
-          // Only log SELECT queries and slow queries
-          if (queryLog.duration > 100 || query.toUpperCase().startsWith('SELECT')) {
-            logQuery(queryLog);
+        const queryLog: QueryLog = {
+          timestamp: new Date().toISOString(),
+          query,
+          params,
+          duration: 0,
+        };
+
+        // Detect if this is a callback-based call
+        const hasQueryCallback = clientArgs.length > 0 && typeof clientArgs[clientArgs.length - 1] === 'function';
+
+        if (hasQueryCallback) {
+          // Callback-based call - don't wrap
+          return (originalClientQuery as any).apply(this, clientArgs);
+        } else {
+          // Promise-based call - wrap with logging
+          const clientResult = (originalClientQuery as any).apply(this, clientArgs);
+
+          // Ensure result is a Promise
+          if (!clientResult || typeof (clientResult as any).then !== 'function') {
+            return clientResult as any;
           }
 
-          return result;
-        })
-        .catch((error: any) => {
-          queryLog.duration = Date.now() - startTime;
-          queryLog.error = error.message;
+          // Log query completion
+          return (clientResult as Promise<any>)
+            .then((dbResult: any) => {
+              queryLog.duration = Date.now() - startTime;
+              queryLog.rows = dbResult.rowCount;
 
-          logQuery(queryLog);
+              // Only log SELECT queries and slow queries
+              if (queryLog.duration > 100 || query.toUpperCase().startsWith('SELECT')) {
+                logQuery(queryLog);
+              }
 
-          throw error;
-        });
+              return dbResult;
+            })
+            .catch((error: any) => {
+              queryLog.duration = Date.now() - startTime;
+              queryLog.error = error.message;
+
+              logQuery(queryLog);
+
+              throw error;
+            });
+        }
       };
 
       return client;
     });
+  }
 };
 
 /**
