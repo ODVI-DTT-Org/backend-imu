@@ -13,15 +13,10 @@ let sslConfig: { ca: string; rejectUnauthorized: boolean } | { rejectUnauthorize
 let databaseUrl = process.env.DATABASE_URL;
 
 if (databaseUrl?.includes('ondigitalocean.com')) {
-  // Add explicit sslmode for production use
-  if (!databaseUrl.includes('sslmode=')) {
-    databaseUrl += '&sslmode=require';
-  }
-
   // For DigitalOcean Managed PostgreSQL with self-signed certificates,
   // we need to disable certificate verification completely.
-  // Note: When rejectUnauthorized is false, we don't provide the CA certificate
-  // because providing it would cause Node.js to attempt validation anyway.
+  // IMPORTANT: Do NOT add sslmode to the connection string, as pg will treat
+  // 'require' as 'verify-full' and override our rejectUnauthorized: false setting.
   sslConfig = {
     rejectUnauthorized: false,
   };
