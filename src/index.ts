@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
+import { v4 as uuidv4 } from 'uuid';
 import 'dotenv/config';
 
 // IMPORTANT: Import database logger BEFORE pool to wrap query methods
@@ -84,7 +85,27 @@ app.use('*', cors({
 }));
 
 // Error handling - catch all errors and format responses
-app.use('*', errorHandler);
+app.use('*', simpleRequestLogger());
+
+// Use Hono's built-in error handler instead of middleware
+app.onError((err, c) => {
+  const requestId = uuidv4();
+
+  console.error('🔍🔍🔍 APP.ONERROR CALLED 🔍🔍🔍');
+  console.error('🔍 Error type:', err instanceof Error ? err.name : typeof err);
+  console.error('🔍 Error statusCode:', (err as any).statusCode);
+  console.error('🔍 Error message:', err instanceof Error ? err.message : String(err));
+
+  const statusCode = (err as any).statusCode || 500;
+
+  // Return error response with proper status code
+  return c.json({
+    success: false,
+    message: err instanceof Error ? err.message : 'Unknown error',
+    statusCode: statusCode,
+    requestId: requestId,
+  }, statusCode as any);
+});
 
 // Health check endpoint
 app.get('/api/health', async (c) => {

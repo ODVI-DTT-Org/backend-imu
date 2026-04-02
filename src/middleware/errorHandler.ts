@@ -53,14 +53,22 @@ export const errorHandler = async (c: Context, next: Next) => {
     const statusCode = (error as any).statusCode || 500;
     console.error('🔍 Returning response with status:', statusCode);
 
-    // Return a simple JSON response with the status code
-    return c.json({
+    // IMPORTANT: Don't use c.json() - it might not work properly in error handler
+    // Use c.newResponse() with explicit status
+    c.header('Content-Type', 'application/json');
+    const response = c.newResponse(JSON.stringify({
       success: false,
       message: error instanceof Error ? error.message : 'Unknown error',
       statusCode: statusCode,
       requestId: requestId,
-    }, statusCode as any);
+    }), statusCode);
+
+    console.error('🔍 Created response, status:', response.status);
+    return response;
   }
+
+  // If we get here, next() completed without error
+  console.log('🔍 ERROR HANDLER: Request completed without error');
 };
 
 /**
