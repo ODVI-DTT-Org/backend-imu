@@ -79,7 +79,7 @@ export const errorHandler = async (c: Context, next: Next) => {
       }
 
       // Return error response with appropriate status code
-      return c.json(errorResponse, error.statusCode as 400 | 401 | 403 | 404 | 409 | 423 | 429 | 500 | 503);
+      return c.json(errorResponse, error.statusCode as any);
     }
 
     // Handle unknown errors with detailed logging
