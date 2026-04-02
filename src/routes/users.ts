@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog, auditAuth } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -63,7 +64,7 @@ function mapRowToUser(row: Record<string, any>) {
 }
 
 // GET /api/users - List all users (admin only)
-users.get('/', authMiddleware, requireRole('admin', 'staff'), async (c) => {
+users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => {
   try {
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '20');
@@ -119,7 +120,7 @@ users.get('/', authMiddleware, requireRole('admin', 'staff'), async (c) => {
 });
 
 // GET /api/users/:id - Get single user
-users.get('/:id', authMiddleware, async (c) => {
+users.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -147,7 +148,7 @@ users.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/users - Create new user (admin only)
-users.post('/', authMiddleware, auditMiddleware('user'), requireRole('admin'), async (c) => {
+users.post('/', authMiddleware, requirePermission('users', 'create'), auditMiddleware('user'), async (c) => {
   try {
     const body = await c.req.json();
     const validated = createUserSchema.parse(body);
@@ -269,7 +270,7 @@ users.post('/', authMiddleware, auditMiddleware('user'), requireRole('admin'), a
 });
 
 // PUT /api/users/:id - Update user
-users.put('/:id', authMiddleware, auditMiddleware('user'), async (c) => {
+users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMiddleware('user'), async (c) => {
   try {
     const currentUser = c.get('user');
     const id = c.req.param('id');
@@ -527,7 +528,7 @@ users.post('/:id/change-password', authMiddleware, async (c) => {
 });
 
 // DELETE /api/users/:id - Delete user (admin only)
-users.delete('/:id', authMiddleware, auditMiddleware('user'), requireRole('admin'), async (c) => {
+users.delete('/:id', authMiddleware, requirePermission('users', 'delete'), auditMiddleware('user'), async (c) => {
   try {
     const currentUser = c.get('user');
     const id = c.req.param('id');
