@@ -514,5 +514,172 @@ export const validateTouchpointType = () => {
   };
 };
 
+// ============================================
+// COOKIE-BASED PERMISSION STORAGE (Frontend Integration)
+// ============================================
+
+export interface PermissionCookiePayload {
+  permissions: string[];
+  userRole: string;
+  userId: string;
+}
+
+/**
+ * Convert Permission[] to string[] format for cookie storage
+ * @param permissions - Array of Permission objects
+ * @returns Array of permission strings in format "resource.action" or "resource.action:constraint"
+ */
+function permissionsToStringArray(permissions: Permission[]): string[] {
+  const result: string[] = [];
+
+  for (const p of permissions) {
+    if (p.constraint_name) {
+      result.push(`${p.resource}.${p.action}:${p.constraint_name}`);
+    } else {
+      result.push(`${p.resource}.${p.action}`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Sets permissions in an httpOnly cookie
+ * @param permissions - Array of Permission objects from RBAC system
+ * @param user - User object with id and role
+ * @returns Cookie configuration object (name, value, options)
+ */
+export function setPermissionsCookie(
+  permissions: Permission[],
+  user: { sub: string; role: string }
+): { name: string; value: string; options: Record<string, any> } {
+  // Convert Permission[] to string[] format
+  const permissionStrings = permissionsToStringArray(permissions);
+
+  const payload: PermissionCookiePayload = {
+    permissions: permissionStrings,
+    userRole: user.role,
+    userId: user.sub,
+  };
+
+  const cookieValue = Buffer.from(JSON.stringify(payload)).toString('base64');
+
+  // Set cookie with security options
+  const cookieOptions = {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict' as const,
+    path: '/',
+    maxAge: 8 * 60 * 60, // 8 hours
+  };
+
+  return {
+    name: 'imu_permissions',
+    value: cookieValue,
+    options: cookieOptions,
+  };
+}
+
+/**
+ * Clears the permissions cookie
+ * @returns Cookie configuration object to clear cookie
+ */
+export function clearPermissionsCookie(): {
+  name: string;
+  value: string;
+  options: Record<string, any>;
+} {
+  return {
+    name: 'imu_permissions',
+    value: '',
+    options: {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'strict' as const,
+      path: '/',
+      maxAge: 0, // Immediately expire
+    },
+  };
+}
+
+/**
+ * Build permissions array based on user role
+ * Used as fallback when RBAC tables aren't available
+ * @param userRole - User's role
+ * @returns Array of permission strings
+ */
+export function buildPermissionsForRole(userRole: string): string[] {
+  const rolePermissions: Record<string, string[]> = {
+    admin: ['*'], // Wildcard for all permissions
+    area_manager: [
+      'users.*',
+      'clients.*',
+      'touchpoints.*',
+      'itineraries.*',
+      'reports.read',
+      'reports.export',
+      'agencies.read',
+      'groups.read',
+      'groups.create',
+      'locations.assign',
+    ],
+    assistant_area_manager: [
+      'users.read',
+      'users.create',
+      'clients.*',
+      'touchpoints.*',
+      'itineraries.*',
+      'reports.read',
+      'locations.assign',
+    ],
+    caravan: [
+      'clients.read',
+      'clients.create',
+      'clients.update',
+      'touchpoints.read',
+      'touchpoints.create:visit',
+      'itineraries.read',
+      'itineraries.create',
+      'itineraries.update',
+      'targets.read',
+    ],
+    tele: [
+      'clients.read',
+      'touchpoints.read',
+      'touchpoints.create:call',
+      'itineraries.read',
+      'targets.read',
+    ],
+  };
+
+  return rolePermissions[userRole] || [];
+}
+
+/**
+ * Get permissions for a user from database or fallback
+ * Returns permissions in string[] format for cookie storage
+ * @param userId - User ID
+ * @param userRole - User's role
+ * @returns Array of permission strings
+ */
+export async function getUserPermissionsAsString(
+  userId: string,
+  userRole: string
+): Promise<string[]> {
+  try {
+    // Try to get permissions from RBAC system
+    const permissions = await getUserPermissions(userId);
+
+    if (permissions.length > 0) {
+      return permissionsToStringArray(permissions);
+    }
+  } catch (error) {
+    console.error('Error fetching permissions from RBAC:', error);
+  }
+
+  // Fallback to role-based permissions
+  return buildPermissionsForRole(userRole);
+}
+
 // Export utility functions
 export { isRbacInstalled, clearRbacCache };
