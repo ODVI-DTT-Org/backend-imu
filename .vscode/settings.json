@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "vue.volar",
+    "vue.vscode-typescript-vue-plugin"
+  ],
+  "settings": {
+    "typescript.tsdk": "node_modules/typescript/lib",
+    "eslint.workingDirectories": ["./"],
+    "files.watcherExclude": {
+      "**/node_modules/**": true,
+      "**/dist/**": true
+    }
+  }
+}
