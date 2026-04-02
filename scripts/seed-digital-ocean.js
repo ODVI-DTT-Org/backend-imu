@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
 
-const connectionString = process.env.DATABASE_URL;
+const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5433/imu_db';
 
 function generateUUID() {
   return randomUUID();

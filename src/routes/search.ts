@@ -2,6 +2,9 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+} from '../errors/index.js';
 
 const search = new Hono();
 
@@ -203,10 +206,14 @@ search.post('/full-text', authMiddleware, async (c) => {
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Search error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to search');
   }
 });
 

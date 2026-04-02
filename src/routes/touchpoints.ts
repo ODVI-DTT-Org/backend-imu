@@ -441,7 +441,7 @@ touchpoints.get('/:id', authMiddleware, async (c) => {
 
     // Role-based access check
     if (user.role === 'field_agent' && touchpoint.user_id !== user.sub) {
-      throw new AuthorizationError('You do not have permission to access this touchpoint');
+      return c.json({ message: 'Forbidden' }, 403);
     }
 
     return c.json({

@@ -3,6 +3,12 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const attendance = new Hono();
 
@@ -60,7 +66,9 @@ attendance.post('/check-in', authMiddleware, auditMiddleware('attendance'), asyn
     );
 
     if (existing.rows.length > 0) {
-      return c.json({ message: 'Already checked in for today', attendance: mapRowToAttendance(existing.rows[0]) }, 400);
+      const error = new ConflictError('Already checked in for today');
+      error.addDetail('attendance', mapRowToAttendance(existing.rows[0]));
+      throw error;
     }
 
     // Create new attendance record
@@ -74,10 +82,14 @@ attendance.post('/check-in', authMiddleware, auditMiddleware('attendance'), asyn
     return c.json(mapRowToAttendance(result.rows[0]), 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Check-in error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to check in');
   }
 });
 
@@ -97,13 +109,13 @@ attendance.post('/check-out', authMiddleware, auditMiddleware('attendance'), asy
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'No check-in record found for today' }, 404);
+      throw new NotFoundError('No check-in record found for today');
     }
 
     const attendanceRecord = existing.rows[0];
 
     if (attendanceRecord.time_out) {
-      return c.json({ message: 'Already checked out for today' }, 400);
+      throw new ConflictError('Already checked out for today');
     }
 
     // Update with check-out time and location
@@ -121,10 +133,14 @@ attendance.post('/check-out', authMiddleware, auditMiddleware('attendance'), asy
     return c.json(mapRowToAttendance(result.rows[0]));
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Check-out error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to check out');
   }
 });
 
@@ -151,7 +167,7 @@ attendance.get('/today', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get today attendance error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -202,7 +218,7 @@ attendance.get('/history', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get attendance history error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -212,7 +228,7 @@ attendance.get('/', authMiddleware, async (c) => {
     const user = c.get('user');
 
     if (user.role !== 'admin' && user.role !== 'staff') {
-      return c.json({ message: 'Unauthorized' }, 403);
+      throw new AuthorizationError('Unauthorized');
     }
 
     const page = parseInt(c.req.query('page') || '1');
@@ -274,7 +290,7 @@ attendance.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('List attendance error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

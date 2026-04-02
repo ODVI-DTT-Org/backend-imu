@@ -334,7 +334,7 @@ upload.post('/selfie', async (c) => {
     });
   } catch (error) {
     console.error('Selfie upload error:', error);
-    throw new Error('Failed to upload selfie');
+    return c.json({ message: 'Failed to upload selfie' }, 500);
   }
 });
 
@@ -387,7 +387,7 @@ upload.post('/document', async (c) => {
     });
   } catch (error) {
     console.error('Document upload error:', error);
-    throw new Error('Failed to upload document');
+    return c.json({ message: 'Failed to upload document' }, 500);
   }
 });
 

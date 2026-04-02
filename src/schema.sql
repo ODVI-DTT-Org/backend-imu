@@ -1,5 +1,13 @@
 -- IMU PostgreSQL Database Schema
 -- Run this in your PostgreSQL database to set up the required tables
+--
+-- IMPORTANT: For the complete schema including the RBAC system,
+-- use backend/migrations/COMPLETE_SCHEMA.sql or run migration 033
+-- after this basic schema is installed.
+--
+-- The RBAC system (roles, permissions, user_roles) is installed via:
+-- - backend/src/migrations/033_add_rbac_system.sql
+-- - backend/migrations/COMPLETE_SCHEMA.sql (includes everything)
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -251,5 +259,5 @@ VALUES (
     '$2a$10$YourHashedPasswordHere',
     'Test',
     'User',
-    'field_agent'
+    'caravan'
 ) ON CONFLICT (email) DO NOTHING;

@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { authMiddleware, requireAnyRole, requireRole } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthenticationError,
+} from '../errors/index.js';
 
 const groups = new Hono();
 
@@ -94,7 +99,7 @@ groups.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('List groups error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -126,7 +131,7 @@ groups.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     const group = result.rows[0];
@@ -146,7 +151,7 @@ groups.get('/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get group error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -184,10 +189,14 @@ groups.post('/', authMiddleware, auditMiddleware('group'), async (c) => {
     }, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create group error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create group');
   }
 });
 
@@ -218,7 +227,7 @@ groups.put('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
 
     const groupCheck = await pool.query(`SELECT * FROM groups ${whereClause}`, params);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     const updateFields: string[] = [];
@@ -251,7 +260,7 @@ groups.put('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
     }
 
     if (updateFields.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -276,10 +285,14 @@ groups.put('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
         errors: error.errors,
         issues: error.issues
       });
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update group error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update group');
   }
 });
 
@@ -298,19 +311,19 @@ groups.delete('/:id', authMiddleware, auditMiddleware('group'), async (c) => {
 
     const result = await pool.query(`DELETE FROM groups ${whereClause} RETURNING id`, params);
     if (result.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
     return c.json({ message: 'Group deleted successfully' });
   } catch (error) {
     console.error('Delete group error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
 // POST /api/groups/bulk-delete - Bulk delete groups
 groups.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('group', 'bulk_delete'), async (c) => {
   const user = c.get('user');
-  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+  if (!user) throw new AuthenticationError('Unauthorized');
 
   try {
     const body = await c.req.json();
@@ -345,10 +358,14 @@ groups.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddlewar
     return c.json({ success, failed });
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return c.json({ message: 'Invalid request body', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk delete groups error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk delete groups');
   }
 });
 
@@ -369,7 +386,7 @@ groups.post('/:id/members', authMiddleware, async (c) => {
 
     const groupCheck = await pool.query(`SELECT * FROM groups ${whereClause}`, params);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     let added = 0;
@@ -385,10 +402,14 @@ groups.post('/:id/members', authMiddleware, async (c) => {
     return c.json({ message: `Added ${added} members to group`, added });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Add members error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to add members');
   }
 });
 
@@ -408,14 +429,14 @@ groups.delete('/:id/members/:clientId', authMiddleware, async (c) => {
 
     const groupCheck = await pool.query(`SELECT * FROM groups ${whereClause}`, params);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     await pool.query('DELETE FROM group_members WHERE group_id = $1 AND client_id = $2', [id, clientId]);
     return c.json({ message: 'Member removed from group' });
   } catch (error) {
     console.error('Remove member error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -433,7 +454,7 @@ groups.get('/:id/municipalities', authMiddleware, async (c) => {
     // Verify group exists
     const groupCheck = await pool.query('SELECT id FROM groups WHERE id = $1', [groupId]);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     // Get assigned municipalities with PSGC data in a single JOIN query
@@ -487,20 +508,20 @@ groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROL
     // Verify group exists and get caravan
     const groupCheck = await pool.query('SELECT id, caravan_id FROM groups WHERE id = $1', [groupId]);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     const group = groupCheck.rows[0];
     const caravanId = group.caravan_id;
 
     if (!caravanId) {
-      return c.json({ message: 'Group has no caravan. Please assign a caravan first.' }, 400);
+      throw new ValidationError('Group has no caravan. Please assign a caravan first.');
     }
 
     // Verify all municipalities exist in PSGC table
     for (const municipalityId of validated.municipality_ids) {
       if (!municipalityId || !municipalityId.includes('-')) {
-        return c.json({ message: `Invalid municipality ID format: ${municipalityId}` }, 400);
+        throw new ValidationError(`Invalid municipality ID format: ${municipalityId}`);
       }
 
       const check = await pool.query(
@@ -509,7 +530,7 @@ groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROL
       );
 
       if (check.rows.length === 0) {
-        return c.json({ message: `Municipality not found: ${municipalityId}` }, 400);
+        throw new NotFoundError(`Municipality not found: ${municipalityId}`);
       }
     }
 
@@ -587,10 +608,14 @@ groups.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROL
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Assign municipalities error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to assign municipalities');
   }
 });
 
@@ -609,7 +634,7 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGE
     // Get group to find caravan
     const groupCheck = await pool.query('SELECT caravan_id FROM groups WHERE id = $1', [groupId]);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     const caravanId = groupCheck.rows[0].caravan_id;
@@ -647,10 +672,14 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGE
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk unassign municipalities error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk unassign municipalities');
   }
 });
 
@@ -663,7 +692,7 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyR
     // Get group to find caravan
     const groupCheck = await pool.query('SELECT caravan_id FROM groups WHERE id = $1', [groupId]);
     if (groupCheck.rows.length === 0) {
-      return c.json({ message: 'Group not found' }, 404);
+      throw new NotFoundError('Group');
     }
 
     const caravanId = groupCheck.rows[0].caravan_id;
@@ -675,7 +704,7 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyR
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Assignment not found' }, 404);
+      throw new NotFoundError('Assignment');
     }
 
     const groupRecord = existing.rows[0];
@@ -699,7 +728,7 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyR
     return c.json({ message: 'Municipality unassigned successfully' });
   } catch (error) {
     console.error('Unassign municipality error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

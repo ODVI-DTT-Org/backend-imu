@@ -4,11 +4,17 @@ import { authMiddleware, requireRole,
 requireAnyRole } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthenticationError,
+  ConflictError,
+} from '../errors/index.js';
 
 const caravans = new Hono();
 
-// Valid roles for the new role system
-const CARAVAN_ROLES = ['caravan', 'field_agent']; // Support both for migration
+// Valid roles for the role system (field_agent was renamed to caravan in migration 008)
+const CARAVAN_ROLES = ['caravan'] as const;
 const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as const;
 
 // Validation schemas
@@ -100,7 +106,7 @@ caravans.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch caravans error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -117,13 +123,13 @@ caravans.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Caravan not found' }, 404);
+      throw new NotFoundError('Caravan');
     }
 
     return c.json(mapRowToCaravan(result.rows[0]));
   } catch (error) {
     console.error('Fetch caravan error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -136,7 +142,7 @@ caravans.post('/', authMiddleware, requireRole('admin'), auditMiddleware('carava
     // Check if email already exists
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [validated.email]);
     if (existing.rows.length > 0) {
-      return c.json({ message: 'Email already exists' }, 409);
+      throw new ConflictError('A caravan with this email already exists');
     }
 
     // Split name into first_name and last_name
@@ -160,10 +166,14 @@ caravans.post('/', authMiddleware, requireRole('admin'), auditMiddleware('carava
     return c.json(mapRowToCaravan(result.rows[0]), 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create caravan error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create caravan');
   }
 });
 
@@ -181,7 +191,7 @@ caravans.put('/:id', authMiddleware, auditMiddleware('caravan'), async (c) => {
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Caravan not found' }, 404);
+      throw new NotFoundError('Caravan');
     }
 
     // Build update query dynamically
@@ -206,7 +216,7 @@ caravans.put('/:id', authMiddleware, auditMiddleware('caravan'), async (c) => {
         [validated.email, id]
       );
       if (emailCheck.rows.length > 0) {
-        return c.json({ message: 'Email already in use' }, 409);
+        throw new ConflictError('Email is already in use');
       }
       updates.push(`email = $${paramIndex}`);
       params.push(validated.email);
@@ -226,7 +236,7 @@ caravans.put('/:id', authMiddleware, auditMiddleware('caravan'), async (c) => {
     }
 
     if (updates.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     params.push(id);
@@ -245,10 +255,14 @@ caravans.put('/:id', authMiddleware, auditMiddleware('caravan'), async (c) => {
     return c.json(mapRowToCaravan(result.rows[0]));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update caravan error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update caravan');
   }
 });
 
@@ -264,7 +278,7 @@ caravans.delete('/:id', authMiddleware, requireRole('admin'), auditMiddleware('c
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Caravan not found' }, 404);
+      throw new NotFoundError('Caravan');
     }
 
     // Delete from users table (will cascade to related data)
@@ -273,14 +287,14 @@ caravans.delete('/:id', authMiddleware, requireRole('admin'), auditMiddleware('c
     return c.json({ message: 'Caravan deleted successfully' });
   } catch (error) {
     console.error('Delete caravan error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
 // POST /api/caravans/bulk-delete - Bulk delete caravans (admin only)
 caravans.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('caravan', 'bulk_delete'), async (c) => {
   const user = c.get('user');
-  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+  if (!user) throw new AuthenticationError('Unauthorized');
 
   try {
     const body = await c.req.json();
@@ -288,7 +302,7 @@ caravans.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddlew
 
     // Prevent self-deletion
     if (ids.includes(user.sub)) {
-      return c.json({ message: 'Cannot delete your own account' }, 400);
+      throw new ValidationError('Cannot delete your own account');
     }
 
     const success: string[] = [];
@@ -320,10 +334,14 @@ caravans.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddlew
     return c.json({ success, failed });
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return c.json({ message: 'Invalid request body', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk delete caravans error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk delete caravans');
   }
 });
 
@@ -343,7 +361,7 @@ caravans.get('/:id/municipalities', authMiddleware, async (c) => {
     );
 
     if (caravanCheck.rows.length === 0) {
-      return c.json({ message: 'Caravan not found' }, 404);
+      throw new NotFoundError('Caravan');
     }
 
     // Check if user_locations table exists
@@ -431,7 +449,7 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
     );
 
     if (caravanCheck.rows.length === 0) {
-      return c.json({ message: 'Caravan not found' }, 404);
+      throw new NotFoundError('Caravan');
     }
 
     // Check if user_locations table exists
@@ -443,7 +461,7 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
     `);
 
     if (!tableCheck.rows[0].exists) {
-      return c.json({ message: 'Municipality assignments feature not available. Please run database migrations.' }, 501);
+      throw new Error('Municipality assignments feature not available. Please run database migrations.');
     }
 
     // caravanId IS the user_id - we query users table directly now
@@ -453,7 +471,7 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
     // Parse "province-municipality" format to get separate values
     for (const municipalityId of validated.municipality_ids) {
       if (!municipalityId || !municipalityId.includes('-')) {
-        return c.json({ message: `Invalid municipality ID format: ${municipalityId}` }, 400);
+        throw new ValidationError(`Invalid municipality ID format: ${municipalityId}`);
       }
 
       const parts = municipalityId.split('-');
@@ -467,7 +485,7 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
       );
 
       if (check.rows.length === 0) {
-        return c.json({ message: `Municipality not found: ${municipalityId}` }, 400);
+        throw new NotFoundError(`Municipality not found: ${municipalityId}`);
       }
     }
 
@@ -542,10 +560,14 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Assign municipalities error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to assign municipalities');
   }
 });
 
@@ -575,7 +597,7 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANA
       }
     }
     if (locationsToDelete.length === 0) {
-      return c.json({ message: 'No valid municipality IDs provided' }, 400);
+      throw new ValidationError('No valid municipality IDs provided');
     }
     const whereClause = locationsToDelete.join(' OR ');
     const result = await pool.query(
@@ -594,10 +616,14 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANA
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk unassign municipalities error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk unassign municipalities');
   }
 });
 
@@ -617,7 +643,7 @@ caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, r
     `);
 
     if (!tableCheck.rows[0].exists) {
-      return c.json({ message: 'Municipality assignments feature not available' }, 501);
+      throw new Error('Municipality assignments feature not available');
     }
 
     // caravanId IS the user_id
@@ -630,7 +656,7 @@ caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, r
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Assignment not found' }, 404);
+      throw new NotFoundError('Assignment');
     }
 
     const record = existing.rows[0];
@@ -649,7 +675,7 @@ caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, r
     return c.json({ message: 'Municipality unassigned successfully' });
   } catch (error) {
     console.error('Unassign municipality error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

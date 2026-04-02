@@ -4,15 +4,23 @@ import bcrypt from 'bcryptjs';
 import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.js';
 import { auditMiddleware, auditLog, auditAuth } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthenticationError,
+  AuthorizationError,
+  ConflictError,
+} from '../errors/index.js';
+import { clearPermissionCache } from '../middleware/permissions.js';
 
 const { hash, compare } = bcrypt;
 
 const users = new Hono();
 
-// Valid roles for the new role system
-const VALID_ROLES = ['admin', 'area_manager', 'assistant_area_manager', 'caravan', 'tele', 'staff', 'field_agent'] as const;
+// Valid roles for the role system (field_agent was renamed to caravan in migration 008)
+const VALID_ROLES = ['admin', 'area_manager', 'assistant_area_manager', 'caravan', 'tele'] as const;
 const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as const;
-const CARAVAN_ROLES = ['caravan', 'field_agent'] as const;
+const CARAVAN_ROLES = ['caravan'] as const;
 const TELE_ROLES = ['tele'] as const;
 
 // Validation schemas
@@ -106,7 +114,7 @@ users.get('/', authMiddleware, requireRole('admin', 'staff'), async (c) => {
     });
   } catch (error) {
     console.error('Fetch users error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to fetch users');
   }
 });
 
@@ -118,7 +126,7 @@ users.get('/:id', authMiddleware, async (c) => {
 
     // Users can only view their own profile unless they're admin/staff
     if (user.role === 'field_agent' && user.sub !== id) {
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You can only view your own profile');
     }
 
     const result = await pool.query(
@@ -128,13 +136,13 @@ users.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     return c.json(mapRowToUser(result.rows[0]));
   } catch (error) {
     console.error('Fetch user error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw error;
   }
 });
 
@@ -162,23 +170,19 @@ users.post('/', authMiddleware, auditMiddleware('user'), requireRole('admin'), a
     } else if (validated.role === 'assistant_area_manager') {
       // Assistant Area Managers must have an Area Manager
       if (!validated.area_manager_id) {
-        return c.json({
-          message: 'Assistant Area Manager must be assigned to an Area Manager'
-        }, 400);
+        throw new ValidationError('Assistant Area Manager must be assigned to an Area Manager');
       }
     } else if (validated.role === 'area_manager') {
       // Area Managers cannot have manager assignments
       if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        return c.json({
-          message: 'Area Managers cannot be assigned to other managers'
-        }, 400);
+        throw new ValidationError('Area Managers cannot be assigned to other managers');
       }
     }
 
     // Check if email already exists
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [validated.email]);
     if (existing.rows.length > 0) {
-      return c.json({ message: 'Email already exists' }, 409);
+      throw new ConflictError('A user with this email already exists');
     }
 
     // Hash password
@@ -194,6 +198,9 @@ users.post('/', authMiddleware, auditMiddleware('user'), requireRole('admin'), a
 
     const newUser = result.rows[0];
 
+    // Get current user for audit logging and RBAC assignment
+    const currentUser = c.get('user');
+
     // Create user profile with manager assignments
     await pool.query(
       `INSERT INTO user_profiles (id, user_id, name, email, role, area_manager_id, assistant_area_manager_id)
@@ -202,8 +209,33 @@ users.post('/', authMiddleware, auditMiddleware('user'), requireRole('admin'), a
        validated.role, validated.area_manager_id, validated.assistant_area_manager_id]
     );
 
+    // RBAC Sync: Create user_roles entry for new RBAC system
+    try {
+      const roleResult = await pool.query(
+        'SELECT id FROM roles WHERE slug = $1',
+        [validated.role]
+      );
+
+      if (roleResult.rows.length > 0) {
+        await pool.query(
+          `INSERT INTO user_roles (user_id, role_id, assigned_by, is_active)
+           VALUES ($1, $2, $3, TRUE)
+           ON CONFLICT (user_id, role_id) DO UPDATE SET
+             is_active = TRUE,
+             assigned_by = $3`,
+          [newUser.id, roleResult.rows[0].id, currentUser.sub]
+        );
+      } else {
+        console.warn(`RBAC: Role '${validated.role}' not found in roles table. User created without RBAC entry.`);
+      }
+    } catch (rbacError) {
+      // Log RBAC error but don't fail user creation
+      console.error('RBAC Sync Error during user creation:', rbacError);
+      // User is created successfully, but RBAC sync failed
+      // Admin can manually assign role via /api/permissions/users/:userId/roles
+    }
+
     // Audit log the user creation
-    const currentUser = c.get('user');
     await auditLog({
       userId: currentUser.sub,
       action: 'create',
@@ -225,10 +257,14 @@ users.post('/', authMiddleware, auditMiddleware('user'), requireRole('admin'), a
     return c.json(mapRowToUser(newUser), 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create user error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create user');
   }
 });
 
@@ -242,43 +278,43 @@ users.put('/:id', authMiddleware, auditMiddleware('user'), async (c) => {
 
     // Users can only update their own profile unless they're admin
     if (currentUser.role !== 'admin' && currentUser.sub !== id) {
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You can only update your own profile');
     }
 
    // Only admins can change roles and manager assignments
     if ((validated.role || validated.area_manager_id || validated.assistant_area_manager_id) && currentUser.role !== 'admin') {
-      return c.json({ message: 'Cannot change role or manager assignments' }, 403);
+      throw new AuthorizationError('Only admins can change roles and manager assignments');
     }
 
     // Role-based validation constraints
     if (validated.role === 'caravan' || CARAVAN_ROLES.includes(validated.role as any)) {
       if (!validated.area_manager_id && !validated.assistant_area_manager_id) {
-        return c.json({ message: 'Caravan requires an Area Manager or Assistant Area Manager assignment' }, 400);
+        throw new ValidationError('Caravan requires an Area Manager or Assistant Area Manager assignment');
       }
     } else if (validated.role === 'tele') {
       // Tele users work independently and don't require manager assignments
       if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        return c.json({ message: 'Tele users cannot have manager assignments' }, 400);
+        throw new ValidationError('Tele users cannot have manager assignments');
       }
     } else if (validated.role === 'assistant_area_manager') {
       if (!validated.area_manager_id) {
-        return c.json({ message: 'Assistant Area Manager requires an Area Manager assignment' }, 400);
+        throw new ValidationError('Assistant Area Manager requires an Area Manager assignment');
       }
     } else if (validated.role === 'area_manager') {
       if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        return c.json({ message: 'Area Manager cannot have manager assignments' }, 400);
+        throw new ValidationError('Area Manager cannot have manager assignments');
       }
     } else if (validated.role === 'admin') {
       // Admins should not have manager assignments
       if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        return c.json({ message: 'Admin cannot have manager assignments' }, 400);
+        throw new ValidationError('Admin cannot have manager assignments');
       }
     }
 
     // Check if user exists
     const existing = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     // Store old values for audit log
@@ -317,7 +353,7 @@ users.put('/:id', authMiddleware, auditMiddleware('user'), async (c) => {
     }
 
     if (updateFields.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -328,6 +364,78 @@ users.put('/:id', authMiddleware, auditMiddleware('user'), async (c) => {
     );
 
     const updatedUser = result.rows[0];
+
+    // Update user_profiles if name, role, or manager assignments changed
+    if (validated.first_name || validated.last_name || validated.role ||
+        validated.area_manager_id !== undefined || validated.assistant_area_manager_id !== undefined) {
+      try {
+        await pool.query(
+          `UPDATE user_profiles
+           SET name = COALESCE($1, name),
+               email = COALESCE($2, email),
+               role = COALESCE($3, role),
+               area_manager_id = COALESCE($4, area_manager_id),
+               assistant_area_manager_id = COALESCE($5, assistant_area_manager_id)
+           WHERE user_id = $6`,
+          [
+            validated.first_name && validated.last_name ?
+              `${validated.first_name} ${validated.last_name}` : null,
+            validated.email || null,
+            validated.role || null,
+            validated.area_manager_id !== undefined ? validated.area_manager_id : null,
+            validated.assistant_area_manager_id !== undefined ? validated.assistant_area_manager_id : null,
+            id
+          ]
+        );
+      } catch (profileError) {
+        console.error('User profile sync error during user update:', profileError);
+        // Don't fail the update if profile sync fails
+      }
+    }
+
+    // RBAC Sync: Update user_roles if role changed
+    if (validated.role && oldUser.role !== updatedUser.role) {
+      try {
+        // Get the new role ID
+        const newRoleResult = await pool.query(
+          'SELECT id FROM roles WHERE slug = $1',
+          [updatedUser.role]
+        );
+
+        if (newRoleResult.rows.length > 0) {
+          const newRoleId = newRoleResult.rows[0].id;
+
+          // Deactivate all old role assignments for this user
+          await pool.query(
+            `UPDATE user_roles
+             SET is_active = FALSE
+             WHERE user_id = $1`,
+            [id]
+          );
+
+          // Create new role assignment
+          await pool.query(
+            `INSERT INTO user_roles (user_id, role_id, assigned_by, is_active)
+             VALUES ($1, $2, $3, TRUE)
+             ON CONFLICT (user_id, role_id) DO UPDATE SET
+               is_active = TRUE,
+               assigned_by = $3`,
+            [id, newRoleId, currentUser.sub]
+          );
+
+          // Clear permission cache for this user
+          if (id) {
+            clearPermissionCache(id);
+          }
+        } else {
+          console.warn(`RBAC: Role '${updatedUser.role}' not found in roles table.`);
+        }
+      } catch (rbacError) {
+        // Log RBAC error but don't fail user update
+        console.error('RBAC Sync Error during user update:', rbacError);
+        // User is updated successfully, but RBAC sync failed
+      }
+    }
 
     // Audit log the user update
     await auditLog({
@@ -358,10 +466,14 @@ users.put('/:id', authMiddleware, auditMiddleware('user'), async (c) => {
     return c.json(mapRowToUser(updatedUser));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update user error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update user');
   }
 });
 
@@ -375,19 +487,19 @@ users.post('/:id/change-password', authMiddleware, async (c) => {
 
     // Users can only change their own password
     if (currentUser.sub !== id) {
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You can only change your own password');
     }
 
     // Get current user
     const existing = await pool.query('SELECT password_hash FROM users WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     // Verify current password
     const valid = await compare(validated.current_password, existing.rows[0].password_hash);
     if (!valid) {
-      return c.json({ message: 'Current password is incorrect' }, 400);
+      throw new AuthenticationError('Current password is incorrect');
     }
 
     // Hash and update new password
@@ -403,10 +515,14 @@ users.post('/:id/change-password', authMiddleware, async (c) => {
     return c.json({ message: 'Password changed successfully' });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Change password error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to change password');
   }
 });
 
@@ -418,7 +534,7 @@ users.delete('/:id', authMiddleware, auditMiddleware('user'), requireRole('admin
 
     // Prevent self-deletion
     if (currentUser.sub === id) {
-      return c.json({ message: 'Cannot delete your own account' }, 400);
+      throw new ValidationError('Cannot delete your own account');
     }
 
     // Get user before deletion for audit log
@@ -428,7 +544,7 @@ users.delete('/:id', authMiddleware, auditMiddleware('user'), requireRole('admin
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     const oldUser = existing.rows[0];
@@ -454,7 +570,7 @@ users.delete('/:id', authMiddleware, auditMiddleware('user'), requireRole('admin
     return c.json({ message: 'User deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to delete user');
   }
 });
 
@@ -470,7 +586,7 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
     // Verify user exists
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userCheck.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     // Check if user_locations table exists
@@ -536,13 +652,13 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     // Verify user exists
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userCheck.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     // Verify all municipalities exist in PSGC table
     for (const municipalityId of validated.municipality_ids) {
       if (!municipalityId || !municipalityId.includes('-')) {
-        return c.json({ message: `Invalid municipality ID format: ${municipalityId}` }, 400);
+        throw new ValidationError(`Invalid municipality ID format: ${municipalityId}`);
       }
 
       const check = await pool.query(
@@ -551,7 +667,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       );
 
       if (check.rows.length === 0) {
-        return c.json({ message: `Municipality not found: ${municipalityId}` }, 400);
+        throw new NotFoundError(`Municipality not found: ${municipalityId}`);
       }
     }
 
@@ -581,9 +697,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     }
 
     if (assignedCount === 0) {
-      return c.json({
-        message: 'No new municipalities were assigned. All selected municipalities are already assigned to this user.'
-      }, 400);
+      throw new ValidationError('No new municipalities were assigned. All selected municipalities are already assigned to this user.');
     }
 
     return c.json({
@@ -592,10 +706,14 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Assign municipalities error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to assign municipalities');
   }
 });
 
@@ -613,7 +731,7 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
     // Verify user exists
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userCheck.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     // Bulk soft delete from user_locations using ANY()
@@ -633,10 +751,14 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk unassign municipalities error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to unassign municipalities');
   }
 });
 
@@ -649,7 +771,7 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
     // Verify user exists
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userCheck.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     // Remove from user (use TRIM to handle whitespace issues)
@@ -659,7 +781,7 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Assignment not found' }, 404);
+      throw new NotFoundError('Assignment');
     }
 
     const record = existing.rows[0];
@@ -675,7 +797,7 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
     return c.json({ message: 'Municipality unassigned successfully' });
   } catch (error) {
     console.error('Unassign municipality error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to unassign municipality');
   }
 });
 
@@ -696,7 +818,7 @@ users.get('/roles', authMiddleware, async (c) => {
     return c.json({ roles });
   } catch (error) {
     console.error('Get roles error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to get roles');
   }
 });
 
@@ -708,7 +830,7 @@ const bulkDeleteSchema = z.object({
 // Bulk delete users
 users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('user', 'bulk_delete'), async (c) => {
   const user = c.get('user');
-  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+  if (!user) throw new AuthenticationError('Unauthorized');
 
   try {
     const body = await c.req.json();
@@ -716,7 +838,7 @@ users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware
 
     // Prevent self-deletion
     if (ids.includes(user.sub)) {
-      return c.json({ message: 'Cannot delete your own account' }, 400);
+      throw new ValidationError('Cannot delete your own account');
     }
 
     const success: string[] = [];
@@ -748,10 +870,14 @@ users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware
     return c.json({ success, failed });
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return c.json({ message: 'Invalid request body', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk delete users error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk delete users');
   }
 });
 

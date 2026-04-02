@@ -47,7 +47,6 @@ tmp/
 *.cert
 *.crt
 powersync-private-key.pem
-keys/
 
 # OS files
 .DS_Store

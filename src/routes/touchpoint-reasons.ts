@@ -1,6 +1,12 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const touchpointReasons = new Hono();
 
@@ -76,7 +82,7 @@ touchpointReasons.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch touchpoint reasons error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -87,7 +93,7 @@ touchpointReasons.post('/', authMiddleware, async (c) => {
 
     // Only admin can create touchpoint reasons
     if (user.role !== 'admin') {
-      return c.json({ message: 'Forbidden - Only admin can create touchpoint reasons' }, 403);
+      throw new AuthorizationError('Only admin can create touchpoint reasons');
     }
 
     const body = await c.req.json();
@@ -95,7 +101,7 @@ touchpointReasons.post('/', authMiddleware, async (c) => {
 
     // Validation
     if (!code || !label || !touchpoint_type || !role) {
-      return c.json({ message: 'Missing required fields: code, label, touchpoint_type, role' }, 400);
+      throw new ValidationError('Missing required fields: code, label, touchpoint_type, role');
     }
 
     if (!['Visit', 'Call'].includes(touchpoint_type)) {
@@ -119,10 +125,10 @@ touchpointReasons.post('/', authMiddleware, async (c) => {
 
     // Check for unique constraint violation
     if (error.code === '23505') {
-      return c.json({ message: 'Touchpoint reason with this code already exists' }, 409);
+      throw new ConflictError('Touchpoint reason with this code already exists');
     }
 
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -133,7 +139,7 @@ touchpointReasons.put('/:id', authMiddleware, async (c) => {
 
     // Only admin can update touchpoint reasons
     if (user.role !== 'admin') {
-      return c.json({ message: 'Forbidden - Only admin can update touchpoint reasons' }, 403);
+      throw new AuthorizationError('Only admin can update touchpoint reasons');
     }
 
     const id = c.req.param('id');
@@ -154,14 +160,14 @@ touchpointReasons.put('/:id', authMiddleware, async (c) => {
     }
     if (touchpoint_type !== undefined) {
       if (!['Visit', 'Call'].includes(touchpoint_type)) {
-        return c.json({ message: 'touchpoint_type must be Visit or Call' }, 400);
+        throw new ValidationError('touchpoint_type must be Visit or Call');
       }
       updates.push(`touchpoint_type = $${paramIndex++}`);
       params.push(touchpoint_type);
     }
     if (role !== undefined) {
       if (!['caravan', 'tele'].includes(role)) {
-        return c.json({ message: 'role must be caravan or tele' }, 400);
+        throw new ValidationError('role must be caravan or tele');
       }
       updates.push(`role = $${paramIndex++}`);
       params.push(role);
@@ -184,7 +190,7 @@ touchpointReasons.put('/:id', authMiddleware, async (c) => {
     }
 
     if (updates.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     params.push(id); // Add id as the last parameter
@@ -198,7 +204,7 @@ touchpointReasons.put('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Touchpoint reason not found' }, 404);
+      throw new NotFoundError('Touchpoint reason');
     }
 
     return c.json(result.rows[0]);
@@ -206,10 +212,10 @@ touchpointReasons.put('/:id', authMiddleware, async (c) => {
     console.error('Update touchpoint reason error:', error);
 
     if (error.code === '23505') {
-      return c.json({ message: 'Touchpoint reason with this code already exists' }, 409);
+      throw new ConflictError('Touchpoint reason with this code already exists');
     }
 
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -220,7 +226,7 @@ touchpointReasons.delete('/:id', authMiddleware, async (c) => {
 
     // Only admin can delete touchpoint reasons
     if (user.role !== 'admin') {
-      return c.json({ message: 'Forbidden - Only admin can delete touchpoint reasons' }, 403);
+      throw new AuthorizationError('Only admin can delete touchpoint reasons');
     }
 
     const id = c.req.param('id');
@@ -231,13 +237,13 @@ touchpointReasons.delete('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Touchpoint reason not found' }, 404);
+      throw new NotFoundError('Touchpoint reason');
     }
 
     return c.json({ message: 'Touchpoint reason deleted successfully' });
   } catch (error) {
     console.error('Delete touchpoint reason error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

@@ -10,12 +10,6 @@
 
 import { Context, Next } from 'hono';
 import { pool } from '../db/index.js';
-import {
-  AuthenticationError,
-  AuthorizationError,
-  ValidationError,
-  NotFoundError,
-} from '../errors/index.js';
 
 declare module 'hono' {
   interface ContextVariableMap {
@@ -258,15 +252,19 @@ export const requirePermission = (
     const user = c.get('user');
 
     if (!user) {
-      throw new AuthenticationError('No token provided');
+      return c.json({ message: 'Unauthorized - No token provided' }, 401);
     }
 
     const hasPerms = await hasPermission(user.sub, resource, action, constraint);
 
     if (!hasPerms) {
-      const error = new AuthorizationError('Insufficient permissions');
-      error.addDetail('required', { resource, action, constraint });
-      throw error;
+      return c.json(
+        {
+          message: 'Forbidden - Insufficient permissions',
+          required: { resource, action, constraint },
+        },
+        403
+      );
     }
 
     // Attach user permissions if RBAC is installed
@@ -292,15 +290,19 @@ export const requireAnyPermission = (
     const user = c.get('user');
 
     if (!user) {
-      throw new AuthenticationError('No token provided');
+      return c.json({ message: 'Unauthorized - No token provided' }, 401);
     }
 
     const hasPerms = await hasAnyPermission(user.sub, requiredPermissions);
 
     if (!hasPerms) {
-      const error = new AuthorizationError('Insufficient permissions');
-      error.addDetail('required', requiredPermissions);
-      throw error;
+      return c.json(
+        {
+          message: 'Forbidden - Insufficient permissions',
+          required: requiredPermissions,
+        },
+        403
+      );
     }
 
     await next();
@@ -317,15 +319,19 @@ export const requireAllPermissions = (
     const user = c.get('user');
 
     if (!user) {
-      throw new AuthenticationError('No token provided');
+      return c.json({ message: 'Unauthorized - No token provided' }, 401);
     }
 
     const hasPerms = await hasAllPermissions(user.sub, requiredPermissions);
 
     if (!hasPerms) {
-      const error = new AuthorizationError('Insufficient permissions');
-      error.addDetail('required', requiredPermissions);
-      throw error;
+      return c.json(
+        {
+          message: 'Forbidden - Insufficient permissions',
+          required: requiredPermissions,
+        },
+        403
+      );
     }
 
     await next();
@@ -341,11 +347,11 @@ export const checkOwnership = (table: string, userIdColumnOrArray?: string | str
     const resourceId = c.req.param('id');
 
     if (!user) {
-      throw new AuthenticationError('Unauthorized');
+      return c.json({ message: 'Unauthorized' }, 401);
     }
 
     if (!resourceId) {
-      throw new ValidationError('Resource ID required');
+      return c.json({ message: 'Resource ID required' }, 400);
     }
 
     // Admin and area managers can access any resource
@@ -379,12 +385,14 @@ export const checkOwnership = (table: string, userIdColumnOrArray?: string | str
     }
 
     if (resourceOwnerId === null) {
-      throw new NotFoundError('Resource');
+      return c.json({ message: 'Resource not found' }, 404);
     }
 
     // Check ownership
     if (resourceOwnerId !== user.sub) {
-      throw new AuthorizationError('You do not own this resource');
+      return c.json({
+        message: 'Forbidden - You do not own this resource',
+      }, 403);
     }
 
     await next();
@@ -448,7 +456,7 @@ export const validateTouchpointType = () => {
     const user = c.get('user');
 
     if (!user) {
-      throw new AuthenticationError('Unauthorized');
+      return c.json({ message: 'Unauthorized' }, 401);
     }
 
     // Admin and managers can create any touchpoint type
@@ -462,7 +470,7 @@ export const validateTouchpointType = () => {
     const touchpointType = body.type;
 
     if (!touchpointNumber || !touchpointType) {
-      throw new ValidationError('touchpoint_number and type are required');
+      return c.json({ message: 'touchpoint_number and type are required' }, 400);
     }
 
     const visitNumbers = [1, 4, 7];
@@ -474,28 +482,32 @@ export const validateTouchpointType = () => {
 
     if (touchpointType === 'Visit') {
       if (!canCreateVisit) {
-        const error = new AuthorizationError('You do not have permission to create Visit touchpoints');
-        error.addDetail('allowed_numbers', visitNumbers);
-        throw error;
+        return c.json({
+          message: 'You do not have permission to create Visit touchpoints',
+          allowed_numbers: visitNumbers,
+        }, 403);
       }
       if (!visitNumbers.includes(touchpointNumber)) {
-        const error = new ValidationError(`Invalid touchpoint number ${touchpointNumber} for Visit type`);
-        error.addDetail('allowed_numbers', visitNumbers);
-        throw error;
+        return c.json({
+          message: `Invalid touchpoint number ${touchpointNumber} for Visit type`,
+          allowed_numbers: visitNumbers,
+        }, 400);
       }
     } else if (touchpointType === 'Call') {
       if (!canCreateCall) {
-        const error = new AuthorizationError('You do not have permission to create Call touchpoints');
-        error.addDetail('allowed_numbers', callNumbers);
-        throw error;
+        return c.json({
+          message: 'You do not have permission to create Call touchpoints',
+          allowed_numbers: callNumbers,
+        }, 403);
       }
       if (!callNumbers.includes(touchpointNumber)) {
-        const error = new ValidationError(`Invalid touchpoint number ${touchpointNumber} for Call type`);
-        error.addDetail('allowed_numbers', callNumbers);
-        throw error;
+        return c.json({
+          message: `Invalid touchpoint number ${touchpointNumber} for Call type`,
+          allowed_numbers: callNumbers,
+        }, 400);
       }
     } else {
-      throw new ValidationError('Invalid touchpoint type. Must be Visit or Call');
+      return c.json({ message: 'Invalid touchpoint type. Must be Visit or Call' }, 400);
     }
 
     await next();

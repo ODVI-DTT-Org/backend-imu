@@ -1,9 +1,6 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
-import {
-  ValidationError,
-} from '../errors/index.js';
 
 const touchpointsAnalytics = new Hono();
 
@@ -29,10 +26,10 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
 
     // Validate date formats
     if (startDate && !isValidDate(startDate)) {
-      throw new ValidationError('Invalid startDate format. Use YYYY-MM-DD');
+      return c.json({ message: 'Invalid startDate format. Use YYYY-MM-DD' }, 400);
     }
     if (endDate && !isValidDate(endDate)) {
-      throw new ValidationError('Invalid endDate format. Use YYYY-MM-DD');
+      return c.json({ message: 'Invalid endDate format. Use YYYY-MM-DD' }, 400);
     }
 
     // Helper function to validate and split comma-separated values
@@ -248,7 +245,7 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Touchpoints analytics error:', error);
-    throw new Error('Failed to fetch touchpoints analytics');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 

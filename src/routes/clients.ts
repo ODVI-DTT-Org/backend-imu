@@ -3,7 +3,11 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
-import { NotFoundError, ValidationError } from '../errors/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const clients = new Hono();
 
@@ -259,7 +263,7 @@ clients.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch clients error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -348,7 +352,7 @@ clients.get('/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch client error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -388,7 +392,7 @@ clients.post('/', authMiddleware, auditMiddleware('client'), async (c) => {
       throw validationError;
     }
     console.error('Create client error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -415,7 +419,7 @@ clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     // Check access permissions
     if (user.role === 'field_agent' && existingClient.caravan_id !== user.sub) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You do not have permission to perform this action');
     }
 
     // For Tele and Caravan users, create approval request instead of updating directly
@@ -507,7 +511,7 @@ clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
       throw validationError;
     }
     console.error('Update client error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   } finally {
     client.release();
   }
@@ -536,7 +540,7 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     // Check access permissions (all authenticated users can update loan_released)
     if (user.role === 'field_agent' && existingClient.caravan_id !== user.sub) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You do not have permission to perform this action');
     }
 
     // Build update query dynamically
@@ -579,7 +583,7 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
       throw validationError;
     }
     console.error('Patch client error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   } finally {
     client.release();
   }
@@ -612,14 +616,14 @@ clients.delete('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     }
 
     if (user.role === 'field_agent' && existingResult.rows[0].caravan_id !== user.sub) {
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You do not have permission to perform this action');
     }
 
     await pool.query('DELETE FROM clients WHERE id = $1', [id]);
     return c.json({ message: 'Client deleted successfully' });
   } catch (error) {
     console.error('Delete client error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -648,7 +652,7 @@ clients.post('/:id/addresses', authMiddleware, async (c) => {
       throw validationError;
     }
     console.error('Add address error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -676,7 +680,7 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
       throw validationError;
     }
     console.error('Add phone error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -750,7 +754,7 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Search unassigned clients error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

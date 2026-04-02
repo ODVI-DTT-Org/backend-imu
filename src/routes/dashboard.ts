@@ -1,6 +1,9 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+} from '../errors/index.js';
 
 const dashboard = new Hono();
 
@@ -144,7 +147,7 @@ dashboard.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Dashboard stats error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -155,7 +158,7 @@ dashboard.get('/performance', authMiddleware, async (c) => {
     const caravanId = c.req.query('caravan_id') || (user.role === 'field_agent' ? user.sub : null);
 
     if (!caravanId) {
-      return c.json({ message: 'Caravan ID required' }, 400);
+      throw new ValidationError('Caravan ID required');
     }
 
     // Get daily touchpoints for last 30 days
@@ -205,7 +208,7 @@ dashboard.get('/performance', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Performance stats error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

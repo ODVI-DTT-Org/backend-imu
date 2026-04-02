@@ -15,7 +15,7 @@ const errorLogs = new Hono();
 errorLogs.use('*', authMiddleware);
 
 // Require admin or manager role for error log access
-errorLogs.use('*', requireRole(['admin', 'area_manager', 'assistant_area_manager']));
+errorLogs.use('*', requireRole('admin', 'area_manager', 'assistant_area_manager'));
 
 /**
  * GET /api/error-logs
@@ -148,7 +148,8 @@ errorLogs.get('/:requestId', async (c) => {
 errorLogs.post('/:id/resolve', async (c) => {
   try {
     const id = c.req.param('id');
-    const userId = c.get('userId') as string;
+    const user = c.get('user');
+    const userId = user?.sub as string;
 
     const body = await c.req.json();
     const { notes } = body;

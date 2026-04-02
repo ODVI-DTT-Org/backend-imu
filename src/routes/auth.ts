@@ -13,7 +13,6 @@ import {
   TokenInvalidError,
   ValidationError,
   NotFoundError,
-  ConflictError,
 } from '../errors/index.js';
 
 // Load PowerSync RSA keys from environment variable for JWT signing
@@ -262,7 +261,7 @@ auth.get('/me', authMiddleware, async (c) => {
     return c.json({ user: result.rows[0] });
   } catch (error) {
     console.error('Get user error:', error);
-    throw new Error('Failed to get user');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -286,10 +285,10 @@ auth.post('/register', async (c) => {
     return c.json({ user: result.rows[0] }, 201);
   } catch (error: any) {
     if (error.code === '23505') {
-      throw new ConflictError('Email already exists');
+      return c.json({ message: 'Email already exists' }, 409);
     }
     console.error('Register error:', error);
-    throw new Error('Failed to register user');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 

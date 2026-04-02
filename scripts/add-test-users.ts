@@ -2,14 +2,10 @@ import { Pool } from 'pg';
 import bcrypt from 'bcrypt';
 
 const pool = new Pool({
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432'),
-  database: process.env.DB_NAME || 'imu_db',
-  user: process.env.DB_USER || 'postgres',
-  password: process.env.DB_PASSWORD || 'postgres',
-  ssl: process.env.DB_SSL === 'true' ? {
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
     rejectUnauthorized: false
-  } : undefined
+  }
 });
 
 const users = [

@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const reports = new Hono();
 
@@ -111,7 +115,7 @@ reports.get('/agent-performance', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Agent performance report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -183,7 +187,7 @@ reports.get('/client-activity', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Client activity report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -241,7 +245,7 @@ reports.get('/touchpoint-summary', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Touchpoint summary report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -302,7 +306,7 @@ reports.get('/attendance-summary', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Attendance summary report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -379,7 +383,7 @@ reports.get('/target-achievement', authMiddleware, async (c) => {
     return c.json(response);
   } catch (error) {
     console.error('Target achievement report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -466,7 +470,7 @@ reports.get('/conversion', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Conversion report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -555,7 +559,7 @@ reports.get('/area-coverage', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Area coverage report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -569,7 +573,7 @@ reports.get('/export', authMiddleware, async (c) => {
 
     // Only admin/staff can export
     if (user.role === 'field_agent') {
-      return c.json({ message: 'Unauthorized' }, 403);
+      throw new AuthorizationError('Unauthorized');
     }
 
     let csvData = '';
@@ -631,7 +635,7 @@ reports.get('/export', authMiddleware, async (c) => {
         break;
 
       default:
-        return c.json({ message: 'Invalid report type' }, 400);
+        throw new ValidationError('Invalid report type');
     }
 
     return c.json({
@@ -641,7 +645,7 @@ reports.get('/export', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Export report error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

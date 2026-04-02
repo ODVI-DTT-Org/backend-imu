@@ -1,23 +1,23 @@
 import jwt from 'jsonwebtoken';
 import { Context, Next } from 'hono';
-import {
-  AuthenticationError,
-  AuthorizationError,
-} from '../errors/index.js';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const { verify } = jwt;
 
-// Load PowerSync RSA public key from environment variable for JWT verification
-const envPublicKey = process.env.POWERSYNC_PUBLIC_KEY;
+// Load PowerSync RSA public key for JWT verification
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const publicKeyPath = path.join(__dirname, '../../powersync-public-key.pem');
 
 let publicKey: string;
-if (envPublicKey && envPublicKey.trim().length > 0) {
-  // Handle escaped newlines in environment variable (DigitalOcean format)
-  publicKey = envPublicKey.trim().replace(/\\n/g, '\n');
-  console.log('✅ Auth middleware: PowerSync public key loaded from environment');
-} else {
-  console.error('❌ Auth middleware: POWERSYNC_PUBLIC_KEY environment variable not set');
-  throw new Error('POWERSYNC_PUBLIC_KEY environment variable is required');
+try {
+  publicKey = fs.readFileSync(publicKeyPath, 'utf-8');
+  console.log('✅ Auth middleware: PowerSync public key loaded');
+} catch (error) {
+  console.error('❌ Auth middleware: Failed to load PowerSync public key:', error);
+  throw new Error('PowerSync public key not found at ' + publicKeyPath);
 }
 
 interface JwtPayload {
@@ -40,7 +40,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
   const authHeader = c.req.header('Authorization');
 
   if (!authHeader?.startsWith('Bearer ')) {
-    throw new AuthenticationError('No token provided');
+    return c.json({ message: 'Unauthorized - No token provided' }, 401);
   }
 
   const token = authHeader.slice(7);
@@ -63,7 +63,7 @@ export const authMiddleware = async (c: Context, next: Next) => {
     c.set('user', decoded);
     await next();
   } catch (error) {
-    throw new AuthenticationError('Invalid or expired token');
+    return c.json({ message: 'Invalid or expired token' }, 401);
   }
 };
 
@@ -103,11 +103,11 @@ export const requireRole = (...allowedRoles: string[]) => {
     const user = c.get('user');
 
     if (!user) {
-      throw new AuthenticationError('Unauthorized');
+      return c.json({ message: 'Unauthorized' }, 401);
     }
 
     if (!allowedRoles.includes(user.role)) {
-      throw new AuthorizationError('Insufficient permissions');
+      return c.json({ message: 'Forbidden - Insufficient permissions' }, 403);
     }
 
     await next();
@@ -120,11 +120,11 @@ export const requireAnyRole = (...allowedRoles: string[]) => {
     const user = c.get('user');
 
     if (!user) {
-      throw new AuthenticationError('Unauthorized');
+      return c.json({ message: 'Unauthorized' }, 401);
     }
 
     if (!allowedRoles.includes(user.role)) {
-      throw new AuthorizationError('Insufficient permissions');
+      return c.json({ message: 'Forbidden - Insufficient permissions' }, 403);
     }
 
     await next();

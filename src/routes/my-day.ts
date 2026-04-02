@@ -2,11 +2,6 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
-import {
-  ValidationError,
-  NotFoundError,
-  ConflictError,
-} from '../errors/index.js';
 
 const myDay = new Hono();
 
@@ -63,7 +58,7 @@ myDay.post('/add-client', authMiddleware, async (c) => {
     );
 
     if (clientCheck.rows.length === 0) {
-      throw new NotFoundError('Client');
+      return c.json({ message: 'Client not found or not assigned to you' }, 404);
     }
 
     const today = getLocalDateString();
@@ -82,7 +77,7 @@ myDay.post('/add-client', authMiddleware, async (c) => {
     );
 
     if (existing.rows.length > 0) {
-      throw new ConflictError('Client already in today\'s itinerary');
+      return c.json({ message: 'Client already in today\'s itinerary' }, 400);
     }
 
     // Add to itinerary
@@ -107,14 +102,10 @@ myDay.post('/add-client', authMiddleware, async (c) => {
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Invalid input');
-      error.errors.forEach((err: any) => {
-        validationError.addFieldError(err.path[0] || 'unknown', err.message);
-      });
-      throw validationError;
+      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
     }
     console.error('Add to my day error:', error);
-    throw new Error('Failed to add client to my day');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -133,7 +124,7 @@ myDay.delete('/remove-client/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      throw new NotFoundError('Client in today\'s itinerary');
+      return c.json({ message: 'Client not found in today\'s itinerary' }, 404);
     }
 
     return c.json({
@@ -141,7 +132,7 @@ myDay.delete('/remove-client/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Remove from my day error:', error);
-    throw new Error('Failed to remove client from my day');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -163,7 +154,7 @@ myDay.get('/status/:clientId', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get my day status error:', error);
-    throw new Error('Failed to get my day status');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -254,7 +245,7 @@ myDay.get('/tasks', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get my-day tasks error:', error);
-    throw new Error('Failed to get my-day tasks');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -270,11 +261,11 @@ myDay.post('/tasks/:id/start', authMiddleware, async (c) => {
     );
 
     if (existing.rows.length === 0) {
-      throw new NotFoundError('Task');
+      return c.json({ message: 'Task not found' }, 404);
     }
 
     if (existing.rows[0].status !== 'pending') {
-      throw new ValidationError('Task is not in pending status');
+      return c.json({ message: 'Task is not in pending status' }, 400);
     }
 
     const result = await pool.query(
@@ -289,7 +280,7 @@ myDay.post('/tasks/:id/start', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Start task error:', error);
-    throw new Error('Failed to start task');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -305,7 +296,7 @@ myDay.post('/tasks/:id/complete', authMiddleware, async (c) => {
     );
 
     if (existing.rows.length === 0) {
-      throw new NotFoundError('Task');
+      return c.json({ message: 'Task not found' }, 404);
     }
 
     const result = await pool.query(
@@ -320,7 +311,7 @@ myDay.post('/tasks/:id/complete', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Complete task error:', error);
-    throw new Error('Failed to complete task');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -339,7 +330,7 @@ myDay.post('/clients/:id/time-in', authMiddleware, async (c) => {
     );
 
     if (clientCheck.rows.length === 0) {
-      throw new NotFoundError('Client');
+      return c.json({ message: 'Client not found or not assigned to you' }, 404);
     }
 
     const now = new Date();
@@ -382,14 +373,10 @@ myDay.post('/clients/:id/time-in', authMiddleware, async (c) => {
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Invalid input');
-      error.errors.forEach((err: any) => {
-        validationError.addFieldError(err.path[0] || 'unknown', err.message);
-      });
-      throw validationError;
+      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
     }
     console.error('Time-in error:', error);
-    throw new Error('Failed to record time-in');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -407,7 +394,7 @@ myDay.post('/visits', authMiddleware, async (c) => {
     );
 
     if (clientCheck.rows.length === 0) {
-      throw new NotFoundError('Client');
+      return c.json({ message: 'Client not found or not assigned to you' }, 404);
     }
 
     const today = getLocalDateString();
@@ -468,14 +455,10 @@ myDay.post('/visits', authMiddleware, async (c) => {
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Invalid input');
-      error.errors.forEach((err: any) => {
-        validationError.addFieldError(err.path[0] || 'unknown', err.message);
-      });
-      throw validationError;
+      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
     }
     console.error('Submit visit error:', error);
-    throw new Error('Failed to submit visit');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -544,7 +527,7 @@ myDay.get('/stats', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get stats error:', error);
-    throw new Error('Failed to get stats');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 

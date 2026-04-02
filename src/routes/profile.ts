@@ -2,6 +2,12 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthenticationError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const profile = new Hono();
 
@@ -25,7 +31,7 @@ profile.get('/:id', authMiddleware, async (c) => {
 
     // Users can only view their own profile unless admin
     if (user.role === 'field_agent' && id !== user.sub) {
-      return c.json({ message: 'Unauthorized' }, 403);
+      throw new AuthorizationError('Unauthorized');
     }
 
     const result = await pool.query(
@@ -37,7 +43,7 @@ profile.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     const row = result.rows[0];
@@ -55,7 +61,7 @@ profile.get('/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get profile error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -69,7 +75,7 @@ profile.put('/:id', authMiddleware, async (c) => {
 
     // Users can only update their own profile unless admin
     if (user.role === 'field_agent' && id !== user.sub) {
-      return c.json({ message: 'Unauthorized' }, 403);
+      throw new AuthorizationError('Unauthorized');
     }
 
     const updateFields: string[] = [];
@@ -94,7 +100,7 @@ profile.put('/:id', authMiddleware, async (c) => {
     }
 
     if (updateFields.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -104,7 +110,7 @@ profile.put('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     const row = result.rows[0];
@@ -121,10 +127,14 @@ profile.put('/:id', authMiddleware, async (c) => {
     });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update profile error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update profile');
   }
 });
 
@@ -136,25 +146,25 @@ profile.post('/:id/avatar', authMiddleware, async (c) => {
 
     // Users can only upload their own avatar unless admin
     if (user.role === 'field_agent' && id !== user.sub) {
-      return c.json({ message: 'Unauthorized' }, 403);
+      throw new AuthorizationError('Unauthorized');
     }
 
     const body = await c.req.parseBody();
     const file = body['file'];
 
     if (!file || !(file instanceof File)) {
-      return c.json({ message: 'No file uploaded' }, 400);
+      throw new ValidationError('No file uploaded');
     }
 
     // Validate file type
     const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
-      return c.json({ message: 'Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed' }, 400);
+      throw new ValidationError('Invalid file type. Only JPEG, PNG, GIF, and WebP are allowed');
     }
 
     // Validate file size (max 5MB)
     if (file.size > 5 * 1024 * 1024) {
-      return c.json({ message: 'File too large. Maximum size is 5MB' }, 400);
+      throw new ValidationError('File too large. Maximum size is 5MB');
     }
 
     // In production, you would upload to S3 or similar
@@ -181,7 +191,7 @@ profile.post('/:id/avatar', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Upload avatar error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -195,7 +205,7 @@ profile.post('/:id/change-password', authMiddleware, async (c) => {
 
     // Users can only change their own password
     if (id !== user.sub) {
-      return c.json({ message: 'Unauthorized' }, 403);
+      throw new AuthorizationError('Unauthorized');
     }
 
     // Verify current password
@@ -203,12 +213,12 @@ profile.post('/:id/change-password', authMiddleware, async (c) => {
     const userResult = await pool.query('SELECT * FROM users WHERE id = $1', [id]);
 
     if (userResult.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     const validPassword = await bcrypt.compare(validated.current_password, userResult.rows[0].password_hash);
     if (!validPassword) {
-      return c.json({ message: 'Current password is incorrect' }, 400);
+      throw new AuthenticationError('Current password is incorrect');
     }
 
     // Hash new password
@@ -223,10 +233,14 @@ profile.post('/:id/change-password', authMiddleware, async (c) => {
     return c.json({ message: 'Password changed successfully' });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Change password error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to change password');
   }
 });
 

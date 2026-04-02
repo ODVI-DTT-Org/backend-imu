@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const itineraries = new Hono();
 
@@ -142,7 +147,7 @@ itineraries.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch itineraries error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -167,7 +172,7 @@ itineraries.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Itinerary not found' }, 404);
+      throw new NotFoundError('Itinerary');
     }
 
     const itinerary = result.rows[0];
@@ -175,7 +180,7 @@ itineraries.get('/:id', authMiddleware, async (c) => {
     // Role-based access check - field agents can only access their own itineraries
     if (user.role === 'field_agent' || user.role === 'caravan') {
       if (itinerary.user_id !== user.sub) {
-        return c.json({ message: 'Forbidden - You can only access your own itineraries' }, 403);
+        throw new AuthorizationError('You can only access your own itineraries');
       }
     }
 
@@ -200,7 +205,7 @@ itineraries.get('/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch itinerary error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -217,7 +222,7 @@ itineraries.post('/', authMiddleware, auditMiddleware('itinerary'), async (c) =>
     today.setHours(0, 0, 0, 0);
 
     if (scheduledDate < today) {
-      return c.json({ message: 'Scheduled date cannot be in the past' }, 400);
+      throw new ValidationError('Scheduled date cannot be in the past');
     }
 
     // Validate that client exists and user has access to client's municipality
@@ -226,7 +231,7 @@ itineraries.post('/', authMiddleware, auditMiddleware('itinerary'), async (c) =>
       [validated.client_id]
     );
     if (clientCheck.rows.length === 0) {
-      return c.json({ message: 'Client not found' }, 404);
+      throw new NotFoundError('Client');
     }
 
     // Check if itinerary already exists for this client, user, and date
@@ -261,10 +266,14 @@ itineraries.post('/', authMiddleware, auditMiddleware('itinerary'), async (c) =>
     return c.json(mapRowToItinerary(result.rows[0]), 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create itinerary error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create itinerary');
   }
 });
 
@@ -285,7 +294,7 @@ itineraries.put('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) 
       [id]
     );
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Itinerary not found' }, 404);
+      throw new NotFoundError('Itinerary');
     }
 
     const itinerary = existing.rows[0];
@@ -293,7 +302,7 @@ itineraries.put('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) 
     // For field agents and caravans, verify they own this itinerary
     if (user.role === 'field_agent' || user.role === 'caravan') {
       if (itinerary.user_id !== user.sub) {
-        return c.json({ message: 'Forbidden - You can only modify your own itineraries' }, 403);
+        throw new AuthorizationError('You can only modify your own itineraries');
       }
     }
 
@@ -320,7 +329,7 @@ itineraries.put('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) 
     }
 
     if (updateFields.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -332,10 +341,14 @@ itineraries.put('/:id', authMiddleware, auditMiddleware('itinerary'), async (c) 
     return c.json(mapRowToItinerary(result.rows[0]));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update itinerary error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update itinerary');
   }
 });
 
@@ -354,7 +367,7 @@ itineraries.delete('/:id', authMiddleware, auditMiddleware('itinerary'), async (
       [id]
     );
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Itinerary not found' }, 404);
+      throw new NotFoundError('Itinerary');
     }
 
     const itinerary = existing.rows[0];
@@ -362,7 +375,7 @@ itineraries.delete('/:id', authMiddleware, auditMiddleware('itinerary'), async (
     // For field agents and caravans, verify they own this itinerary
     if (user.role === 'field_agent' || user.role === 'caravan') {
       if (itinerary.user_id !== user.sub) {
-        return c.json({ message: 'Forbidden - You can only modify your own itineraries' }, 403);
+        throw new AuthorizationError('You can only modify your own itineraries');
       }
     }
 
@@ -370,7 +383,7 @@ itineraries.delete('/:id', authMiddleware, auditMiddleware('itinerary'), async (
     return c.json({ message: 'Itinerary deleted successfully' });
   } catch (error) {
     console.error('Delete itinerary error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -413,10 +426,14 @@ itineraries.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMidd
     return c.json({ success, failed });
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return c.json({ message: 'Invalid request body', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk delete itineraries error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk delete itineraries');
   }
 });
 

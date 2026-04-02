@@ -8,15 +8,11 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { getAuditLogs, AuditEntity, AuditAction, cleanupOldAuditLogs, getAuditLogStats } from '../middleware/audit.js';
 import { success, paginated, unauthorized } from '../utils/response.js';
 import { pool } from '../db/index.js';
-import {
-  ValidationError,
-  AuthorizationError,
-} from '../errors/index.js';
 
 const auditLogs = new Hono();
 
 // GET /api/audit-logs - List audit logs (admin only)
-auditLogs.get('/', authMiddleware, requireRole('admin', 'area_manager', 'assistant_area_manager'), async (c) => {
+auditLogs.get('/', authMiddleware, requireRole('admin', 'staff'), async (c) => {
   try {
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '50');
@@ -46,7 +42,7 @@ auditLogs.get('/', authMiddleware, requireRole('admin', 'area_manager', 'assista
     return paginated(c, result.items, page, perPage, result.total);
   } catch (error) {
     console.error('Get audit logs error:', error);
-    throw new Error('Failed to fetch audit logs');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -99,7 +95,7 @@ auditLogs.get('/stats', authMiddleware, requireRole('admin'), async (c) => {
     });
   } catch (error) {
     console.error('Get audit stats error:', error);
-    throw new Error('Failed to fetch audit statistics');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -110,10 +106,10 @@ auditLogs.get('/entity/:entity/:id', authMiddleware, async (c) => {
     const entity = c.req.param('entity') as AuditEntity;
     const entityId = c.req.param('id');
 
-    // Only admin/managers can view all audit logs
+    // Only admin/staff can view all audit logs
     // Regular users can only see their own related audit logs
-    if (user.role === 'caravan' && !['client', 'touchpoint', 'itinerary'].includes(entity)) {
-      throw new AuthorizationError('Not authorized to view these audit logs');
+    if (user.role === 'field_agent' && !['client', 'touchpoint', 'itinerary'].includes(entity)) {
+      return unauthorized(c, 'Not authorized to view these audit logs');
     }
 
     const result = await getAuditLogs({
@@ -126,12 +122,12 @@ auditLogs.get('/entity/:entity/:id', authMiddleware, async (c) => {
     return success(c, result.items);
   } catch (error) {
     console.error('Get entity audit logs error:', error);
-    throw new Error('Failed to fetch entity audit logs');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
 // GET /api/audit-logs/stream - Server-Sent Events stream for real-time audit logs
-auditLogs.get('/stream', authMiddleware, requireRole('admin', 'area_manager'), async (c) => {
+auditLogs.get('/stream', authMiddleware, requireRole('admin', 'staff'), async (c) => {
   // Set SSE headers
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache, no-transform');
@@ -228,7 +224,7 @@ auditLogs.get('/stats/storage', authMiddleware, requireRole('admin'), async (c) 
     return success(c, stats);
   } catch (error) {
     console.error('Get audit storage stats error:', error);
-    throw new Error('Failed to fetch audit storage statistics');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -238,13 +234,13 @@ auditLogs.post('/cleanup', authMiddleware, requireRole('admin'), async (c) => {
     const retentionDays = parseInt(c.req.query('retention_days') || '90', 10);
 
     if (retentionDays < 30) {
-      throw new ValidationError('Retention period must be at least 30 days');
+      return c.json({ message: 'Retention period must be at least 30 days' }, 400);
     }
 
     const result = await cleanupOldAuditLogs(retentionDays);
 
     if (result.error) {
-      throw new Error(result.error);
+      return c.json({ message: result.error }, 500);
     }
 
     return success(c, {
@@ -254,7 +250,7 @@ auditLogs.post('/cleanup', authMiddleware, requireRole('admin'), async (c) => {
     });
   } catch (error) {
     console.error('Audit cleanup error:', error);
-    throw new Error('Failed to cleanup audit logs');
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 

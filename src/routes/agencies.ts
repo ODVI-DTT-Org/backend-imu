@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+} from '../errors/index.js';
 
 const agencies = new Hono();
 
@@ -72,7 +77,7 @@ agencies.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch agencies error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -84,13 +89,13 @@ agencies.get('/:id', authMiddleware, async (c) => {
     const result = await pool.query('SELECT * FROM agencies WHERE id = $1', [id]);
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Agency not found' }, 404);
+      throw new NotFoundError('Agency');
     }
 
     return c.json(mapRowToAgency(result.rows[0]));
   } catch (error) {
     console.error('Fetch agency error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -110,13 +115,17 @@ agencies.post('/', authMiddleware, requireAnyRole('admin', 'staff'), auditMiddle
     return c.json(mapRowToAgency(result.rows[0]), 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     if (error.code === '23505') {
-      return c.json({ message: 'Agency code already exists' }, 409);
+      throw new ConflictError('Agency code already exists');
     }
     console.error('Create agency error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create agency');
   }
 });
 
@@ -130,7 +139,7 @@ agencies.put('/:id', authMiddleware, requireAnyRole('admin', 'staff'), auditMidd
     // Check if agency exists
     const existing = await pool.query('SELECT * FROM agencies WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Agency not found' }, 404);
+      throw new NotFoundError('Agency');
     }
 
     // Build dynamic update query
@@ -147,7 +156,7 @@ agencies.put('/:id', authMiddleware, requireAnyRole('admin', 'staff'), auditMidd
     }
 
     if (updateFields.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -159,13 +168,17 @@ agencies.put('/:id', authMiddleware, requireAnyRole('admin', 'staff'), auditMidd
     return c.json(mapRowToAgency(result.rows[0]));
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     if (error.code === '23505') {
-      return c.json({ message: 'Agency code already exists' }, 409);
+      throw new ConflictError('Agency code already exists');
     }
     console.error('Update agency error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update agency');
   }
 });
 
@@ -177,16 +190,16 @@ agencies.delete('/:id', authMiddleware, requireRole('admin'), auditMiddleware('a
     const result = await pool.query('DELETE FROM agencies WHERE id = $1 RETURNING id', [id]);
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Agency not found' }, 404);
+      throw new NotFoundError('Agency');
     }
 
     return c.json({ message: 'Agency deleted successfully' });
   } catch (error: any) {
     if (error.code === '23503') {
-      return c.json({ message: 'Cannot delete agency with associated clients' }, 400);
+      throw new ValidationError('Cannot delete agency with associated clients');
     }
     console.error('Delete agency error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

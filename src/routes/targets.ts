@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const targets = new Hono();
 
@@ -70,7 +75,7 @@ targets.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get targets error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -146,7 +151,7 @@ targets.get('/current', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get current targets error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -187,7 +192,7 @@ targets.get('/history', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get target history error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -200,7 +205,7 @@ targets.post('/', authMiddleware, auditMiddleware('target'), async (c) => {
 
     // Only admin/staff can create targets for others
     if (user.role === 'field_agent' && validated.user_id !== user.sub) {
-      return c.json({ message: 'Cannot create targets for other users' }, 403);
+      throw new AuthorizationError('Cannot create targets for other users');
     }
 
     // Upsert target
@@ -228,10 +233,14 @@ targets.post('/', authMiddleware, auditMiddleware('target'), async (c) => {
     }, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create target error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create target');
   }
 });
 
@@ -248,12 +257,12 @@ targets.delete('/:id', authMiddleware, auditMiddleware('target'), async (c) => {
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Target not found' }, 404);
+      throw new NotFoundError('Target');
     }
 
     // Field agents can only delete their own targets
     if (user.role === 'field_agent' && existing.rows[0].user_id !== user.sub) {
-      return c.json({ message: 'Cannot delete targets for other users' }, 403);
+      throw new AuthorizationError('Cannot delete targets for other users');
     }
 
     await pool.query('DELETE FROM targets WHERE id = $1', [id]);
@@ -261,7 +270,7 @@ targets.delete('/:id', authMiddleware, auditMiddleware('target'), async (c) => {
     return c.json({ message: 'Target deleted successfully' });
   } catch (error) {
     console.error('Delete target error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 

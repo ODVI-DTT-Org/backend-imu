@@ -2,7 +2,7 @@ const { Pool } = require('pg');
 require('dotenv/config');
 
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5433/imu_db',
   ssl: process.env.DATABASE_URL?.includes('ondigitalocean.com')
     ? { rejectUnauthorized: false }
     : false

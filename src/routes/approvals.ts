@@ -3,6 +3,13 @@ import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { auditMiddleware, auditLog } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthenticationError,
+  AuthorizationError,
+  ConflictError,
+} from '../errors/index.js';
 
 const approvals = new Hono();
 
@@ -188,7 +195,7 @@ approvals.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch approvals error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -213,14 +220,14 @@ approvals.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Approval not found' }, 404);
+      throw new NotFoundError('Approval');
     }
 
     const row = result.rows[0];
 
     // Field agents (caravan/tele) can only see their own approvals
     if ((user.role === 'caravan' || user.role === 'tele') && row.user_id !== user.sub) {
-      return c.json({ message: 'Approval not found' }, 404);
+      throw new NotFoundError('Approval');
     }
 
     return c.json({
@@ -245,7 +252,7 @@ approvals.get('/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch approval error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -293,10 +300,14 @@ approvals.post('/', authMiddleware, auditMiddleware('approval'), async (c) => {
     return c.json(mapRowToApproval(newApproval), 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create approval error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create approval');
   }
 });
 
@@ -315,12 +326,12 @@ approvals.put('/:id', authMiddleware, auditMiddleware('approval'), async (c) => 
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Approval not found' }, 404);
+      throw new NotFoundError('Approval');
     }
 
     // Only admin/staff can update status
     if (validated.status && (user.role === 'caravan' || user.role === 'tele')) {
-      return c.json({ message: 'Not authorized to update status' }, 403);
+      throw new AuthorizationError('Not authorized to update status');
     }
 
     const updates: string[] = [];
@@ -340,7 +351,7 @@ approvals.put('/:id', authMiddleware, auditMiddleware('approval'), async (c) => 
     }
 
     if (updates.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     params.push(id);
@@ -353,10 +364,14 @@ approvals.put('/:id', authMiddleware, auditMiddleware('approval'), async (c) => 
     return c.json(mapRowToApproval(result.rows[0]));
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update approval error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to update approval');
   }
 });
 
@@ -379,12 +394,12 @@ approvals.post('/:id/approve', authMiddleware, requireRole(...APPROVAL_ROLES), a
 
     if (existing.rows.length === 0) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Approval not found' }, 404);
+      throw new NotFoundError('Approval');
     }
 
     if (existing.rows[0].status !== 'pending') {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Approval is not in pending status' }, 400);
+      throw new ValidationError('Approval is not in pending status');
     }
 
     const approval = existing.rows[0];
@@ -508,10 +523,14 @@ approvals.post('/:id/approve', authMiddleware, requireRole(...APPROVAL_ROLES), a
   } catch (error) {
     await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Approve error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to approve');
   } finally {
     client.release();
   }
@@ -532,11 +551,11 @@ approvals.post('/:id/reject', authMiddleware, requireRole(...APPROVAL_ROLES), as
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Approval not found' }, 404);
+      throw new NotFoundError('Approval');
     }
 
     if (existing.rows[0].status !== 'pending') {
-      return c.json({ message: 'Approval is not in pending status' }, 400);
+      throw new ValidationError('Approval is not in pending status');
     }
 
     const result = await pool.query(
@@ -576,17 +595,21 @@ approvals.post('/:id/reject', authMiddleware, requireRole(...APPROVAL_ROLES), as
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Reject error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to reject');
   }
 });
 
 // POST /api/approvals/bulk-approve - Bulk approve multiple approvals
 approvals.post('/bulk-approve', authMiddleware, requireRole('admin'), auditMiddleware('approval', 'bulk_approve'), async (c) => {
   const user = c.get('user');
-  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+  if (!user) throw new AuthenticationError('Unauthorized');
 
   try {
     const body = await c.req.json();
@@ -709,17 +732,21 @@ approvals.post('/bulk-approve', authMiddleware, requireRole('admin'), auditMiddl
     return c.json({ success, failed });
   } catch (error: any) {
     if (error.name === 'ZodError') {
-      return c.json({ message: 'Invalid request body', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Bulk approve approvals error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to bulk approve');
   }
 });
 
 // POST /api/approvals/bulk-reject - Bulk reject multiple approvals
 approvals.post('/bulk-reject', authMiddleware, requireRole('admin'), auditMiddleware('approval', 'bulk_reject'), async (c) => {
   const user = c.get('user');
-  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+  if (!user) throw new AuthenticationError('Unauthorized');
 
   try {
     const body = await c.req.json();
@@ -791,7 +818,7 @@ approvals.post('/bulk-reject', authMiddleware, requireRole('admin'), auditMiddle
       return c.json({ message: 'Invalid request body', errors: error.errors }, 400);
     }
     console.error('Bulk reject approvals error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -807,7 +834,7 @@ approvals.delete('/:id', authMiddleware, auditMiddleware('approval'), requireRol
     );
 
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Approval not found' }, 404);
+      throw new NotFoundError('Approval');
     }
 
     const oldApproval = existing.rows[0];
@@ -833,7 +860,7 @@ approvals.delete('/:id', authMiddleware, auditMiddleware('approval'), requireRol
     return c.json({ message: 'Approval deleted successfully' });
   } catch (error) {
     console.error('Delete approval error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -875,7 +902,7 @@ approvals.get('/stats/summary', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get approval stats error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -890,7 +917,7 @@ approvals.post('/loan-release', authMiddleware, async (c) => {
 
     // Validate that user is Admin, Caravan or Tele
     if (!['admin', 'caravan', 'tele'].includes(user.role)) {
-      return c.json({ message: 'Loan release is only available for Admin, Caravan and Tele users' }, 403);
+      throw new AuthorizationError('Loan release is only available for Admin, Caravan and Tele users');
     }
 
     // Validate request body
@@ -910,12 +937,12 @@ approvals.post('/loan-release', authMiddleware, async (c) => {
 
     if (clientCheck.rows.length === 0) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Client not found' }, 404);
+      throw new NotFoundError('Client');
     }
 
     if (clientCheck.rows[0].loan_released) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Loan already released for this client' }, 400);
+      throw new ConflictError('Loan already released for this client');
     }
 
     const clientData = clientCheck.rows[0];
@@ -993,10 +1020,14 @@ approvals.post('/loan-release', authMiddleware, async (c) => {
   } catch (error: any) {
     await client.query('ROLLBACK'); // Rollback on error
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Loan release error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to release loan');
   } finally {
     client.release(); // Release connection back to pool
   }
