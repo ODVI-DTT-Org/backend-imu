@@ -1036,6 +1036,49 @@ FROM information_schema.views
 WHERE table_schema = 'public';
 
 -- ============================================================
+-- ERROR LOGS TABLE (for comprehensive error handling system)
+-- ============================================================
+-- This table stores all errors that occur in the backend API
+-- It provides a centralized location for error tracking and debugging
+-- Admin users can view and resolve errors through the admin dashboard
+
+CREATE TABLE IF NOT EXISTS error_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    request_id UUID UNIQUE NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    code TEXT NOT NULL,              -- Error code (e.g., INVALID_CREDENTIALS)
+    message TEXT NOT NULL,           -- Error message
+    status_code INTEGER NOT NULL,    -- HTTP status code (401, 500, etc.)
+    path TEXT NOT NULL,              -- Request path (e.g., /api/auth/login)
+    method TEXT NOT NULL,            -- HTTP method (GET, POST, etc.)
+    user_id UUID,                    -- User who made the request
+    ip_address TEXT,                 -- Client IP address
+    user_agent TEXT,                 -- Client user agent
+    details JSONB,                   -- Additional error details (JSON)
+    errors JSONB,                    -- Field validation errors (JSON)
+    stack_trace TEXT,                -- Error stack trace
+    suggestions TEXT[],              -- Array of suggestions for fixing the error
+    documentation_url TEXT,          -- Link to documentation
+    resolved BOOLEAN DEFAULT FALSE,  -- Whether the error has been resolved
+    resolved_at TIMESTAMPTZ,         -- When the error was resolved
+    resolved_by UUID,                -- Admin user who resolved the error
+    resolution_notes TEXT,           -- Notes about the resolution
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create indexes for error_logs table
+CREATE INDEX IF NOT EXISTS idx_error_logs_request_id ON error_logs(request_id);
+CREATE INDEX IF NOT EXISTS idx_error_logs_code ON error_logs(code);
+CREATE INDEX IF NOT EXISTS idx_error_logs_status_code ON error_logs(status_code);
+CREATE INDEX IF NOT EXISTS idx_error_logs_timestamp ON error_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_error_logs_resolved ON error_logs(resolved);
+CREATE INDEX IF NOT EXISTS idx_error_logs_user_id ON error_logs(user_id);
+
+-- Apply updated_at trigger for error_logs table
+CREATE TRIGGER update_error_logs_updated_at BEFORE UPDATE ON error_logs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
 -- POWERSYNC PUBLICATION SETUP
 -- ============================================================
 -- PowerSync requires a PostgreSQL publication to sync data to mobile devices

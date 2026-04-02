@@ -261,3 +261,41 @@ VALUES (
     'User',
     'caravan'
 ) ON CONFLICT (email) DO NOTHING;
+
+-- Error Logs table (for comprehensive error handling system)
+CREATE TABLE IF NOT EXISTS error_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    request_id UUID UNIQUE NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    method TEXT NOT NULL,
+    user_id UUID,
+    ip_address TEXT,
+    user_agent TEXT,
+    details JSONB,
+    errors JSONB,
+    stack_trace TEXT,
+    suggestions TEXT[],
+    documentation_url TEXT,
+    resolved BOOLEAN DEFAULT FALSE,
+    resolved_at TIMESTAMPTZ,
+    resolved_by UUID,
+    resolution_notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Create indexes for error_logs
+CREATE INDEX IF NOT EXISTS idx_error_logs_request_id ON error_logs(request_id);
+CREATE INDEX IF NOT EXISTS idx_error_logs_code ON error_logs(code);
+CREATE INDEX IF NOT EXISTS idx_error_logs_status_code ON error_logs(status_code);
+CREATE INDEX IF NOT EXISTS idx_error_logs_timestamp ON error_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_error_logs_resolved ON error_logs(resolved);
+CREATE INDEX IF NOT EXISTS idx_error_logs_user_id ON error_logs(user_id);
+
+-- Apply updated_at trigger for error_logs
+CREATE TRIGGER update_error_logs_updated_at BEFORE UPDATE ON error_logs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+

@@ -11,6 +11,7 @@ import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
 import { simpleRequestLogger } from './middleware/request-logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { errorLogger } from './services/errorLogger.js';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -89,7 +90,11 @@ app.use('*', simpleRequestLogger());
 
 // Use Hono's built-in error handler instead of middleware
 app.onError((err, c) => {
-  const requestId = uuidv4();
+  // Get or generate request ID (might be set by request logger middleware)
+  let requestId = (c.get('requestId' as never) as string | undefined);
+  if (!requestId) {
+    requestId = uuidv4();
+  }
 
   console.error('🔍🔍🔍 APP.ONERROR CALLED 🔍🔍🔍');
   console.error('🔍 Error type:', err instanceof Error ? err.name : typeof err);
@@ -97,6 +102,24 @@ app.onError((err, c) => {
   console.error('🔍 Error message:', err instanceof Error ? err.message : String(err));
 
   const statusCode = (err as any).statusCode || 500;
+
+  // Get request context for error logging
+  const path = c.req.path;
+  const method = c.req.method;
+  const userId = (c.get('userId' as never) as string | undefined);
+  const ipAddress = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || undefined;
+  const userAgent = c.req.header('user-agent') || undefined;
+
+  // Log error to database (async, non-blocking)
+  errorLogger.log(err, {
+    requestId,
+    timestamp: new Date().toISOString(),
+    path,
+    method,
+    userId,
+    ipAddress,
+    userAgent,
+  });
 
   // Return error response with proper status code
   return c.json({
