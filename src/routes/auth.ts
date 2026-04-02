@@ -1,12 +1,20 @@
 import { Hono } from 'hono';
 import jwt from 'jsonwebtoken';
-import bcrypt from 'bcryptjs';
+import bcryptjs from 'bcryptjs';
 import { z } from 'zod';
 import { randomBytes } from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditAuth } from '../middleware/audit.js';
 import { emailService } from '../services/email.js';
 import { pool } from '../db/index.js';
+import {
+  InvalidCredentialsError,
+  TokenExpiredError,
+  TokenInvalidError,
+  ValidationError,
+  NotFoundError,
+  ConflictError,
+} from '../errors/index.js';
 
 // Load PowerSync RSA keys from environment variable for JWT signing
 const privateKeyInput = process.env.POWERSYNC_PRIVATE_KEY;
@@ -28,7 +36,7 @@ const verificationKey = publicKey as string;
 console.log('✅ PowerSync keys loaded from environment');
 
 const { sign, verify } = jwt;
-const { hash, compare } = bcrypt;
+const { hash, compare } = bcryptjs;
 
 const auth = new Hono();
 
@@ -64,10 +72,7 @@ auth.post('/login', async (c) => {
     );
 
     if (result.rows.length === 0) {
-      // Audit log failed login (no user found)
-      // Note: We pass undefined for userId since no user exists
-      // In production, you might want to log the email for security monitoring
-      return c.json({ message: 'Invalid credentials' }, 401);
+      throw new InvalidCredentialsError();
     }
 
     const user = result.rows[0];
@@ -82,7 +87,7 @@ auth.post('/login', async (c) => {
         c.req.header('user-agent'),
         false
       );
-      return c.json({ message: 'Invalid credentials' }, 401);
+      throw new InvalidCredentialsError();
     }
 
     // Generate tokens
@@ -140,10 +145,14 @@ auth.post('/login', async (c) => {
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Login error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw error;
   }
 });
 
@@ -170,7 +179,7 @@ auth.post('/refresh', async (c) => {
     }
 
     if (decoded.type !== 'refresh') {
-      return c.json({ message: 'Invalid token type' }, 401);
+      throw new TokenInvalidError('Invalid token type');
     }
 
     // Get user from database
@@ -180,7 +189,7 @@ auth.post('/refresh', async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 401);
+      throw new NotFoundError('User');
     }
 
     const user = result.rows[0];
@@ -225,10 +234,14 @@ auth.post('/refresh', async (c) => {
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Refresh error:', error);
-    return c.json({ message: 'Invalid refresh token' }, 401);
+    throw new TokenInvalidError('Invalid refresh token');
   }
 });
 
@@ -243,13 +256,13 @@ auth.get('/me', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'User not found' }, 404);
+      throw new NotFoundError('User');
     }
 
     return c.json({ user: result.rows[0] });
   } catch (error) {
     console.error('Get user error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to get user');
   }
 });
 
@@ -273,10 +286,10 @@ auth.post('/register', async (c) => {
     return c.json({ user: result.rows[0] }, 201);
   } catch (error: any) {
     if (error.code === '23505') {
-      return c.json({ message: 'Email already exists' }, 409);
+      throw new ConflictError('Email already exists');
     }
     console.error('Register error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to register user');
   }
 });
 
@@ -334,10 +347,14 @@ auth.post('/forgot-password', async (c) => {
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Forgot password error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Internal server error');
   }
 });
 
@@ -357,7 +374,7 @@ auth.post('/reset-password', async (c) => {
     );
 
     if (tokenResult.rows.length === 0) {
-      return c.json({ message: 'Invalid or expired reset token' }, 400);
+      throw new TokenExpiredError('Invalid or expired reset token');
     }
 
     // Find matching token
@@ -371,7 +388,7 @@ auth.post('/reset-password', async (c) => {
     }
 
     if (!resetRecord) {
-      return c.json({ message: 'Invalid reset token' }, 400);
+      throw new TokenInvalidError('Invalid reset token');
     }
 
     // Hash new password
@@ -395,10 +412,14 @@ auth.post('/reset-password', async (c) => {
     return c.json({ message: 'Password has been reset successfully' });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Reset password error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Internal server error');
   }
 });
 
