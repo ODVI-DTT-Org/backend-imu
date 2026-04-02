@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireRole,
 requireAnyRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -52,7 +53,7 @@ function mapRowToCaravan(row: Record<string, any>) {
 }
 
 // GET /api/caravans - List all caravans (field agents)
-caravans.get('/', authMiddleware, async (c) => {
+caravans.get('/', authMiddleware, requirePermission('caravans', 'read'), async (c) => {
   try {
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '20');
@@ -111,7 +112,7 @@ caravans.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/caravans/:id - Get single caravan
-caravans.get('/:id', authMiddleware, async (c) => {
+caravans.get('/:id', authMiddleware, requirePermission('caravans', 'read'), async (c) => {
   try {
     const id = c.req.param('id');
 
@@ -134,7 +135,7 @@ caravans.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/caravans - Create new caravan (admin only)
-caravans.post('/', authMiddleware, requireRole('admin'), auditMiddleware('caravan'), async (c) => {
+caravans.post('/', authMiddleware, requirePermission('caravans', 'create'), auditMiddleware('caravan'), async (c) => {
   try {
     const body = await c.req.json();
     const validated = createCaravanSchema.parse(body);
@@ -178,7 +179,7 @@ caravans.post('/', authMiddleware, requireRole('admin'), auditMiddleware('carava
 });
 
 // PUT /api/caravans/:id - Update caravan
-caravans.put('/:id', authMiddleware, auditMiddleware('caravan'), async (c) => {
+caravans.put('/:id', authMiddleware, requirePermission('caravans', 'update'), auditMiddleware('caravan'), async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -267,7 +268,7 @@ caravans.put('/:id', authMiddleware, auditMiddleware('caravan'), async (c) => {
 });
 
 // DELETE /api/caravans/:id - Delete caravan (admin only)
-caravans.delete('/:id', authMiddleware, requireRole('admin'), auditMiddleware('caravan'), async (c) => {
+caravans.delete('/:id', authMiddleware, requirePermission('caravans', 'delete'), auditMiddleware('caravan'), async (c) => {
   try {
     const id = c.req.param('id');
 
@@ -292,7 +293,7 @@ caravans.delete('/:id', authMiddleware, requireRole('admin'), auditMiddleware('c
 });
 
 // POST /api/caravans/bulk-delete - Bulk delete caravans (admin only)
-caravans.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('caravan', 'bulk_delete'), async (c) => {
+caravans.post('/bulk-delete', authMiddleware, requirePermission('caravans', 'delete'), auditMiddleware('caravan', 'bulk_delete'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
 
@@ -350,7 +351,7 @@ caravans.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddlew
 // ============================================
 
 // GET /api/caravans/:id/municipalities - Get assigned municipalities
-caravans.get('/:id/municipalities', authMiddleware, async (c) => {
+caravans.get('/:id/municipalities', authMiddleware, requirePermission('caravans', 'read'), async (c) => {
   try {
     const caravanId = c.req.param('id');
 
@@ -425,7 +426,7 @@ caravans.get('/:id/municipalities', authMiddleware, async (c) => {
 });
 
 // POST /api/caravans/:id/municipalities - Assign municipalities (admin, area_manager, assistant_area_manager)
-caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+caravans.post('/:id/municipalities', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const currentUser = c.get('user');
     const caravanId = c.req.param('id');
@@ -573,7 +574,7 @@ caravans.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_R
 
 // POST /api/caravans/:id/municipalities/bulk - Bulk unassign municipalities (admin, area_manager, assistant_area_manager)
 // IMPORTANT: This route must be defined BEFORE the GET /municipalities route
-caravans.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+caravans.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const caravanId = c.req.param('id');
     const body = await c.req.json();
@@ -628,7 +629,7 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANA
 });
 
 // DELETE /api/caravans/:id/municipalities/:province/:municipality - Unassign municipality (admin, area_manager, assistant_area_manager)
-caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const caravanId = c.req.param('id');
     const province = c.req.param('province');
