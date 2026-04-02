@@ -3,6 +3,9 @@ import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
 import 'dotenv/config';
 
+// IMPORTANT: Import database logger BEFORE pool to wrap query methods
+import './middleware/database-logger.js';
+
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
 import { simpleRequestLogger } from './middleware/request-logger.js';

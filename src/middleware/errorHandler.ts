@@ -82,8 +82,48 @@ export const errorHandler = async (c: Context, next: Next) => {
       return c.json(errorResponse, error.statusCode as 400 | 401 | 403 | 404 | 409 | 423 | 429 | 500 | 503);
     }
 
-    // Handle unknown errors
-    console.error('Unhandled error:', error);
+    // Handle unknown errors with detailed logging
+    console.error('\n' + '='.repeat(60));
+    console.error('💥 UNHANDLED ERROR');
+    console.error('='.repeat(60));
+    console.error(`📋 Request ID: ${requestId}`);
+    console.error(`📍 Path:       ${method} ${path}`);
+    console.error(`⏰ Timestamp:  ${timestamp}`);
+    console.error(`🌐 IP:         ${ipAddress}`);
+    if (userId) {
+      console.error(`👤 User ID:    ${userId}`);
+    }
+
+    // Check if this is a database error
+    if (error instanceof Error && 'code' in error) {
+      const dbError = error as any;
+      console.error(`\n🗄️  DATABASE ERROR:`);
+      console.error(`   Code:       ${dbError.code || 'Unknown'}`);
+      console.error(`   Message:    ${dbError.message}`);
+      if (dbError.detail) {
+        console.error(`   Detail:     ${dbError.detail}`);
+      }
+      if (dbError.schema) {
+        console.error(`   Schema:     ${dbError.schema}`);
+      }
+      if (dbError.table) {
+        console.error(`   Table:      ${dbError.table}`);
+      }
+      if (dbError.column) {
+        console.error(`   Column:     ${dbError.column}`);
+      }
+      if (dbError.constraint) {
+        console.error(`   Constraint: ${dbError.constraint}`);
+      }
+    } else {
+      console.error(`\n❌ Error:      ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (error instanceof Error && error.stack) {
+        console.error(`📍 Stack Trace:`);
+        console.error(error.stack.split('\n').slice(0, 5).join('\n'));
+      }
+    }
+
+    console.error('='.repeat(60) + '\n');
 
     // Create generic internal server error
     const genericError = new AppErrorClass(
