@@ -166,8 +166,22 @@ export function simpleRequestLogger() {
     const origin = c.req.header('origin') || 'none';
     const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
     const hasAuth = !!c.req.header('authorization');
+    const userAgent = c.req.header('user-agent') || 'unknown';
 
-    console.log(`📥 [${requestId}] ${method} ${path} | Origin: ${origin} | IP: ${ip} | Auth: ${hasAuth ? '✓' : '✗'}`);
+    // Log incoming request with debugging info
+    console.log(`\n📥 [${requestId}] INCOMING REQUEST`);
+    console.log(`   Method:    ${method}`);
+    console.log(`   Path:      ${path}`);
+    console.log(`   Origin:    ${origin}`);
+    console.log(`   IP:        ${ip}`);
+    console.log(`   Auth:      ${hasAuth ? '✓ Present' : '✗ None'}`);
+    console.log(`   User-Agent: ${userAgent.substring(0, 100)}${userAgent.length > 100 ? '...' : ''}`);
+
+    // Log query parameters if present
+    const queryParams = c.req.queries();
+    if (Object.keys(queryParams).length > 0) {
+      console.log(`   Query:     ${JSON.stringify(queryParams)}`);
+    }
 
     try {
       await next();
@@ -175,14 +189,15 @@ export function simpleRequestLogger() {
       const duration = Date.now() - start;
       const status = c.res.status;
       const statusEmoji = status < 300 ? '✅' : status < 400 ? '⚠️' : status < 500 ? '❌' : '💥';
+      const statusText = getStatusText(status);
 
-      console.log(`📤 [${requestId}] ${method} ${path} → ${status} ${statusEmoji} (${duration}ms)`);
+      console.log(`📤 [${requestId}] RESPONSE: ${status} ${statusText} ${statusEmoji} (${duration}ms)\n`);
 
     } catch (error: any) {
       const duration = Date.now() - start;
 
-      console.log(`💥 [${requestId}] ${method} ${path} → ERROR: ${error.name}: ${error.message} (${duration}ms)`);
-      console.log(`   Stack: ${error.stack?.split('\n')[1] || 'unknown'}`);
+      console.log(`💥 [${requestId}] ERROR: ${error.name}: ${error.message} (${duration}ms)`);
+      console.log(`   Stack: ${error.stack?.split('\n').slice(1, 3).join(' | ') || 'unknown'}\n`);
 
       throw error;
     }
