@@ -31,6 +31,7 @@ import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
 import permissionsRoutes from './routes/permissions.js';
+import errorLogsRoutes from './routes/error-logs.js';
 
 const app = new Hono();
 
@@ -101,6 +102,96 @@ app.get('/api/health', async (c) => {
     database: dbStatus,
     version: '1.0.0',
   });
+});
+
+// RBAC health check endpoint (admin only)
+app.get('/api/health/rbac', authMiddleware, requireRole('admin'), async (c) => {
+  try {
+    const client = await pool.connect();
+    try {
+      // Check if RBAC components exist
+      const componentsCheck = await client.query(`
+        SELECT
+          (SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'roles'
+          )) as roles_table,
+          (SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'permissions'
+          )) as permissions_table,
+          (SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'user_roles'
+          )) as user_roles_table,
+          (SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'role_permissions'
+          )) as role_permissions_table,
+          (SELECT EXISTS (
+            SELECT 1 FROM information_schema.views
+            WHERE view_name = 'user_permissions_view'
+          )) as user_permissions_view,
+          (SELECT EXISTS (
+            SELECT 1 FROM pg_proc
+            WHERE proname = 'has_permission'
+          )) as has_permission_function,
+          (SELECT EXISTS (
+            SELECT 1 FROM pg_proc
+            WHERE proname = 'get_user_permissions'
+          )) as get_user_permissions_function,
+          (SELECT EXISTS (
+            SELECT 1 FROM pg_proc
+            WHERE proname = 'has_role'
+          )) as has_role_function
+      `);
+
+      const components = componentsCheck.rows[0];
+      const allComponentsInstalled = Object.values(components).every((v: any) => v === true);
+
+      let rbacStatus = allComponentsInstalled ? 'installed' : 'partial';
+      if (!components.roles_table) {
+        rbacStatus = 'not_installed';
+      }
+
+      // Get additional stats if RBAC is installed
+      let stats = null;
+      if (components.roles_table) {
+        const statsResult = await client.query(`
+          SELECT
+            (SELECT COUNT(*) FROM roles) as total_roles,
+            (SELECT COUNT(*) FROM permissions) as total_permissions,
+            (SELECT COUNT(*) FROM role_permissions) as total_role_permissions,
+            (SELECT COUNT(*) FROM user_roles WHERE is_active = TRUE) as total_active_user_roles
+        `);
+        stats = statsResult.rows[0];
+      }
+
+      return c.json({
+        rbac_status: rbacStatus,
+        components: {
+          roles_table: components.roles_table,
+          permissions_table: components.permissions_table,
+          user_roles_table: components.user_roles_table,
+          role_permissions_table: components.role_permissions_table,
+          user_permissions_view: components.user_permissions_view,
+          has_permission_function: components.has_permission_function,
+          get_user_permissions_function: components.get_user_permissions_function,
+          has_role_function: components.has_role_function,
+        },
+        stats,
+        timestamp: new Date().toISOString(),
+      });
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    return c.json({
+      rbac_status: 'error',
+      error: error.message,
+      timestamp: new Date().toISOString(),
+    }, 500);
+  }
 });
 
 // Debug endpoint to check and fix approvals table (admin only)
@@ -304,6 +395,7 @@ app.get('/', (c) => {
     version: '1.0.0',
     endpoints: {
       health: '/api/health',
+      healthRbac: '/api/health/rbac',
       auth: '/api/auth',
       upload: '/api/upload',
       clients: '/api/clients',
@@ -353,6 +445,7 @@ app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
 app.route('/api/search', searchRoutes);
 app.route('/api/permissions', permissionsRoutes);
+app.route('/api/error-logs', errorLogsRoutes);
 
 // 404 handler
 app.notFound(notFoundHandler);
