@@ -7,6 +7,7 @@
 import { Hono } from 'hono';
 import { pool } from '../db/index.js';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { errorLogger } from '../services/errorLogger.js';
 
 const errorLogs = new Hono();
@@ -21,7 +22,7 @@ errorLogs.use('*', requireRole('admin', 'area_manager', 'assistant_area_manager'
  * GET /api/error-logs
  * List error logs with filtering and pagination
  */
-errorLogs.get('/', async (c) => {
+errorLogs.get('/', requirePermission('error_logs', 'read'), async (c) => {
   try {
     const limit = parseInt(c.req.query('limit') || '50');
     const offset = parseInt(c.req.query('offset') || '0');
@@ -67,7 +68,7 @@ errorLogs.get('/', async (c) => {
  * GET /api/error-logs/stats
  * Get error statistics
  */
-errorLogs.get('/stats', async (c) => {
+errorLogs.get('/stats', requirePermission('error_logs', 'read'), async (c) => {
   try {
     const startDate = c.req.query('startDate');
     const endDate = c.req.query('endDate');
@@ -108,7 +109,7 @@ errorLogs.get('/stats', async (c) => {
  * GET /api/error-logs/:requestId
  * Get error log by request ID
  */
-errorLogs.get('/:requestId', async (c) => {
+errorLogs.get('/:requestId', requirePermission('error_logs', 'read'), async (c) => {
   try {
     const requestId = c.req.param('requestId');
 
@@ -145,7 +146,7 @@ errorLogs.get('/:requestId', async (c) => {
  * POST /api/error-logs/:id/resolve
  * Resolve an error log
  */
-errorLogs.post('/:id/resolve', async (c) => {
+errorLogs.post('/:id/resolve', requirePermission('error_logs', 'update'), async (c) => {
   try {
     const id = c.req.param('id');
     const user = c.get('user');

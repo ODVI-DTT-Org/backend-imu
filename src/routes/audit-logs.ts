@@ -5,6 +5,7 @@
 
 import { Hono } from 'hono';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { getAuditLogs, AuditEntity, AuditAction, cleanupOldAuditLogs, getAuditLogStats } from '../middleware/audit.js';
 import { success, paginated, unauthorized } from '../utils/response.js';
 import { pool } from '../db/index.js';
@@ -12,7 +13,7 @@ import { pool } from '../db/index.js';
 const auditLogs = new Hono();
 
 // GET /api/audit-logs - List audit logs (admin only)
-auditLogs.get('/', authMiddleware, requireRole('admin', 'staff'), async (c) => {
+auditLogs.get('/', authMiddleware, requirePermission('audit_logs', 'read'), async (c) => {
   try {
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '50');
@@ -47,7 +48,7 @@ auditLogs.get('/', authMiddleware, requireRole('admin', 'staff'), async (c) => {
 });
 
 // GET /api/audit-logs/stats - Audit statistics
-auditLogs.get('/stats', authMiddleware, requireRole('admin'), async (c) => {
+auditLogs.get('/stats', authMiddleware, requirePermission('audit_logs', 'read'), async (c) => {
   try {
     // Get counts by action
     const actionStats = await pool.query(`
@@ -100,7 +101,7 @@ auditLogs.get('/stats', authMiddleware, requireRole('admin'), async (c) => {
 });
 
 // GET /api/audit-logs/entity/:entity/:id - Get audit history for specific entity
-auditLogs.get('/entity/:entity/:id', authMiddleware, async (c) => {
+auditLogs.get('/entity/:entity/:id', authMiddleware, requirePermission('audit_logs', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const entity = c.req.param('entity') as AuditEntity;
@@ -127,7 +128,7 @@ auditLogs.get('/entity/:entity/:id', authMiddleware, async (c) => {
 });
 
 // GET /api/audit-logs/stream - Server-Sent Events stream for real-time audit logs
-auditLogs.get('/stream', authMiddleware, requireRole('admin', 'staff'), async (c) => {
+auditLogs.get('/stream', authMiddleware, requirePermission('audit_logs', 'read'), async (c) => {
   // Set SSE headers
   c.header('Content-Type', 'text/event-stream');
   c.header('Cache-Control', 'no-cache, no-transform');
@@ -218,7 +219,7 @@ auditLogs.get('/stream', authMiddleware, requireRole('admin', 'staff'), async (c
 });
 
 // GET /api/audit-logs/stats/storage - Get storage statistics (admin only)
-auditLogs.get('/stats/storage', authMiddleware, requireRole('admin'), async (c) => {
+auditLogs.get('/stats/storage', authMiddleware, requirePermission('audit_logs', 'read'), async (c) => {
   try {
     const stats = await getAuditLogStats();
     return success(c, stats);
@@ -229,7 +230,7 @@ auditLogs.get('/stats/storage', authMiddleware, requireRole('admin'), async (c) 
 });
 
 // POST /api/audit-logs/cleanup - Manually trigger cleanup of old audit logs (admin only)
-auditLogs.post('/cleanup', authMiddleware, requireRole('admin'), async (c) => {
+auditLogs.post('/cleanup', authMiddleware, requirePermission('audit_logs', 'delete'), async (c) => {
   try {
     const retentionDays = parseInt(c.req.query('retention_days') || '90', 10);
 
