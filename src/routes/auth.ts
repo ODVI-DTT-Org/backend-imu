@@ -61,117 +61,106 @@ const resetPasswordSchema = z.object({
 
 // Login endpoint
 auth.post('/login', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { email, password } = loginSchema.parse(body);
+  // Parse request body
+  const body = await c.req.json();
+  const { email, password } = loginSchema.parse(body);
 
-    // Find user by email
-    const result = await pool.query(
-      'SELECT id, email, password_hash, first_name, last_name, role FROM users WHERE email = $1',
-      [email]
-    );
+  // Find user by email
+  const result = await pool.query(
+    'SELECT id, email, password_hash, first_name, last_name, role FROM users WHERE email = $1',
+    [email]
+  );
 
-    if (result.rows.length === 0) {
-      throw new InvalidCredentialsError();
-    }
+  if (result.rows.length === 0) {
+    throw new InvalidCredentialsError();
+  }
 
-    const user = result.rows[0];
+  const user = result.rows[0];
 
-    // Verify password
-    const valid = await compare(password, user.password_hash);
-    if (!valid) {
-      // Audit log failed login
-      await auditAuth.login(
-        user.id,
-        c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
-        c.req.header('user-agent'),
-        false
-      );
-      throw new InvalidCredentialsError();
-    }
-
-    // Generate tokens
-    const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
-
-    const accessToken = sign(
-      {
-        sub: user.id,
-        aud: powerSyncUrl,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        role: user.role,
-      },
-      signingKey,
-      {
-        algorithm: 'RS256',
-        keyid: 'imu-production-key-20260326',
-        expiresIn: `${expiryHours}h`,
-      }
-    );
-
-    const refreshToken = sign(
-      {
-        sub: user.id,
-        aud: powerSyncUrl,
-        type: 'refresh',
-      },
-      signingKey,
-      {
-        algorithm: 'RS256',
-        keyid: 'imu-production-key-20260326',
-        expiresIn: '7d',
-      }
-    );
-
-    // Audit log successful login
+  // Verify password
+  const valid = await compare(password, user.password_hash);
+  if (!valid) {
+    // Audit log failed login
     await auditAuth.login(
       user.id,
       c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
       c.req.header('user-agent'),
-      true
+      false
     );
-
-    // Get user permissions and set cookie
-    const permissions = await getUserPermissionsAsString(user.id, user.role);
-    const cookie = setPermissionsCookie(
-      // Convert string[] to Permission[] format for cookie function
-      permissions.map((p) => {
-        const [resource, actionPart] = p.split('.');
-        const [action, constraint] = actionPart.split(':');
-        return {
-          resource,
-          action,
-          constraint_name: constraint,
-          role_slug: user.role,
-        };
-      }),
-      { sub: user.id, role: user.role }
-    );
-    c.cookie(cookie.name, cookie.value, cookie.options);
-
-    return c.json({
-      access_token: accessToken,
-      refresh_token: refreshToken,
-      user: {
-        id: user.id,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        role: user.role,
-      },
-    });
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Invalid input');
-      error.errors.forEach((err: any) => {
-        validationError.addFieldError(err.path[0] || 'unknown', err.message);
-      });
-      throw validationError;
-    }
-    console.error('Login error:', error);
-    throw error;
+    throw new InvalidCredentialsError();
   }
+
+  // Generate tokens
+  const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
+
+  const accessToken = sign(
+    {
+      sub: user.id,
+      aud: powerSyncUrl,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      role: user.role,
+    },
+    signingKey,
+    {
+      algorithm: 'RS256',
+      keyid: 'imu-production-key-20260326',
+      expiresIn: `${expiryHours}h`,
+    }
+  );
+
+  const refreshToken = sign(
+    {
+      sub: user.id,
+      aud: powerSyncUrl,
+      type: 'refresh',
+    },
+    signingKey,
+    {
+      algorithm: 'RS256',
+      keyid: 'imu-production-key-20260326',
+      expiresIn: '7d',
+    }
+  );
+
+  // Audit log successful login
+  await auditAuth.login(
+    user.id,
+    c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
+    c.req.header('user-agent'),
+    true
+  );
+
+  // Get user permissions and set cookie
+  const permissions = await getUserPermissionsAsString(user.id, user.role);
+  const cookie = setPermissionsCookie(
+    // Convert string[] to Permission[] format for cookie function
+    permissions.map((p) => {
+      const [resource, actionPart] = p.split('.');
+      const [action, constraint] = actionPart.split(':');
+      return {
+        resource,
+        action,
+        constraint_name: constraint,
+        role_slug: user.role,
+      };
+    }),
+    { sub: user.id, role: user.role }
+  );
+  c.cookie(cookie.name, cookie.value, cookie.options);
+
+  return c.json({
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      role: user.role,
+    },
+  });
 });
 
 // Refresh token endpoint
