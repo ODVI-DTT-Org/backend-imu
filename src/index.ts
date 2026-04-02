@@ -6,6 +6,7 @@ import 'dotenv/config';
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
 import { simpleRequestLogger } from './middleware/request-logger.js';
+import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -29,6 +30,7 @@ import touchpointReasonsRoutes from './routes/touchpoint-reasons.js';
 import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
+import permissionsRoutes from './routes/permissions.js';
 
 const app = new Hono();
 
@@ -76,6 +78,9 @@ app.use('*', cors({
   credentials: true,
   maxAge: 86400,
 }));
+
+// Error handling - catch all errors and format responses
+app.use('*', errorHandler);
 
 // Health check endpoint
 app.get('/api/health', async (c) => {
@@ -319,6 +324,7 @@ app.get('/', (c) => {
       psgc: '/api/psgc',
       touchpointReasons: '/api/touchpoint-reasons',
       touchpointsAnalytics: '/api/touchpoints/analytics',
+      permissions: '/api/permissions',
     },
   });
 });
@@ -346,44 +352,10 @@ app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
 app.route('/api/search', searchRoutes);
+app.route('/api/permissions', permissionsRoutes);
 
 // 404 handler
-app.notFound((c) => {
-  return c.json({ message: 'Not Found' }, 404);
-});
-
-// Error handler with detailed logging
-app.onError((err, c) => {
-  const requestId = Math.random().toString(36).substring(2, 9);
-  const method = c.req.method;
-  const path = c.req.path;
-  const origin = c.req.header('origin') || 'none';
-  const ip = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || 'unknown';
-
-  // Log detailed error information
-  console.log('\n' + '🔥'.repeat(30));
-  console.log(`💥 UNHANDLED ERROR [${requestId}]`);
-  console.log('🔥'.repeat(30));
-  console.log(`📍 Request:   ${method} ${path}`);
-  console.log(`🌐 Origin:    ${origin}`);
-  console.log(`📡 IP:        ${ip}`);
-  console.log(`❌ Name:      ${err.name}`);
-  console.log(`📝 Message:   ${err.message}`);
-  console.log(`📍 Stack trace:`);
-  console.log(err.stack || 'No stack trace available');
-  console.log('🔥'.repeat(30) + '\n');
-
-  // Return error response
-  return c.json({
-    message: 'Internal Server Error',
-    error: process.env.NODE_ENV === 'development' ? {
-      name: err.name,
-      message: err.message,
-      stack: err.stack?.split('\n').slice(0, 5),
-    } : undefined,
-    requestId,
-  }, 500);
-});
+app.notFound(notFoundHandler);
 
 // Start server
 const port = parseInt(process.env.PORT || '3000');

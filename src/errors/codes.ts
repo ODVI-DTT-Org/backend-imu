@@ -1,0 +1,45 @@
+/**
+ * Error Code Registry
+ *
+ * Central registry of all error codes used in the IMU system.
+ * Error codes are used to identify specific error types and provide consistent error handling.
+ */
+
+/**
+ * Error code type
+ */
+export type ErrorCode =
+  | 'VALIDATION_ERROR'
+  | 'UNAUTHORIZED'
+  | 'FORBIDDEN'
+  | 'NOT_FOUND'
+  | 'CONFLICT'
+  | 'INTERNAL_SERVER_ERROR'
+  | 'DATABASE_ERROR'
+  | 'NETWORK_ERROR'
+  | 'RATE_LIMIT_EXCEEDED'
+  | 'INVALID_CREDENTIALS'
+  | 'TOKEN_EXPIRED'
+  | 'TOKEN_INVALID'
+  | 'INSUFFICIENT_PERMISSIONS'
+  | 'RESOURCE_LOCKED';
+
+/**
+ * Error codes constant
+ */
+export const ErrorCodes: Record<ErrorCode, string> = {
+  VALIDATION_ERROR: 'VALIDATION_ERROR',
+  UNAUTHORIZED: 'UNAUTHORIZED',
+  FORBIDDEN: 'FORBIDDEN',
+  NOT_FOUND: 'NOT_FOUND',
+  CONFLICT: 'CONFLICT',
+  INTERNAL_SERVER_ERROR: 'INTERNAL_SERVER_ERROR',
+  DATABASE_ERROR: 'DATABASE_ERROR',
+  NETWORK_ERROR: 'NETWORK_ERROR',
+  RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
+  INVALID_CREDENTIALS: 'INVALID_CREDENTIALS',
+  TOKEN_EXPIRED: 'TOKEN_EXPIRED',
+  TOKEN_INVALID: 'TOKEN_INVALID',
+  INSUFFICIENT_PERMISSIONS: 'INSUFFICIENT_PERMISSIONS',
+  RESOURCE_LOCKED: 'RESOURCE_LOCKED',
+} as const;

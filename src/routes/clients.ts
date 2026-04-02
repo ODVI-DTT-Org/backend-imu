@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import { NotFoundError, ValidationError } from '../errors/index.js';
 
 const clients = new Hono();
 
@@ -289,7 +290,7 @@ clients.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Client not found' }, 404);
+      throw new NotFoundError('Client');
     }
 
     const client = result.rows[0];
@@ -380,7 +381,11 @@ clients.post('/', authMiddleware, auditMiddleware('client'), async (c) => {
     return c.json(mapRowToClient(result.rows[0]), 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Validation failed');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create client error:', error);
     return c.json({ message: 'Internal server error' }, 500);
@@ -402,7 +407,7 @@ clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     const existingResult = await client.query('SELECT * FROM clients WHERE id = $1', [id]);
     if (existingResult.rows.length === 0) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Client not found' }, 404);
+      throw new NotFoundError('Client');
     }
 
     const existingClient = existingResult.rows[0];
@@ -481,7 +486,7 @@ clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
 
     if (updateFields.length === 0) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -495,7 +500,11 @@ clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
   } catch (error) {
     await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Validation failed');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Update client error:', error);
     return c.json({ message: 'Internal server error' }, 500);
@@ -519,7 +528,7 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     const existingResult = await client.query('SELECT * FROM clients WHERE id = $1', [id]);
     if (existingResult.rows.length === 0) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'Client not found' }, 404);
+      throw new NotFoundError('Client');
     }
 
     const existingClient = existingResult.rows[0];
@@ -549,7 +558,7 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
 
     if (updateFields.length === 0) {
       await client.query('ROLLBACK');
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     updateValues.push(id);
@@ -563,7 +572,11 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
   } catch (error) {
     await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Validation failed');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Patch client error:', error);
     return c.json({ message: 'Internal server error' }, 500);
@@ -595,7 +608,7 @@ clients.delete('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     // Check if client exists and user has access
     const existingResult = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
     if (existingResult.rows.length === 0) {
-      return c.json({ message: 'Client not found' }, 404);
+      throw new NotFoundError('Client');
     }
 
     if (user.role === 'field_agent' && existingResult.rows[0].caravan_id !== user.sub) {
@@ -628,7 +641,11 @@ clients.post('/:id/addresses', authMiddleware, async (c) => {
     return c.json(result.rows[0], 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Validation failed');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Add address error:', error);
     return c.json({ message: 'Internal server error' }, 500);
@@ -652,7 +669,11 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
     return c.json(result.rows[0], 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Validation failed');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Add phone error:', error);
     return c.json({ message: 'Internal server error' }, 500);
