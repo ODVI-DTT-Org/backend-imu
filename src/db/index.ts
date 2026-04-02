@@ -6,10 +6,26 @@
 import { Pool } from 'pg';
 
 // SSL configuration for Digital Ocean Managed PostgreSQL
-// Digital Ocean uses self-signed certificates, so we need rejectUnauthorized: false
-const sslConfig = process.env.DATABASE_URL?.includes('ondigitalocean.com')
-  ? { rejectUnauthorized: false }
-  : false;
+// Read CA certificate from environment variable for DigitalOcean deployment
+let sslConfig: { ca: string } | { rejectUnauthorized: boolean } | false = false;
+
+if (process.env.DATABASE_URL?.includes('ondigitalocean.com')) {
+  // Use CA certificate from environment variable if available
+  const dbCaCert = process.env.DB_CA_CERT;
+  if (dbCaCert && dbCaCert.trim().length > 0) {
+    // Handle escaped newlines in environment variable
+    sslConfig = {
+      ca: dbCaCert.trim().replace(/\\n/g, '\n'),
+    };
+    console.log('✅ Database: Using CA certificate from DB_CA_CERT environment variable');
+  } else {
+    // Fallback to accepting self-signed certificates
+    sslConfig = {
+      rejectUnauthorized: false,
+    };
+    console.log('⚠️ Database: No DB_CA_CERT found, using rejectUnauthorized: false');
+  }
+}
 
 // Create and export the shared connection pool
 export const pool = new Pool({
