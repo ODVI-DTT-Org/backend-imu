@@ -497,4 +497,37 @@ auth.post('/logout', async (c) => {
   }
 });
 
+// Get permissions endpoint for mobile app
+auth.get('/permissions', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+
+    if (!user) {
+      return c.json({ success: false, message: 'Unauthorized' }, 401);
+    }
+
+    // Fetch user permissions from database
+    const result = await pool.query(
+      `SELECT
+        upv.resource,
+        upv.action,
+        upv.constraint_name,
+        upv.role_slug
+      FROM user_permissions_view upv
+      WHERE upv.user_id = $1
+      ORDER BY upv.resource, upv.action`,
+      [user.sub]
+    );
+
+    // Return in format expected by mobile app
+    return c.json({
+      success: true,
+      permissions: result.rows,
+    });
+  } catch (error) {
+    console.error('Error fetching permissions:', error);
+    return c.json({ success: false, message: 'Failed to fetch permissions' }, 500);
+  }
+});
+
 export default auth;
