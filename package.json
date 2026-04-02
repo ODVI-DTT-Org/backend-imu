@@ -4,6 +4,9 @@
   "description": "IMU Backend API - Hono + PostgreSQL + JWT Auth for PowerSync",
   "type": "module",
   "packageManager": "pnpm@10.27.0",
+  "engines": {
+    "node": ">=20.11.1 <21"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
