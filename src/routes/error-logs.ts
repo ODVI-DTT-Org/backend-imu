@@ -113,6 +113,13 @@ errorLogs.get('/:requestId', requirePermission('error_logs', 'read'), async (c) 
   try {
     const requestId = c.req.param('requestId');
 
+    if (!requestId) {
+      return c.json({
+        success: false,
+        message: 'Request ID is required',
+      }, 400);
+    }
+
     const log = await errorLogger.getErrorLogByRequestId(requestId);
 
     if (!log) {
@@ -149,6 +156,14 @@ errorLogs.get('/:requestId', requirePermission('error_logs', 'read'), async (c) 
 errorLogs.post('/:id/resolve', requirePermission('error_logs', 'update'), async (c) => {
   try {
     const id = c.req.param('id');
+
+    if (!id) {
+      return c.json({
+        success: false,
+        message: 'Error log ID is required',
+      }, 400);
+    }
+
     const user = c.get('user');
     const userId = user?.sub as string;
 

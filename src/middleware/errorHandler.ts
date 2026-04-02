@@ -81,10 +81,12 @@ export const errorHandler = async (c: Context, next: Next) => {
       // Set status code explicitly and return error response
       const statusCode = error.statusCode;
 
-      // Use Hono's c.status() to explicitly set the status code
-      // Cast to StatusCode to satisfy TypeScript
-      c.status(statusCode as any);
-      return c.json(errorResponse);
+      // Use newResponse to create a Response with explicit status code
+      // Set Content-Type header explicitly
+      c.header('Content-Type', 'application/json');
+
+      // Return response with status code
+      return c.newResponse(JSON.stringify(errorResponse), statusCode as any);
     }
 
     // Handle unknown errors with detailed logging
@@ -163,8 +165,8 @@ export const errorHandler = async (c: Context, next: Next) => {
     }
 
     // Set status code explicitly and return error response
-    c.status(500 as any);
-    return c.json(errorResponse);
+    c.header('Content-Type', 'application/json');
+    return c.newResponse(JSON.stringify(errorResponse), 500);
   }
 };
 
@@ -189,8 +191,8 @@ export const notFoundHandler = (c: Context) => {
     method,
   };
 
-  c.status(404 as any);
-  return c.json(errorResponse);
+  c.header('Content-Type', 'application/json');
+  return c.newResponse(JSON.stringify(errorResponse), 404);
 };
 
 /**
