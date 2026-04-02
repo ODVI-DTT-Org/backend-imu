@@ -18,22 +18,14 @@ if (databaseUrl?.includes('ondigitalocean.com')) {
     databaseUrl += '&sslmode=require';
   }
 
-  // Use CA certificate from environment variable if available
-  const dbCaCert = process.env.DB_CA_CERT;
-  if (dbCaCert && dbCaCert.trim().length > 0) {
-    // Handle escaped newlines in environment variable
-    sslConfig = {
-      ca: dbCaCert.trim().replace(/\\n/g, '\n'),
-      rejectUnauthorized: false, // Required for self-signed certificates
-    };
-    console.log('✅ Database: Using CA certificate from DB_CA_CERT with rejectUnauthorized: false');
-  } else {
-    // Fallback to accepting self-signed certificates
-    sslConfig = {
-      rejectUnauthorized: false,
-    };
-    console.log('⚠️ Database: No DB_CA_CERT found, using rejectUnauthorized: false');
-  }
+  // For DigitalOcean Managed PostgreSQL with self-signed certificates,
+  // we need to disable certificate verification completely.
+  // Note: When rejectUnauthorized is false, we don't provide the CA certificate
+  // because providing it would cause Node.js to attempt validation anyway.
+  sslConfig = {
+    rejectUnauthorized: false,
+  };
+  console.log('✅ Database: SSL enabled with rejectUnauthorized: false for self-signed certificates');
 }
 
 // Create and export the shared connection pool
