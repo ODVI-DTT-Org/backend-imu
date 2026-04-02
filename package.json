@@ -30,7 +30,6 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/uuid": "^11.0.0",
     "@vitest/ui": "^4.1.2",
     "tsx": "^4.19.2",
     "vitest": "^4.1.2"
