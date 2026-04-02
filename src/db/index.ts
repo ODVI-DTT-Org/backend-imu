@@ -7,17 +7,26 @@ import { Pool } from 'pg';
 
 // SSL configuration for Digital Ocean Managed PostgreSQL
 // Read CA certificate from environment variable for DigitalOcean deployment
-let sslConfig: { ca: string } | { rejectUnauthorized: boolean } | false = false;
+let sslConfig: { ca: string; rejectUnauthorized: boolean } | { rejectUnauthorized: boolean } | false = false;
 
-if (process.env.DATABASE_URL?.includes('ondigitalocean.com')) {
+// Append sslmode=require to DATABASE_URL for DigitalOcean PostgreSQL
+let databaseUrl = process.env.DATABASE_URL;
+
+if (databaseUrl?.includes('ondigitalocean.com')) {
+  // Add explicit sslmode for production use
+  if (!databaseUrl.includes('sslmode=')) {
+    databaseUrl += '&sslmode=require';
+  }
+
   // Use CA certificate from environment variable if available
   const dbCaCert = process.env.DB_CA_CERT;
   if (dbCaCert && dbCaCert.trim().length > 0) {
     // Handle escaped newlines in environment variable
     sslConfig = {
       ca: dbCaCert.trim().replace(/\\n/g, '\n'),
+      rejectUnauthorized: false, // Required for self-signed certificates
     };
-    console.log('✅ Database: Using CA certificate from DB_CA_CERT environment variable');
+    console.log('✅ Database: Using CA certificate from DB_CA_CERT with rejectUnauthorized: false');
   } else {
     // Fallback to accepting self-signed certificates
     sslConfig = {
@@ -29,7 +38,7 @@ if (process.env.DATABASE_URL?.includes('ondigitalocean.com')) {
 
 // Create and export the shared connection pool
 export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
+  connectionString: databaseUrl,
   ssl: sslConfig,
   // Connection pool settings
   max: 20, // Maximum number of clients in the pool
