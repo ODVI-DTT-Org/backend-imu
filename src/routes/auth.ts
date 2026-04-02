@@ -14,6 +14,7 @@ import {
   ValidationError,
   NotFoundError,
 } from '../errors/index.js';
+import { setPermissionsCookie, clearPermissionsCookie, getUserPermissionsAsString } from '../middleware/permissions.js';
 
 // Load PowerSync RSA keys from environment variable for JWT signing
 const privateKeyInput = process.env.POWERSYNC_PRIVATE_KEY;
@@ -131,6 +132,24 @@ auth.post('/login', async (c) => {
       true
     );
 
+    // Get user permissions and set cookie
+    const permissions = await getUserPermissionsAsString(user.id, user.role);
+    const cookie = setPermissionsCookie(
+      // Convert string[] to Permission[] format for cookie function
+      permissions.map((p) => {
+        const [resource, actionPart] = p.split('.');
+        const [action, constraint] = actionPart.split(':');
+        return {
+          resource,
+          action,
+          constraint_name: constraint,
+          role_slug: user.role,
+        };
+      }),
+      { sub: user.id, role: user.role }
+    );
+    c.cookie(cookie.name, cookie.value, cookie.options);
+
     return c.json({
       access_token: accessToken,
       refresh_token: refreshToken,
@@ -193,6 +212,23 @@ auth.post('/refresh', async (c) => {
 
     const user = result.rows[0];
     const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
+
+    // Get fresh permissions and update cookie
+    const permissions = await getUserPermissionsAsString(user.id, user.role);
+    const cookie = setPermissionsCookie(
+      permissions.map((p) => {
+        const [resource, actionPart] = p.split('.');
+        const [action, constraint] = actionPart.split(':');
+        return {
+          resource,
+          action,
+          constraint_name: constraint,
+          role_slug: user.role,
+        };
+      }),
+      { sub: user.id, role: user.role }
+    );
+    c.cookie(cookie.name, cookie.value, cookie.options);
 
     // Generate new access token
     const accessToken = sign(
@@ -425,6 +461,10 @@ auth.post('/reset-password', async (c) => {
 // Logout endpoint (client-side token removal, but we invalidate reset tokens too)
 auth.post('/logout', async (c) => {
   try {
+    // Clear permissions cookie
+    const cookie = clearPermissionsCookie();
+    c.cookie(cookie.name, cookie.value, cookie.options);
+
     const authHeader = c.req.header('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {
       return c.json({ message: 'Logged out' });
