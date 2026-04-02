@@ -2,6 +2,10 @@ import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { storageService } from '../services/storage.js';
 import { pool } from '../db/index.js';
+import {
+  ValidationError,
+  NotFoundError,
+} from '../errors/index.js';
 
 const upload = new Hono();
 
@@ -65,7 +69,7 @@ upload.post('/', async (c) => {
     const { operations } = body;
 
     if (!operations || !Array.isArray(operations)) {
-      return c.json({ message: 'Invalid operations format' }, 400);
+      throw new ValidationError('Invalid operations format');
     }
 
     const client = await pool.connect();
@@ -177,7 +181,7 @@ upload.get('/pending', async (c) => {
     return c.json({ counts });
   } catch (error) {
     console.error('Pending count error:', error);
-    return c.json({ message: 'Failed to get pending count' }, 500);
+    throw new Error('Failed to get pending count');
   }
 });
 
@@ -207,7 +211,7 @@ upload.post('/file', async (c) => {
     const entityType = body['entity_type'] as string | undefined; // Optional: entity type (client, touchpoint, etc.)
 
     if (!file || !(file instanceof File)) {
-      return c.json({ message: 'No file uploaded' }, 400);
+      throw new ValidationError('No file uploaded');
     }
 
     // Validate category
@@ -247,7 +251,7 @@ upload.post('/file', async (c) => {
     });
 
     if (!uploadResult.success) {
-      return c.json({ message: uploadResult.error || 'Failed to upload file' }, 400);
+      throw new ValidationError(uploadResult.error || 'Failed to upload file');
     }
 
     // Store file metadata in database
@@ -282,7 +286,7 @@ upload.post('/file', async (c) => {
     });
   } catch (error) {
     console.error('File upload error:', error);
-    return c.json({ message: 'Failed to upload file' }, 500);
+    throw new Error('Failed to upload file');
   }
 });
 
@@ -297,18 +301,18 @@ upload.post('/selfie', async (c) => {
     const file = body['file'];
 
     if (!file || !(file instanceof File)) {
-      return c.json({ message: 'No file uploaded' }, 400);
+      throw new ValidationError('No file uploaded');
     }
 
     // Validate file type
     const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
     if (!allowedTypes.includes(file.type)) {
-      return c.json({ message: 'Invalid file type. Only JPEG, PNG, and WebP are allowed' }, 400);
+      throw new ValidationError('Invalid file type. Only JPEG, PNG, and WebP are allowed');
     }
 
     // Validate file size (max 10MB for selfies)
     if (file.size > 10 * 1024 * 1024) {
-      return c.json({ message: 'File too large. Maximum size is 10MB' }, 400);
+      throw new ValidationError('File too large. Maximum size is 10MB');
     }
 
     // Generate unique filename
@@ -330,7 +334,7 @@ upload.post('/selfie', async (c) => {
     });
   } catch (error) {
     console.error('Selfie upload error:', error);
-    return c.json({ message: 'Failed to upload selfie' }, 500);
+    throw new Error('Failed to upload selfie');
   }
 });
 
@@ -344,7 +348,7 @@ upload.post('/document', async (c) => {
     const category = body['category'] as string || 'general';
 
     if (!file || !(file instanceof File)) {
-      return c.json({ message: 'No file uploaded' }, 400);
+      throw new ValidationError('No file uploaded');
     }
 
     // Validate file type
@@ -355,12 +359,12 @@ upload.post('/document', async (c) => {
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
     ];
     if (!allowedTypes.includes(file.type)) {
-      return c.json({ message: 'Invalid file type' }, 400);
+      throw new ValidationError('Invalid file type');
     }
 
     // Validate file size (max 20MB)
     if (file.size > 20 * 1024 * 1024) {
-      return c.json({ message: 'File too large. Maximum size is 20MB' }, 400);
+      throw new ValidationError('File too large. Maximum size is 20MB');
     }
 
     // Generate unique filename
@@ -383,7 +387,7 @@ upload.post('/document', async (c) => {
     });
   } catch (error) {
     console.error('Document upload error:', error);
-    return c.json({ message: 'Failed to upload document' }, 500);
+    throw new Error('Failed to upload document');
   }
 });
 
