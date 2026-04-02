@@ -13,14 +13,29 @@ let sslConfig: { ca: string; rejectUnauthorized: boolean } | { rejectUnauthorize
 let databaseUrl = process.env.DATABASE_URL;
 
 if (databaseUrl?.includes('ondigitalocean.com')) {
-  // For DigitalOcean Managed PostgreSQL with self-signed certificates,
-  // we need to disable certificate verification completely.
-  // IMPORTANT: Do NOT add sslmode to the connection string, as pg will treat
-  // 'require' as 'verify-full' and override our rejectUnauthorized: false setting.
-  sslConfig = {
-    rejectUnauthorized: false,
-  };
-  console.log('✅ Database: SSL enabled with rejectUnauthorized: false for self-signed certificates');
+  // Add uselibpqcompat=true to make sslmode=require use standard libpq semantics
+  // This makes 'require' mean "use SSL but don't verify certificate" instead of 'verify-full'
+  if (!databaseUrl.includes('uselibpqcompat=')) {
+    databaseUrl += '&uselibpqcompat=true';
+  }
+
+  // For DigitalOcean Managed PostgreSQL with self-signed certificates
+  // Use CA certificate from environment variable AND set rejectUnauthorized: false
+  const dbCaCert = process.env.DB_CA_CERT;
+  if (dbCaCert && dbCaCert.trim().length > 0) {
+    // Handle escaped newlines in environment variable
+    sslConfig = {
+      ca: dbCaCert.trim().replace(/\\n/g, '\n'),
+      rejectUnauthorized: false, // Required for self-signed certificates in the chain
+    };
+    console.log('✅ Database: Using CA certificate from DB_CA_CERT with rejectUnauthorized: false (uselibpqcompat=true)');
+  } else {
+    // Fallback: no CA certificate, just disable verification
+    sslConfig = {
+      rejectUnauthorized: false,
+    };
+    console.log('⚠️ Database: No DB_CA_CERT found, using rejectUnauthorized: false only (uselibpqcompat=true)');
+  }
 }
 
 // Create and export the shared connection pool
