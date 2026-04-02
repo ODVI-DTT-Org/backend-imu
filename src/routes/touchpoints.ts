@@ -4,6 +4,12 @@ import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import { validateTouchpointLocation } from '../services/gps-validation.js';
+import {
+  ValidationError,
+  NotFoundError,
+  AuthenticationError,
+  AuthorizationError,
+} from '../errors/index.js';
 
 const touchpoints = new Hono();
 
@@ -279,7 +285,7 @@ touchpoints.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch touchpoints error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -304,7 +310,7 @@ touchpoints.get('/reasons', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch touchpoint reasons error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -315,7 +321,7 @@ touchpoints.get('/next/:clientId', authMiddleware, async (c) => {
     const clientId = c.req.param('clientId');
 
     if (!clientId) {
-      return c.json({ message: 'Client ID is required' }, 400);
+      throw new ValidationError('Client ID is required');
     }
 
     // Get the next expected touchpoint number
@@ -360,7 +366,7 @@ touchpoints.get('/next/:clientId', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Get next touchpoint error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -428,14 +434,14 @@ touchpoints.get('/:id', authMiddleware, async (c) => {
     );
 
     if (result.rows.length === 0) {
-      return c.json({ message: 'Touchpoint not found' }, 404);
+      throw new NotFoundError('Touchpoint');
     }
 
     const touchpoint = result.rows[0];
 
     // Role-based access check
     if (user.role === 'field_agent' && touchpoint.user_id !== user.sub) {
-      return c.json({ message: 'Forbidden' }, 403);
+      throw new AuthorizationError('You do not have permission to access this touchpoint');
     }
 
     return c.json({
@@ -455,7 +461,7 @@ touchpoints.get('/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch touchpoint error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -584,7 +590,7 @@ touchpoints.post('/', authMiddleware, auditMiddleware('touchpoint'), async (c) =
       const timeIn = new Date(validated.time_in);
       const timeOut = new Date(validated.time_out);
       if (timeOut <= timeIn) {
-        return c.json({ message: 'Time Out must be after Time In' }, 400);
+        throw new ValidationError('Time Out must be after Time In');
       }
     }
 
@@ -621,10 +627,14 @@ touchpoints.post('/', authMiddleware, auditMiddleware('touchpoint'), async (c) =
     }, 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
     }
     console.error('Create touchpoint error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error('Failed to create touchpoint');
   }
 });
 
@@ -639,7 +649,7 @@ touchpoints.put('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c)
     // Check if touchpoint exists
     const existing = await pool.query('SELECT * FROM touchpoints WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Touchpoint not found' }, 404);
+      throw new NotFoundError('Touchpoint');
     }
 
     const existingTouchpoint = existing.rows[0];
@@ -647,7 +657,7 @@ touchpoints.put('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c)
     // Check user has access (owner or admin/manager)
     if (user.role !== 'admin' && user.role !== 'area_manager' && user.role !== 'assistant_area_manager') {
       if (existingTouchpoint.user_id !== user.sub) {
-        return c.json({ message: 'Forbidden' }, 403);
+        throw new AuthorizationError('You do not have permission to perform this action');
       }
     }
 
@@ -702,7 +712,7 @@ touchpoints.put('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c)
     }
 
     if (updates.length === 0) {
-      return c.json({ message: 'No fields to update' }, 400);
+      throw new ValidationError('No fields to update');
     }
 
     // Add updated_at
@@ -724,7 +734,7 @@ touchpoints.put('/:id', authMiddleware, auditMiddleware('touchpoint'), async (c)
       return c.json({ message: 'Invalid input', errors: error.errors }, 400);
     }
     console.error('Update touchpoint error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
@@ -737,7 +747,7 @@ touchpoints.delete('/:id', authMiddleware, auditMiddleware('touchpoint'), async 
     // Check if touchpoint exists
     const existing = await pool.query('SELECT * FROM touchpoints WHERE id = $1', [id]);
     if (existing.rows.length === 0) {
-      return c.json({ message: 'Touchpoint not found' }, 404);
+      throw new NotFoundError('Touchpoint');
     }
 
     const touchpoint = existing.rows[0];
@@ -745,7 +755,7 @@ touchpoints.delete('/:id', authMiddleware, auditMiddleware('touchpoint'), async 
     // Check user has access (owner or admin/manager)
     if (user.role !== 'admin' && user.role !== 'area_manager' && user.role !== 'assistant_area_manager') {
       if (touchpoint.user_id !== user.sub) {
-        return c.json({ message: 'Forbidden' }, 403);
+        throw new AuthorizationError('You do not have permission to perform this action');
       }
     }
 
@@ -755,7 +765,7 @@ touchpoints.delete('/:id', authMiddleware, auditMiddleware('touchpoint'), async 
     return c.json({ message: 'Touchpoint deleted successfully' });
   } catch (error) {
     console.error('Delete touchpoint error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    throw new Error();
   }
 });
 
