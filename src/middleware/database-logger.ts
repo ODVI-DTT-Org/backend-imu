@@ -153,8 +153,10 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
     duration: 0,
   };
 
-  // Call original query method
-  const promise = originalQuery.apply(this, args);
+  // Call original query method using call() to avoid type issues
+  const method = originalQuery as any;
+  const result = method.call(this, ...args) as unknown;
+  const promise = result as Promise<any>;
 
   // Log query completion
   return promise
@@ -183,7 +185,10 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
  * Wrap Pool.connect to add logging for client queries
  */
 Pool.prototype.connect = function(this: Pool, ...args: any[]) {
-  const promise = originalConnect.apply(this, args);
+  // Call original connect method using call() to avoid type issues
+  const method = originalConnect as any;
+  const result = method.call(this, ...args) as unknown;
+  const promise = result as Promise<PoolClient>;
 
   return promise.then((client: PoolClient) => {
     // Wrap client.query to add logging
@@ -200,8 +205,10 @@ Pool.prototype.connect = function(this: Pool, ...args: any[]) {
         duration: 0,
       };
 
-      // Call original query method
-      const clientPromise = originalClientQuery.apply(this, clientArgs);
+      // Call original query method using call() to avoid type issues
+      const clientMethod = originalClientQuery as any;
+      const clientResult = clientMethod.call(this, ...clientArgs) as unknown;
+      const clientPromise = clientResult as Promise<any>;
 
       // Log query completion
       return clientPromise
@@ -228,7 +235,6 @@ Pool.prototype.connect = function(this: Pool, ...args: any[]) {
 
       return client;
     });
-  });
 };
 
 /**
