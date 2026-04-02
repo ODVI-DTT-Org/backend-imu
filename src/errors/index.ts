@@ -5,9 +5,9 @@
  * All errors extend from AppError base class.
  */
 
-import type { ErrorCode } from './codes';
-import { ErrorCodes } from './codes';
-import { getSuggestionTexts } from './suggestions';
+import type { ErrorCode } from './codes.js';
+import { ErrorCodes } from './codes.js';
+import { getSuggestionTexts } from './suggestions.js';
 
 /**
  * Field error interface for validation errors

@@ -5,7 +5,7 @@
  * Suggestions help users understand what went wrong and how to fix it.
  */
 
-import type { ErrorCode } from './codes';
+import type { ErrorCode } from './codes.js';
 
 /**
  * Error suggestion interface
