@@ -51,6 +51,11 @@ export const errorHandler = async (c: Context, next: Next) => {
                       'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
 
+    // DEBUG: Log what error we caught
+    console.error('🔍 ERROR HANDLER: Caught error:', error instanceof Error ? error.name : typeof error);
+    console.error('🔍 ERROR HANDLER: Error statusCode:', (error as any).statusCode);
+    console.error('🔍 ERROR HANDLER: Error message:', error instanceof Error ? error.message : String(error));
+
     // Handle known AppError instances
     if (error instanceof AppErrorClass) {
       // Log error to database (async, non-blocking)
@@ -81,12 +86,18 @@ export const errorHandler = async (c: Context, next: Next) => {
       // Set status code explicitly and return error response
       const statusCode = error.statusCode;
 
+      // DEBUG: Log what we're about to return
+      console.error('🔍 ERROR HANDLER: About to return response with statusCode:', statusCode);
+      console.error('🔍 ERROR HANDLER: errorResponse keys:', Object.keys(errorResponse));
+
       // Use newResponse to create a Response with explicit status code
       // Set Content-Type header explicitly
       c.header('Content-Type', 'application/json');
 
       // Return response with status code
-      return c.newResponse(JSON.stringify(errorResponse), statusCode as any);
+      const response = c.newResponse(JSON.stringify(errorResponse), statusCode as any);
+      console.error('🔍 ERROR HANDLER: Created response, status:', response.status);
+      return response;
     }
 
     // Handle unknown errors with detailed logging
