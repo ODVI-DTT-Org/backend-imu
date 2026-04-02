@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -268,7 +269,7 @@ clients.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/clients/:id - Get single client with full details
-clients.get('/:id', authMiddleware, async (c) => {
+clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -357,7 +358,7 @@ clients.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/clients - Create new client
-clients.post('/', authMiddleware, auditMiddleware('client'), async (c) => {
+clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditMiddleware('client'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -397,7 +398,7 @@ clients.post('/', authMiddleware, auditMiddleware('client'), async (c) => {
 });
 
 // PUT /api/clients/:id - Update client
-clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
+clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), auditMiddleware('client'), async (c) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -415,12 +416,6 @@ clients.put('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     }
 
     const existingClient = existingResult.rows[0];
-
-    // Check access permissions
-    if (user.role === 'field_agent' && existingClient.caravan_id !== user.sub) {
-      await client.query('ROLLBACK');
-      throw new AuthorizationError('You do not have permission to perform this action');
-    }
 
     // For Tele and Caravan users, create approval request instead of updating directly
     if (user.role === 'tele' || user.role === 'caravan') {
@@ -537,12 +532,6 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
 
     const existingClient = existingResult.rows[0];
 
-    // Check access permissions (all authenticated users can update loan_released)
-    if (user.role === 'field_agent' && existingClient.caravan_id !== user.sub) {
-      await client.query('ROLLBACK');
-      throw new AuthorizationError('You do not have permission to perform this action');
-    }
-
     // Build update query dynamically
     const updateFields: string[] = [];
     const updateValues: any[] = [];
@@ -604,7 +593,7 @@ function mapRowToApproval(row: Record<string, any>) {
 }
 
 // DELETE /api/clients/:id - Delete client
-clients.delete('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
+clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), auditMiddleware('client'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
