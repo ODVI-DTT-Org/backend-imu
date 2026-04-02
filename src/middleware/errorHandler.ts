@@ -35,9 +35,17 @@ export const errorHandler = async (c: Context, next: Next) => {
   // Add request ID to response headers for debugging
   c.header('X-Request-Id', requestId);
 
+  // DEBUG: Log that error handler was invoked
+  console.log('🔍 ERROR HANDLER INVOKED for requestId:', requestId);
+
   try {
     await next();
   } catch (error) {
+    // DEBUG: This should ALWAYS execute when an error is caught
+    console.error('🔍🔍🔍 ERROR HANDLER CATCH BLOCK EXECUTED 🔍🔍🔍');
+    console.error('🔍 Error type:', error instanceof Error ? error.name : typeof error);
+    console.error('🔍 Error statusCode:', (error as any).statusCode);
+
     const timestamp = new Date().toISOString();
     const path = c.req.path;
     const method = c.req.method;
@@ -50,11 +58,6 @@ export const errorHandler = async (c: Context, next: Next) => {
                       c.req.header('x-real-ip') ||
                       'unknown';
     const userAgent = c.req.header('user-agent') || 'unknown';
-
-    // DEBUG: Log what error we caught
-    console.error('🔍 ERROR HANDLER: Caught error:', error instanceof Error ? error.name : typeof error);
-    console.error('🔍 ERROR HANDLER: Error statusCode:', (error as any).statusCode);
-    console.error('🔍 ERROR HANDLER: Error message:', error instanceof Error ? error.message : String(error));
 
     // Handle known AppError instances
     if (error instanceof AppErrorClass) {
