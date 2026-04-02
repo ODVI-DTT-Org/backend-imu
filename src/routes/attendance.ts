@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -51,7 +52,7 @@ function mapRowToAttendance(row: Record<string, any>) {
 }
 
 // POST /api/attendance/check-in - Check in for the day
-attendance.post('/check-in', authMiddleware, auditMiddleware('attendance'), async (c) => {
+attendance.post('/check-in', authMiddleware, requirePermission('attendance', 'create'), auditMiddleware('attendance'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -94,7 +95,7 @@ attendance.post('/check-in', authMiddleware, auditMiddleware('attendance'), asyn
 });
 
 // POST /api/attendance/check-out - Check out for the day
-attendance.post('/check-out', authMiddleware, auditMiddleware('attendance'), async (c) => {
+attendance.post('/check-out', authMiddleware, requirePermission('attendance', 'update'), auditMiddleware('attendance'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -145,7 +146,7 @@ attendance.post('/check-out', authMiddleware, auditMiddleware('attendance'), asy
 });
 
 // GET /api/attendance/today - Get today's attendance
-attendance.get('/today', authMiddleware, async (c) => {
+attendance.get('/today', authMiddleware, requirePermission('attendance', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const today = getLocalDateString();
@@ -172,7 +173,7 @@ attendance.get('/today', authMiddleware, async (c) => {
 });
 
 // GET /api/attendance/history - Get attendance history
-attendance.get('/history', authMiddleware, async (c) => {
+attendance.get('/history', authMiddleware, requirePermission('attendance', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const page = parseInt(c.req.query('page') || '1');
@@ -223,7 +224,7 @@ attendance.get('/history', authMiddleware, async (c) => {
 });
 
 // GET /api/attendance - List all attendance (admin only)
-attendance.get('/', authMiddleware, async (c) => {
+attendance.get('/', authMiddleware, requirePermission('attendance', 'read'), async (c) => {
   try {
     const user = c.get('user');
 

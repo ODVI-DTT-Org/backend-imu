@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -24,7 +25,7 @@ const changePasswordSchema = z.object({
 });
 
 // GET /api/profile/:id - Get user profile
-profile.get('/:id', authMiddleware, async (c) => {
+profile.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -66,7 +67,7 @@ profile.get('/:id', authMiddleware, async (c) => {
 });
 
 // PUT /api/profile/:id - Update user profile
-profile.put('/:id', authMiddleware, async (c) => {
+profile.put('/:id', authMiddleware, requirePermission('users', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -139,7 +140,7 @@ profile.put('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/profile/:id/avatar - Upload avatar image
-profile.post('/:id/avatar', authMiddleware, async (c) => {
+profile.post('/:id/avatar', authMiddleware, requirePermission('users', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -196,7 +197,7 @@ profile.post('/:id/avatar', authMiddleware, async (c) => {
 });
 
 // POST /api/profile/:id/change-password - Change password
-profile.post('/:id/change-password', authMiddleware, async (c) => {
+profile.post('/:id/change-password', authMiddleware, requirePermission('users', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');

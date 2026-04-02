@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 
 const myDay = new Hono();
@@ -45,7 +46,7 @@ function getLocalDateString(date = new Date()): string {
 }
 
 // POST /api/my-day/add-client - Add client to today's itinerary
-myDay.post('/add-client', authMiddleware, async (c) => {
+myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -110,7 +111,7 @@ myDay.post('/add-client', authMiddleware, async (c) => {
 });
 
 // DELETE /api/my-day/remove-client/:id - Remove client from today's itinerary
-myDay.delete('/remove-client/:id', authMiddleware, async (c) => {
+myDay.delete('/remove-client/:id', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const clientId = c.req.param('id');
@@ -137,7 +138,7 @@ myDay.delete('/remove-client/:id', authMiddleware, async (c) => {
 });
 
 // GET /api/my-day/status/:clientId - Check if client is in today's itinerary
-myDay.get('/status/:clientId', authMiddleware, async (c) => {
+myDay.get('/status/:clientId', authMiddleware, requirePermission('clients', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const clientId = c.req.param('clientId');
@@ -159,7 +160,7 @@ myDay.get('/status/:clientId', authMiddleware, async (c) => {
 });
 
 // GET /api/my-day/tasks - Get today's tasks for field agent
-myDay.get('/tasks', authMiddleware, async (c) => {
+myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const today = getLocalDateString();
@@ -250,7 +251,7 @@ myDay.get('/tasks', authMiddleware, async (c) => {
 });
 
 // POST /api/my-day/tasks/:id/start - Start a task
-myDay.post('/tasks/:id/start', authMiddleware, async (c) => {
+myDay.post('/tasks/:id/start', authMiddleware, requirePermission('touchpoints', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const taskId = c.req.param('id');
@@ -285,7 +286,7 @@ myDay.post('/tasks/:id/start', authMiddleware, async (c) => {
 });
 
 // POST /api/my-day/tasks/:id/complete - Complete a task
-myDay.post('/tasks/:id/complete', authMiddleware, async (c) => {
+myDay.post('/tasks/:id/complete', authMiddleware, requirePermission('touchpoints', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const taskId = c.req.param('id');
@@ -316,7 +317,7 @@ myDay.post('/tasks/:id/complete', authMiddleware, async (c) => {
 });
 
 // POST /api/my-day/clients/:id/time-in - Record time-in for client visit
-myDay.post('/clients/:id/time-in', authMiddleware, async (c) => {
+myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoints', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const clientId = c.req.param('id');
@@ -381,7 +382,7 @@ myDay.post('/clients/:id/time-in', authMiddleware, async (c) => {
 });
 
 // POST /api/my-day/visits - Submit complete visit form
-myDay.post('/visits', authMiddleware, async (c) => {
+myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -463,7 +464,7 @@ myDay.post('/visits', authMiddleware, async (c) => {
 });
 
 // GET /api/my-day/stats - Get performance statistics
-myDay.get('/stats', authMiddleware, async (c) => {
+myDay.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'week';

@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { storageService } from '../services/storage.js';
 import { pool } from '../db/index.js';
 import {
@@ -61,7 +62,7 @@ const FILE_CATEGORIES: Record<string, {
 
 // PowerSync upload endpoint
 // Receives CRUD operations from the mobile app and applies them to PostgreSQL
-upload.post('/', async (c) => {
+upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   const user = c.get('user');
 
   try {
@@ -200,7 +201,7 @@ upload.get('/categories', (c) => {
 
 // Unified file upload endpoint
 // Supports multiple categories: selfie, avatar, touchpoint_photo, audio, document, general
-upload.post('/file', async (c) => {
+upload.post('/file', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   const user = c.get('user');
 
   try {
@@ -293,7 +294,7 @@ upload.post('/file', async (c) => {
 // Legacy endpoints for backward compatibility (redirect to /file)
 
 // Upload selfie photo (for attendance verification)
-upload.post('/selfie', async (c) => {
+upload.post('/selfie', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   const user = c.get('user');
 
   try {
@@ -339,7 +340,7 @@ upload.post('/selfie', async (c) => {
 });
 
 // Upload document (generic file upload with category)
-upload.post('/document', async (c) => {
+upload.post('/document', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   const user = c.get('user');
 
   try {

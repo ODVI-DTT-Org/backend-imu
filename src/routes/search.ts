@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -24,7 +25,7 @@ const fullTextSearchSchema = z.object({
 });
 
 // POST /api/search/full-text - Full-text search across entities
-search.post('/full-text', authMiddleware, async (c) => {
+search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
