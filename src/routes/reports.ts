@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -54,7 +55,7 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
 }
 
 // GET /api/reports/agent-performance - Field agent performance report
-reports.get('/agent-performance', authMiddleware, async (c) => {
+reports.get('/agent-performance', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
@@ -120,7 +121,7 @@ reports.get('/agent-performance', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/client-activity - Client engagement summary
-reports.get('/client-activity', authMiddleware, async (c) => {
+reports.get('/client-activity', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
@@ -192,7 +193,7 @@ reports.get('/client-activity', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/touchpoint-summary - Touchpoints by type, reason, status
-reports.get('/touchpoint-summary', authMiddleware, async (c) => {
+reports.get('/touchpoint-summary', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
@@ -250,7 +251,7 @@ reports.get('/touchpoint-summary', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/attendance-summary - Attendance report
-reports.get('/attendance-summary', authMiddleware, async (c) => {
+reports.get('/attendance-summary', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
@@ -311,7 +312,7 @@ reports.get('/attendance-summary', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/target-achievement - KPIs vs targets
-reports.get('/target-achievement', authMiddleware, async (c) => {
+reports.get('/target-achievement', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const year = parseInt(c.req.query('year') || new Date().getFullYear().toString());
@@ -388,7 +389,7 @@ reports.get('/target-achievement', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/conversion - POTENTIAL to EXISTING client conversions
-reports.get('/conversion', authMiddleware, async (c) => {
+reports.get('/conversion', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
@@ -475,7 +476,7 @@ reports.get('/conversion', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/area-coverage - Geographic distribution of visits
-reports.get('/area-coverage', authMiddleware, async (c) => {
+reports.get('/area-coverage', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
@@ -564,7 +565,7 @@ reports.get('/area-coverage', authMiddleware, async (c) => {
 });
 
 // GET /api/reports/export - Export report data as CSV
-reports.get('/export', authMiddleware, async (c) => {
+reports.get('/export', authMiddleware, requirePermission('reports', 'export'), async (c) => {
   try {
     const user = c.get('user');
     const reportType = c.req.query('type') || 'touchpoints';

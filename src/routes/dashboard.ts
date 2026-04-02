@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -16,7 +17,7 @@ function getLocalDateString(date = new Date()): string {
 }
 
 // GET /api/dashboard - Get dashboard statistics
-dashboard.get('/', authMiddleware, async (c) => {
+dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const startDate = c.req.query('start_date');
@@ -152,7 +153,7 @@ dashboard.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/dashboard/performance - Get performance metrics
-dashboard.get('/performance', authMiddleware, async (c) => {
+dashboard.get('/performance', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const caravanId = c.req.query('caravan_id') || (user.role === 'field_agent' ? user.sub : null);

@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -25,7 +26,7 @@ const createTargetSchema = z.object({
 const updateTargetSchema = createTargetSchema.partial().omit({ user_id: true });
 
 // GET /api/targets - Get targets for a period
-targets.get('/', authMiddleware, async (c) => {
+targets.get('/', authMiddleware, requirePermission('targets', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const period = c.req.query('period') || 'monthly';
@@ -80,7 +81,7 @@ targets.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/targets/current - Get current month targets
-targets.get('/current', authMiddleware, async (c) => {
+targets.get('/current', authMiddleware, requirePermission('targets', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const now = new Date();
@@ -156,7 +157,7 @@ targets.get('/current', authMiddleware, async (c) => {
 });
 
 // GET /api/targets/history - Get target history
-targets.get('/history', authMiddleware, async (c) => {
+targets.get('/history', authMiddleware, requirePermission('targets', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const limit = parseInt(c.req.query('limit') || '12');
@@ -197,7 +198,7 @@ targets.get('/history', authMiddleware, async (c) => {
 });
 
 // POST /api/targets - Create/update targets (admin only)
-targets.post('/', authMiddleware, auditMiddleware('target'), async (c) => {
+targets.post('/', authMiddleware, requirePermission('targets', 'create'), auditMiddleware('target'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -245,7 +246,7 @@ targets.post('/', authMiddleware, auditMiddleware('target'), async (c) => {
 });
 
 // DELETE /api/targets/:id - Delete a target
-targets.delete('/:id', authMiddleware, auditMiddleware('target'), async (c) => {
+targets.delete('/:id', authMiddleware, requirePermission('targets', 'delete'), auditMiddleware('target'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');

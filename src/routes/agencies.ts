@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -34,7 +35,7 @@ function mapRowToAgency(row: Record<string, any>) {
 }
 
 // GET /api/agencies - List all agencies
-agencies.get('/', authMiddleware, async (c) => {
+agencies.get('/', authMiddleware, requirePermission('agencies', 'read'), async (c) => {
   try {
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '50');
@@ -82,7 +83,7 @@ agencies.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/agencies/:id - Get single agency
-agencies.get('/:id', authMiddleware, async (c) => {
+agencies.get('/:id', authMiddleware, requirePermission('agencies', 'read'), async (c) => {
   try {
     const id = c.req.param('id');
 
@@ -100,7 +101,7 @@ agencies.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/agencies - Create new agency (admin/staff only)
-agencies.post('/', authMiddleware, requireAnyRole('admin', 'staff'), auditMiddleware('agency'), async (c) => {
+agencies.post('/', authMiddleware, requirePermission('agencies', 'create'), auditMiddleware('agency'), async (c) => {
   try {
     const body = await c.req.json();
     const validated = createAgencySchema.parse(body);
@@ -130,7 +131,7 @@ agencies.post('/', authMiddleware, requireAnyRole('admin', 'staff'), auditMiddle
 });
 
 // PUT /api/agencies/:id - Update agency (admin/staff only)
-agencies.put('/:id', authMiddleware, requireAnyRole('admin', 'staff'), auditMiddleware('agency'), async (c) => {
+agencies.put('/:id', authMiddleware, requirePermission('agencies', 'update'), auditMiddleware('agency'), async (c) => {
   try {
     const id = c.req.param('id');
     const body = await c.req.json();
@@ -183,7 +184,7 @@ agencies.put('/:id', authMiddleware, requireAnyRole('admin', 'staff'), auditMidd
 });
 
 // DELETE /api/agencies/:id - Delete agency (admin only)
-agencies.delete('/:id', authMiddleware, requireRole('admin'), auditMiddleware('agency'), async (c) => {
+agencies.delete('/:id', authMiddleware, requirePermission('agencies', 'delete'), auditMiddleware('agency'), async (c) => {
   try {
     const id = c.req.param('id');
 

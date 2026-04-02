@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
+import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -78,7 +79,7 @@ function mapRowToApproval(row: Record<string, any>) {
 }
 
 // GET /api/approvals - List all approvals
-approvals.get('/', authMiddleware, async (c) => {
+approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const page = parseInt(c.req.query('page') || '1');
@@ -200,7 +201,7 @@ approvals.get('/', authMiddleware, async (c) => {
 });
 
 // GET /api/approvals/:id - Get single approval
-approvals.get('/:id', authMiddleware, async (c) => {
+approvals.get('/:id', authMiddleware, requirePermission('approvals', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -257,7 +258,7 @@ approvals.get('/:id', authMiddleware, async (c) => {
 });
 
 // POST /api/approvals - Create new approval
-approvals.post('/', authMiddleware, auditMiddleware('approval'), async (c) => {
+approvals.post('/', authMiddleware, requirePermission('approvals', 'create'), auditMiddleware('approval'), async (c) => {
   try {
     const user = c.get('user');
     const body = await c.req.json();
@@ -312,7 +313,7 @@ approvals.post('/', authMiddleware, auditMiddleware('approval'), async (c) => {
 });
 
 // PUT /api/approvals/:id - Update approval
-approvals.put('/:id', authMiddleware, auditMiddleware('approval'), async (c) => {
+approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -376,7 +377,7 @@ approvals.put('/:id', authMiddleware, auditMiddleware('approval'), async (c) => 
 });
 
 // POST /api/approvals/:id/approve - Approve an approval
-approvals.post('/:id/approve', authMiddleware, requireRole(...APPROVAL_ROLES), async (c) => {
+approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'update'), async (c) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -537,7 +538,7 @@ approvals.post('/:id/approve', authMiddleware, requireRole(...APPROVAL_ROLES), a
 });
 
 // POST /api/approvals/:id/reject - Reject an approval
-approvals.post('/:id/reject', authMiddleware, requireRole(...APPROVAL_ROLES), async (c) => {
+approvals.post('/:id/reject', authMiddleware, requirePermission('approvals', 'update'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -607,7 +608,7 @@ approvals.post('/:id/reject', authMiddleware, requireRole(...APPROVAL_ROLES), as
 });
 
 // POST /api/approvals/bulk-approve - Bulk approve multiple approvals
-approvals.post('/bulk-approve', authMiddleware, requireRole('admin'), auditMiddleware('approval', 'bulk_approve'), async (c) => {
+approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval', 'bulk_approve'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
 
@@ -744,7 +745,7 @@ approvals.post('/bulk-approve', authMiddleware, requireRole('admin'), auditMiddl
 });
 
 // POST /api/approvals/bulk-reject - Bulk reject multiple approvals
-approvals.post('/bulk-reject', authMiddleware, requireRole('admin'), auditMiddleware('approval', 'bulk_reject'), async (c) => {
+approvals.post('/bulk-reject', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval', 'bulk_reject'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
 
@@ -823,7 +824,7 @@ approvals.post('/bulk-reject', authMiddleware, requireRole('admin'), auditMiddle
 });
 
 // DELETE /api/approvals/:id - Delete approval
-approvals.delete('/:id', authMiddleware, auditMiddleware('approval'), requireRole('admin'), async (c) => {
+approvals.delete('/:id', authMiddleware, requirePermission('approvals', 'delete'), auditMiddleware('approval'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
@@ -865,7 +866,7 @@ approvals.delete('/:id', authMiddleware, auditMiddleware('approval'), requireRol
 });
 
 // GET /api/approvals/stats - Get approval statistics
-approvals.get('/stats/summary', authMiddleware, async (c) => {
+approvals.get('/stats/summary', authMiddleware, requirePermission('approvals', 'read'), async (c) => {
   try {
     const user = c.get('user');
 
@@ -907,7 +908,7 @@ approvals.get('/stats/summary', authMiddleware, async (c) => {
 });
 
 // POST /api/approvals/loan-release - Submit loan release for approval (Admin, Caravan, Tele)
-approvals.post('/loan-release', authMiddleware, async (c) => {
+approvals.post('/loan-release', authMiddleware, requirePermission('approvals', 'update'), async (c) => {
   const client = await pool.connect(); // Use transaction
   try {
     await client.query('BEGIN'); // Start transaction
