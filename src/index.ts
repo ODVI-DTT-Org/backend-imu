@@ -34,6 +34,7 @@ import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
 import errorLogsRoutes from './routes/error-logs.js';
 import jobsRoutes from './routes/jobs.js';
+import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
 
