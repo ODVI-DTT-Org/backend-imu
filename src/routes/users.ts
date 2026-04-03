@@ -26,10 +26,13 @@ const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as con
 const CARAVAN_ROLES = ['caravan'] as const;
 const TELE_ROLES = ['tele'] as const;
 
+// Password complexity regex: min 8 chars, 1 uppercase, 1 lowercase, 1 number
+const passwordComplexityRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+
 // Validation schemas
 const createUserSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(6),
+  password: z.string().regex(passwordComplexityRegex, 'Password must be at least 8 characters with 1 uppercase, 1 lowercase, and 1 number'),
   first_name: z.string().min(1),
   last_name: z.string().min(1),
   role: z.enum(VALID_ROLES).default('caravan'),
@@ -41,7 +44,7 @@ const updateUserSchema = createUserSchema.partial().omit({ password: true });
 
 const changePasswordSchema = z.object({
   current_password: z.string().min(1),
-  new_password: z.string().min(6),
+  new_password: z.string().regex(passwordComplexityRegex, 'Password must be at least 8 characters with 1 uppercase, 1 lowercase, and 1 number'),
 });
 
 // Helper to map DB row to User type
@@ -181,28 +184,66 @@ users.post('/', authMiddleware, requirePermission('users', 'create'), auditMiddl
 
     // RBAC Sync: Create user_roles entry for new RBAC system
     try {
+      console.log(`[RBAC Sync] Looking up role '${validated.role}' for user ${newUser.id}`);
       const roleResult = await pool.query(
-        'SELECT id FROM roles WHERE slug = $1',
+        'SELECT id, slug FROM roles WHERE slug = $1',
         [validated.role]
       );
 
+      console.log(`[RBAC Sync] Role lookup result: ${roleResult.rows.length} rows found`, roleResult.rows);
+
       if (roleResult.rows.length > 0) {
+        const roleId = roleResult.rows[0].id;
+        console.log(`[RBAC Sync] Creating user_roles entry: user_id=${newUser.id}, role_id=${roleId}, assigned_by=${currentUser.sub}`);
+
         await pool.query(
           `INSERT INTO user_roles (user_id, role_id, assigned_by, is_active)
            VALUES ($1, $2, $3, TRUE)
            ON CONFLICT (user_id, role_id) DO UPDATE SET
              is_active = TRUE,
              assigned_by = $3`,
-          [newUser.id, roleResult.rows[0].id, currentUser.sub]
+          [newUser.id, roleId, currentUser.sub]
         );
+
+        console.log(`[RBAC Sync] Successfully created user_roles entry for user ${newUser.id}`);
       } else {
-        console.warn(`RBAC: Role '${validated.role}' not found in roles table. User created without RBAC entry.`);
+        console.error(`[RBAC Sync] Role '${validated.role}' not found in roles table. Available roles:`);
+        const allRoles = await pool.query('SELECT slug, name FROM roles ORDER BY level DESC');
+        console.error(JSON.stringify(allRoles.rows, null, 2));
+        throw new Error(`Role '${validated.role}' not found in roles table. Please ensure the role exists in the roles table.`);
       }
     } catch (rbacError) {
-      // Log RBAC error but don't fail user creation
-      console.error('RBAC Sync Error during user creation:', rbacError);
-      // User is created successfully, but RBAC sync failed
-      // Admin can manually assign role via /api/permissions/users/:userId/roles
+      // Log RBAC error with details
+      console.error('[RBAC Sync Error] Failed to create user_roles entry:', rbacError);
+      console.error('[RBAC Sync Error] Error details:', {
+        message: rbacError instanceof Error ? rbacError.message : String(rbacError),
+        stack: rbacError instanceof Error ? rbacError.stack : undefined,
+        userId: newUser.id,
+        role: validated.role,
+        assignedBy: currentUser.sub
+      });
+
+      // Check if roles table exists
+      try {
+        const tableCheck = await pool.query(`
+          SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_name = 'roles'
+          )
+        `);
+        console.log('[RBAC Sync Debug] roles table exists:', tableCheck.rows[0].exists);
+
+        if (tableCheck.rows[0].exists) {
+          const allRoles = await pool.query('SELECT slug, name FROM roles ORDER BY level DESC');
+          console.log('[RBAC Sync Debug] Available roles in database:', allRoles.rows);
+        }
+      } catch (checkError) {
+        console.error('[RBAC Sync Debug] Failed to check roles table:', checkError);
+      }
+
+      // Re-throw the error to fail user creation if RBAC sync fails
+      // This ensures data consistency - users should NOT be created without proper RBAC entries
+      throw new Error(`Failed to create RBAC entry for user: ${rbacError instanceof Error ? rbacError.message : String(rbacError)}`);
     }
 
     // Audit log the user creation
@@ -332,14 +373,19 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
     // RBAC Sync: Update user_roles if role changed
     if (validated.role && oldUser.role !== updatedUser.role) {
       try {
+        console.log(`[RBAC Sync] Looking up new role '${updatedUser.role}' for user ${id}`);
+
         // Get the new role ID
         const newRoleResult = await pool.query(
-          'SELECT id FROM roles WHERE slug = $1',
+          'SELECT id, slug FROM roles WHERE slug = $1',
           [updatedUser.role]
         );
 
+        console.log(`[RBAC Sync] Role lookup result: ${newRoleResult.rows.length} rows found`, newRoleResult.rows);
+
         if (newRoleResult.rows.length > 0) {
           const newRoleId = newRoleResult.rows[0].id;
+          console.log(`[RBAC Sync] Deactivating old roles and assigning new role: user_id=${id}, role_id=${newRoleId}`);
 
           // Deactivate all old role assignments for this user
           await pool.query(
@@ -359,17 +405,33 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
             [id, newRoleId, currentUser.sub]
           );
 
+          console.log(`[RBAC Sync] Successfully updated user_roles for user ${id}`);
+
           // Clear permission cache for this user
           if (id) {
             clearPermissionCache(id);
+            console.log(`[RBAC Sync] Cleared permission cache for user ${id}`);
           }
         } else {
-          console.warn(`RBAC: Role '${updatedUser.role}' not found in roles table.`);
+          console.error(`[RBAC Sync] Role '${updatedUser.role}' not found in roles table. Available roles:`);
+          const allRoles = await pool.query('SELECT slug, name FROM roles ORDER BY level DESC');
+          console.error(JSON.stringify(allRoles.rows, null, 2));
+          throw new Error(`Role '${updatedUser.role}' not found in roles table. Cannot update user role.`);
         }
       } catch (rbacError) {
-        // Log RBAC error but don't fail user update
-        console.error('RBAC Sync Error during user update:', rbacError);
-        // User is updated successfully, but RBAC sync failed
+        // Log RBAC error with details
+        console.error('[RBAC Sync Error] Failed to update user_roles entry:', rbacError);
+        console.error('[RBAC Sync Error] Error details:', {
+          message: rbacError instanceof Error ? rbacError.message : String(rbacError),
+          stack: rbacError instanceof Error ? rbacError.stack : undefined,
+          userId: id,
+          oldRole: oldUser.role,
+          newRole: updatedUser.role,
+          assignedBy: currentUser.sub
+        });
+
+        // Re-throw the error to fail user update if RBAC sync fails
+        throw new Error(`Failed to update RBAC entry for user: ${rbacError instanceof Error ? rbacError.message : String(rbacError)}`);
       }
     }
 
@@ -459,6 +521,57 @@ users.post('/:id/change-password', authMiddleware, async (c) => {
     }
     console.error('Change password error:', error);
     throw new Error('Failed to change password');
+  }
+});
+
+// POST /api/users/:id/reset-password - Admin reset password (no current password required)
+const resetPasswordSchema = z.object({
+  new_password: z.string().regex(passwordComplexityRegex, 'Password must be at least 8 characters with 1 uppercase, 1 lowercase, and 1 number'),
+});
+
+users.post('/:id/reset-password', authMiddleware, requirePermission('users', 'update'), auditMiddleware('user'), async (c) => {
+  try {
+    const currentUser = c.get('user');
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    const validated = resetPasswordSchema.parse(body);
+
+    // Check if user exists
+    const existing = await pool.query('SELECT email, first_name, last_name FROM users WHERE id = $1', [id]);
+    if (existing.rows.length === 0) {
+      throw new NotFoundError('User');
+    }
+
+    // Hash and update new password
+    const password_hash = await hash(validated.new_password, 10);
+    await pool.query('UPDATE users SET password_hash = $1 WHERE id = $2', [password_hash, id]);
+
+    // Audit log password reset
+    await auditLog({
+      userId: currentUser.sub,
+      action: 'reset_password',
+      entity: 'user',
+      entityId: id,
+      newValues: {
+        email: existing.rows[0].email,
+        first_name: existing.rows[0].first_name,
+        last_name: existing.rows[0].last_name,
+      },
+      ipAddress: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
+      userAgent: c.req.header('user-agent'),
+    });
+
+    return c.json({ message: 'Password reset successfully' });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    console.error('Reset password error:', error);
+    throw new Error('Failed to reset password');
   }
 });
 
