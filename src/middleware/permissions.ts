@@ -200,14 +200,31 @@ export async function hasPermission(
   const permissions = await getUserPermissionsFromRbac(userId);
   if (!permissions) return false;
 
-  return permissions.some(
-    (p) =>
+  return permissions.some((p) => {
+    // Wildcard: *.* matches everything
+    if (p.resource === '*' && p.action === '*') {
+      return true;
+    }
+
+    // Wildcard resource: resource.* matches all actions for that resource
+    if (p.resource === resource && p.action === '*') {
+      return true;
+    }
+
+    // Wildcard action: *.action matches all resources for that action
+    if (p.resource === '*' && p.action === action) {
+      return true;
+    }
+
+    // Exact match with optional constraint
+    return (
       p.resource === resource &&
       p.action === action &&
       (constraint === undefined ||
         p.constraint_name === null ||
         p.constraint_name === constraint)
-  );
+    );
+  });
 }
 
 /**

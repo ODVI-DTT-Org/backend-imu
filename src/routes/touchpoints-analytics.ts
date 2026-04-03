@@ -15,21 +15,29 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
     const touchpointTypes = c.req.query('touchpointTypes');
     const status = c.req.query('status');
 
-    // Helper function to validate date format (YYYY-MM-DD)
-    const isValidDate = (dateStr: string): boolean => {
-      if (!dateStr) return false;
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!dateRegex.test(dateStr)) return false;
+    // Helper function to validate and normalize date format
+    // Accepts both ISO format (YYYY-MM-DDTHH:mm:ss.sssZ) and YYYY-MM-DD format
+    const parseAndValidateDate = (dateStr: string): string | null => {
+      if (!dateStr) return null;
       const date = new Date(dateStr);
-      return date instanceof Date && !isNaN(date.getTime());
+      if (!date instanceof Date || isNaN(date.getTime())) return null;
+
+      // Normalize to YYYY-MM-DD format for database queries
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, '0');
+      const day = String(date.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
     };
 
-    // Validate date formats
-    if (startDate && !isValidDate(startDate)) {
-      return c.json({ message: 'Invalid startDate format. Use YYYY-MM-DD' }, 400);
+    // Validate and normalize date formats
+    const normalizedStartDate = parseAndValidateDate(startDate);
+    const normalizedEndDate = parseAndValidateDate(endDate);
+
+    if (startDate && !normalizedStartDate) {
+      return c.json({ message: 'Invalid startDate format. Use YYYY-MM-DD or ISO format' }, 400);
     }
-    if (endDate && !isValidDate(endDate)) {
-      return c.json({ message: 'Invalid endDate format. Use YYYY-MM-DD' }, 400);
+    if (endDate && !normalizedEndDate) {
+      return c.json({ message: 'Invalid endDate format. Use YYYY-MM-DD or ISO format' }, 400);
     }
 
     // Helper function to validate and split comma-separated values
@@ -58,14 +66,14 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
     }
 
     // Date range filter
-    if (startDate) {
+    if (normalizedStartDate) {
       conditions.push(`t.date >= $${paramIndex}`);
-      params.push(startDate);
+      params.push(normalizedStartDate);
       paramIndex++;
     }
-    if (endDate) {
+    if (normalizedEndDate) {
       conditions.push(`t.date <= $${paramIndex}`);
-      params.push(endDate);
+      params.push(normalizedEndDate);
       paramIndex++;
     }
 
@@ -98,6 +106,9 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    console.log('🔍 Analytics query params:', params);
+    console.log('🔍 Analytics whereClause:', whereClause);
 
     // 1. Summary Query
     const summaryResult = await pool.query(
@@ -244,7 +255,11 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
       statusDistribution,
     });
   } catch (error) {
-    console.error('Touchpoints analytics error:', error);
+    console.error('❌ Touchpoints analytics error:', error);
+    console.error('❌ Error name:', (error as any).name);
+    console.error('❌ Error message:', (error as any).message);
+    console.error('❌ Error stack:', (error as any).stack);
+    console.error('❌ Error details:', JSON.stringify(error, null, 2));
     return c.json({ message: 'Internal server error' }, 500);
   }
 });

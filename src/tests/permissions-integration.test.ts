@@ -7,8 +7,7 @@
  * @file permissions-integration.test.ts
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { pool } from '../db/index.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   createTestApp,
   generateTestTokens,
@@ -16,6 +15,7 @@ import {
   parseJsonResponse,
   type TestUser,
 } from './test-helpers.js';
+import { registerTestUser } from './setup.js';
 
 describe('Permission System Integration Tests', () => {
   let testUsers: Record<string, TestUser>;
@@ -28,74 +28,39 @@ describe('Permission System Integration Tests', () => {
   };
   let testApp: Hono;
 
-  beforeAll(async () => {
-    // Create test users
-    const adminUser = await pool.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      ['integration-admin@test.imu', '$2a$10$EtlkOyxStJE9LNnxHNqiRu1yJxoguQGtd7yUPPwBtvnSyrNltECMC', 'Integration', 'Admin', 'admin']
-    );
-
-    const areaManagerUser = await pool.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      ['integration-areamgr@test.imu', '$2a$10$EtlkOyxStJE9LNnxHNqiRu1yJxoguQGtd7yUPPwBtvnSyrNltECMC', 'Integration', 'Area Manager', 'area_manager']
-    );
-
-    const assistantAreaManagerUser = await pool.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      ['integration-asstareamgr@test.imu', '$2a$10$EtlkOyxStJE9LNnxHNqiRu1yJxoguQGtd7yUPPwBtvnSyrNltECMC', 'Integration', 'Asst Area Manager', 'assistant_area_manager']
-    );
-
-    const caravanUser = await pool.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      ['integration-caravan@test.imu', '$2a$10$EtlkOyxStJE9LNnxHNqiRu1yJxoguQGtd7yUPPwBtvnSyrNltECMC', 'Integration', 'Caravan', 'caravan']
-    );
-
-    const teleUser = await pool.query(
-      `INSERT INTO users (email, password_hash, first_name, last_name, role)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      ['integration-tele@test.imu', '$2a$10$EtlkOyxStJE9LNnxHNqiRu1yJxoguQGtd7yUPPwBtvnSyrNltECMC', 'Integration', 'Tele', 'tele']
-    );
-
+  beforeEach(() => {
+    // Create test users (in-memory, no database operations)
     testUsers = {
       admin: {
-        id: adminUser.rows[0].id,
+        id: 'integration-admin-id',
         email: 'integration-admin@test.imu',
         first_name: 'Integration',
         last_name: 'Admin',
         role: 'admin',
       },
       areaManager: {
-        id: areaManagerUser.rows[0].id,
+        id: 'integration-areamgr-id',
         email: 'integration-areamgr@test.imu',
         first_name: 'Integration',
         last_name: 'Area Manager',
         role: 'area_manager',
       },
       assistantAreaManager: {
-        id: assistantAreaManagerUser.rows[0].id,
+        id: 'integration-asstareamgr-id',
         email: 'integration-asstareamgr@test.imu',
         first_name: 'Integration',
         last_name: 'Asst Area Manager',
         role: 'assistant_area_manager',
       },
       caravan: {
-        id: caravanUser.rows[0].id,
+        id: 'integration-caravan-id',
         email: 'integration-caravan@test.imu',
         first_name: 'Integration',
         last_name: 'Caravan',
         role: 'caravan',
       },
       tele: {
-        id: teleUser.rows[0].id,
+        id: 'integration-tele-id',
         email: 'integration-tele@test.imu',
         first_name: 'Integration',
         last_name: 'Tele',
@@ -103,13 +68,20 @@ describe('Permission System Integration Tests', () => {
       },
     };
 
+    // Generate test tokens
     testTokens = generateTestTokens(testUsers);
+
+    // Register test users with the database mock
+    Object.values(testUsers).forEach(user => {
+      registerTestUser({ id: user.id, email: user.email, role: user.role });
+    });
+
+    // Create test app with routes
     testApp = createTestApp();
   });
 
-  afterAll(async () => {
-    // Clean up test data
-    await pool.query("DELETE FROM users WHERE email LIKE 'integration-%@test.imu'");
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   describe('requirePermission middleware', () => {

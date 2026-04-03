@@ -30,6 +30,12 @@ const timeInSchema = z.object({
   longitude: z.number().optional(),
 });
 
+const timeOutSchema = z.object({
+  latitude: z.number().optional(),
+  longitude: z.number().optional(),
+  address: z.string().optional(),
+});
+
 const addToMyDaySchema = z.object({
   client_id: z.string().uuid(),
   scheduled_time: z.string().optional(),
@@ -377,6 +383,65 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
       return c.json({ message: 'Invalid input', errors: error.errors }, 400);
     }
     console.error('Time-in error:', error);
+    return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/my-day/clients/:id/time-out - Record time-out for client visit
+myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoints', 'update'), async (c) => {
+  try {
+    const user = c.get('user');
+    const clientId = c.req.param('id');
+    const body = await c.req.json();
+    const validated = timeOutSchema.parse(body);
+
+    // Verify client exists (no ownership check - any caravan can visit any client)
+    const clientCheck = await pool.query(
+      'SELECT * FROM clients WHERE id = $1',
+      [clientId]
+    );
+
+    if (clientCheck.rows.length === 0) {
+      return c.json({ message: 'Client not found' }, 404);
+    }
+
+    const now = new Date();
+    const timeOut = now.toTimeString().slice(0, 8);
+    const today = getLocalDateString(now);
+
+    // Check for existing touchpoint today
+    const existing = await pool.query(
+      'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
+      [clientId, user.sub, today]
+    );
+
+    if (existing.rows.length === 0) {
+      return c.json({ message: 'No touchpoint found for today. Please record time-in first.' }, 404);
+    }
+
+    // Update existing touchpoint with time-out
+    const result = await pool.query(
+      `UPDATE touchpoints
+       SET time_departure = $1,
+           time_out_gps_lat = $2,
+           time_out_gps_lng = $3,
+           time_out_gps_address = $4,
+           updated_at = NOW()
+       WHERE id = $5
+       RETURNING *`,
+      [timeOut, validated.latitude, validated.longitude, validated.address, existing.rows[0].id]
+    );
+
+    return c.json({
+      message: 'Time-out recorded',
+      time_out: timeOut,
+      touchpoint: result.rows[0],
+    });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+    }
+    console.error('Time-out error:', error);
     return c.json({ message: 'Internal server error' }, 500);
   }
 });

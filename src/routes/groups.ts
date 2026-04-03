@@ -69,11 +69,16 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
               CONCAT(am.first_name, ' ', am.last_name) as area_manager_name,
               CONCAT(aam.first_name, ' ', aam.last_name) as assistant_area_manager_name,
               CONCAT(c.first_name, ' ', c.last_name) as caravan_name,
-              jsonb_array_length(g.members) as member_count
+              COALESCE(gm.member_count, 0) as member_count
        FROM groups g
        LEFT JOIN users am ON am.id = g.area_manager_id
        LEFT JOIN users aam ON aam.id = g.assistant_area_manager_id
        LEFT JOIN users c ON c.id = g.caravan_id
+       LEFT JOIN (
+         SELECT group_id, COUNT(*) as member_count
+         FROM group_members
+         GROUP BY group_id
+       ) gm ON gm.group_id = g.id
        ${whereClause}
        ORDER BY g.name ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -91,7 +96,6 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
         assistant_area_manager_name: row.assistant_area_manager_name || null,
         caravan_id: row.caravan_id,
         caravan_name: row.caravan_name || null,
-        members: row.members || [],
         member_count: row.member_count || 0,
         created: row.created_at,
       })),

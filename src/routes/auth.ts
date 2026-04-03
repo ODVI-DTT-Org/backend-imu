@@ -15,6 +15,8 @@ import {
   NotFoundError,
 } from '../errors/index.js';
 import { setPermissionsCookie, clearPermissionsCookie, getUserPermissionsAsString } from '../middleware/permissions.js';
+import { setCookie } from '../utils/cookie.js';
+import { authRateLimit } from '../middleware/rate-limit.js';
 
 // Load PowerSync RSA keys from environment variable for JWT signing
 const privateKeyInput = process.env.POWERSYNC_PRIVATE_KEY;
@@ -59,8 +61,8 @@ const resetPasswordSchema = z.object({
   password: z.string().min(8),
 });
 
-// Login endpoint
-auth.post('/login', async (c) => {
+// Login endpoint (with rate limiting)
+auth.post('/login', authRateLimit, async (c) => {
   // Parse request body
   const body = await c.req.json();
   const { email, password } = loginSchema.parse(body);
@@ -120,7 +122,7 @@ auth.post('/login', async (c) => {
     {
       algorithm: 'RS256',
       keyid: 'imu-production-key-20260326',
-      expiresIn: '7d',
+      expiresIn: '1d',
     }
   );
 
@@ -148,7 +150,7 @@ auth.post('/login', async (c) => {
     }),
     { sub: user.id, role: user.role }
   );
-  c.cookie(cookie.name, cookie.value, cookie.options);
+  setCookie(c, cookie);
 
   return c.json({
     access_token: accessToken,
@@ -217,7 +219,7 @@ auth.post('/refresh', async (c) => {
       }),
       { sub: user.id, role: user.role }
     );
-    c.cookie(cookie.name, cookie.value, cookie.options);
+    setCookie(c, cookie);
 
     // Generate new access token
     const accessToken = sign(
@@ -248,7 +250,7 @@ auth.post('/refresh', async (c) => {
       {
         algorithm: 'RS256',
         keyid: 'imu-production-key-20260326',
-        expiresIn: '7d',
+        expiresIn: '1d',
       }
     );
 
@@ -291,7 +293,7 @@ auth.get('/me', authMiddleware, async (c) => {
 });
 
 // Register endpoint (for testing/development)
-auth.post('/register', async (c) => {
+auth.post('/register', authRateLimit, async (c) => {
   try {
     const body = await c.req.json();
     const { email, password, first_name, last_name, role = 'field_agent' } = body;
@@ -318,7 +320,7 @@ auth.post('/register', async (c) => {
 });
 
 // Forgot password - Request password reset
-auth.post('/forgot-password', async (c) => {
+auth.post('/forgot-password', authRateLimit, async (c) => {
   try {
     const body = await c.req.json();
     const { email } = forgotPasswordSchema.parse(body);
@@ -383,7 +385,7 @@ auth.post('/forgot-password', async (c) => {
 });
 
 // Reset password - Complete password reset with token
-auth.post('/reset-password', async (c) => {
+auth.post('/reset-password', authRateLimit, async (c) => {
   try {
     const body = await c.req.json();
     const { token, password } = resetPasswordSchema.parse(body);
@@ -452,7 +454,7 @@ auth.post('/logout', async (c) => {
   try {
     // Clear permissions cookie
     const cookie = clearPermissionsCookie();
-    c.cookie(cookie.name, cookie.value, cookie.options);
+    setCookie(c, cookie);
 
     const authHeader = c.req.header('Authorization');
     if (!authHeader?.startsWith('Bearer ')) {

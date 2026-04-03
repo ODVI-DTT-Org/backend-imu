@@ -12,6 +12,7 @@ import { authMiddleware, requireRole } from './middleware/auth.js';
 import { simpleRequestLogger } from './middleware/request-logger.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
+import { idempotency } from './middleware/idempotency.js';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -79,11 +80,14 @@ app.use('*', cors({
     return null;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'idempotency-key'],
   exposeHeaders: ['Content-Length', 'X-Request-Id'],
   credentials: true,
   maxAge: 86400,
 }));
+
+// Idempotency - Prevent duplicate requests from double-clicks
+app.use('*', idempotency({ expireAfter: 60000 }));
 
 // Error handling - catch all errors and format responses
 app.use('*', simpleRequestLogger());
@@ -475,7 +479,6 @@ app.route('/api/clients', clientsRoutes);
 app.route('/api/users', usersRoutes);
 app.route('/api/agencies', agenciesRoutes);
 app.route('/api/caravans', caravansRoutes);
-app.route('/api/touchpoints', touchpointsRoutes);
 app.route('/api/itineraries', itinerariesRoutes);
 app.route('/api/dashboard', dashboardRoutes);
 app.route('/api/attendance', attendanceRoutes);
@@ -490,6 +493,7 @@ app.route('/api/psgc', psgcRoutes);
 app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
+app.route('/api/touchpoints', touchpointsRoutes);
 app.route('/api/search', searchRoutes);
 app.route('/api/permissions', permissionsRoutes);
 app.route('/api/error-logs', errorLogsRoutes);

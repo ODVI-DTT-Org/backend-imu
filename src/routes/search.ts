@@ -207,11 +207,16 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
     });
   } catch (error) {
     if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Invalid input');
-      error.errors.forEach((err: any) => {
-        validationError.addFieldError(err.path[0] || 'unknown', err.message);
-      });
-      throw validationError;
+      // Return validation error directly instead of throwing
+      return c.json({
+        success: false,
+        code: 'VALIDATION_ERROR',
+        message: 'Invalid input',
+        errors: error.errors.map((err: any) => ({
+          field: err.path[0] || 'unknown',
+          message: err.message,
+        })),
+      }, 400);
     }
     console.error('Search error:', error);
     throw new Error('Failed to search');

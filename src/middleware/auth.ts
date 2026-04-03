@@ -35,11 +35,21 @@ declare module 'hono' {
 export const authMiddleware = async (c: Context, next: Next) => {
   const authHeader = c.req.header('Authorization');
 
-  if (!authHeader?.startsWith('Bearer ')) {
-    return c.json({ message: 'Unauthorized - No token provided' }, 401);
+  // Support token via query parameter for EventSource/SSE connections
+  // (EventSource API doesn't support custom headers)
+  const queryToken = c.req.query('token');
+
+  let token: string | undefined;
+
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.slice(7);
+  } else if (queryToken) {
+    token = queryToken;
   }
 
-  const token = authHeader.slice(7);
+  if (!token) {
+    return c.json({ message: 'Unauthorized - No token provided' }, 401);
+  }
 
   try {
     // Try verifying with new RS256 public key first

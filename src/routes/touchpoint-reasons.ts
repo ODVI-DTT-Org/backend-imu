@@ -37,13 +37,12 @@ touchpointReasons.get('/', authMiddleware, async (c) => {
     const query = `
       SELECT
         id,
-        code as reason_code,
+        reason_code,
         label,
         touchpoint_type,
         role,
         category,
-        sort_order,
-        color
+        sort_order
       FROM touchpoint_reasons
       WHERE ${conditions.join(' AND ')}
       ORDER BY role, touchpoint_type, category, sort_order
@@ -63,8 +62,7 @@ touchpointReasons.get('/', authMiddleware, async (c) => {
         touchpoint_type: row.touchpoint_type,
         role: row.role,
         category: row.category || 'Other',
-        sort_order: row.sort_order,
-        color: row.color
+        sort_order: row.sort_order
       };
 
       flat.push(item);
