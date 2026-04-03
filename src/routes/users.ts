@@ -6,11 +6,13 @@ import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog, auditAuth } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
+  AppError,
   ValidationError,
   NotFoundError,
   AuthenticationError,
   AuthorizationError,
   ConflictError,
+  DatabaseError,
 } from '../errors/index.js';
 import { clearPermissionCache } from '../middleware/permissions.js';
 
@@ -706,6 +708,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       assigned_count: assignedCount,
     });
   } catch (error: any) {
+    // Handle Zod validation errors
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -713,8 +716,22 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       });
       throw validationError;
     }
+
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while assigning municipalities: ${error.message}`)
+        .addDetail('originalError', error.message);
+    }
+
+    // Wrap unknown errors
     console.error('Assign municipalities error:', error);
-    throw new Error('Failed to assign municipalities');
+    throw new DatabaseError('Failed to assign municipalities')
+      .addDetail('originalError', error.message);
   }
 });
 
@@ -751,6 +768,7 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
       deleted_count: result.rows.length,
     });
   } catch (error: any) {
+    // Handle Zod validation errors
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -758,8 +776,22 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
       });
       throw validationError;
     }
+
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while unassigning municipalities: ${error.message}`)
+        .addDetail('originalError', error.message);
+    }
+
+    // Wrap unknown errors
     console.error('Bulk unassign municipalities error:', error);
-    throw new Error('Failed to unassign municipalities');
+    throw new DatabaseError('Failed to unassign municipalities')
+      .addDetail('originalError', error.message);
   }
 });
 
@@ -796,9 +828,22 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
     }
 
     return c.json({ message: 'Municipality unassigned successfully' });
-  } catch (error) {
+  } catch (error: any) {
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while unassigning municipality: ${error.message}`)
+        .addDetail('originalError', error.message);
+    }
+
+    // Wrap unknown errors
     console.error('Unassign municipality error:', error);
-    throw new Error('Failed to unassign municipality');
+    throw new DatabaseError('Failed to unassign municipality')
+      .addDetail('originalError', error.message);
   }
 });
 
