@@ -729,7 +729,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
 
     const body = await c.req.json();
     const schema = z.object({
-      assignments: z.array(z.object({
+      locations: z.array(z.object({
         province: z.string().min(1),
         municipality: z.string().min(1),
       })).min(1),
@@ -743,7 +743,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     }
 
     // Verify all municipalities exist in PSGC table
-    for (const assignment of validated.assignments) {
+    for (const assignment of validated.locations) {
       const { province, municipality } = assignment;
 
       const check = await pool.query(
@@ -758,7 +758,7 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
 
     // Insert user assignments (upsert - handle re-assignments)
     let assignedCount = 0;
-    for (const assignment of validated.assignments) {
+    for (const assignment of validated.locations) {
       const { province, municipality } = assignment;
 
       const existing = await pool.query(
@@ -851,7 +851,7 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
     const body = await c.req.json();
 
     const schema = z.object({
-      assignments: z.array(z.object({
+      locations: z.array(z.object({
         province: z.string().min(1),
         municipality: z.string().min(1),
       })).min(1),
@@ -866,7 +866,7 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
 
     // Bulk soft delete from user_locations
     let deletedCount = 0;
-    for (const assignment of validated.assignments) {
+    for (const assignment of validated.locations) {
       const { province, municipality } = assignment;
 
       const result = await pool.query(
