@@ -527,7 +527,10 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
 
     const body = await c.req.json();
     const schema = z.object({
-      municipality_ids: z.array(z.string()).min(1),
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
     });
     const validated = schema.parse(body);
 
@@ -545,27 +548,27 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
     }
 
     // Verify all municipalities exist in PSGC table
-    for (const municipalityId of validated.municipality_ids) {
-      if (!municipalityId || !municipalityId.includes('-')) {
-        throw new ValidationError(`Invalid municipality ID format: ${municipalityId}`);
-      }
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
 
       const check = await pool.query(
-        `SELECT 1 FROM psgc WHERE TRIM(province) || '-' || TRIM(mun_city) = $1 LIMIT 1`,
-        [municipalityId]
+        `SELECT 1 FROM psgc WHERE TRIM(province) = $1 AND TRIM(mun_city) = $2 LIMIT 1`,
+        [province, municipality]
       );
 
       if (check.rows.length === 0) {
-        throw new NotFoundError(`Municipality not found: ${municipalityId}`);
+        throw new NotFoundError(`Municipality not found: ${province}-${municipality}`);
       }
     }
 
     // Insert group assignments (upsert - handle re-assignments)
     let groupAssigned = 0;
-    for (const municipalityId of validated.municipality_ids) {
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
+
       const existing = await pool.query(
-        'SELECT id, deleted_at FROM group_municipalities WHERE group_id = $1 AND municipality_id = $2',
-        [groupId, municipalityId]
+        'SELECT id, deleted_at FROM group_municipalities WHERE group_id = $1 AND province = $2 AND municipality = $3',
+        [groupId, province, municipality]
       );
 
       if (existing.rows.length > 0) {
@@ -578,8 +581,8 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
         }
       } else {
         await pool.query(
-          'INSERT INTO group_municipalities (id, group_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)',
-          [groupId, municipalityId, currentUser.sub]
+          'INSERT INTO group_municipalities (id, group_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
+          [groupId, province, municipality, currentUser.sub]
         );
         groupAssigned++;
       }
@@ -587,11 +590,8 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
 
     // Also assign to the caravan (user_locations table)
     let caravanAssigned = 0;
-    for (const municipalityId of validated.municipality_ids) {
-      // Extract province and municipality from municipality_id (format: "PROVINCE-MUNICIPALITY")
-      const parts = municipalityId.split('-');
-      const province = parts[0];
-      const municipality = parts.slice(1).join('-');
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
 
       try {
         // Use INSERT ... ON CONFLICT to prevent duplicates
@@ -658,7 +658,10 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locat
     const body = await c.req.json();
 
     const schema = z.object({
-      municipality_ids: z.array(z.string()).min(1),
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
     });
     const validated = schema.parse(body);
 
@@ -670,25 +673,29 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locat
 
     const caravanId = groupCheck.rows[0].caravan_id;
 
-    // Bulk soft delete from group_municipalities using ANY()
+    // Bulk soft delete from group_municipalities
+    const locationsToDelete = [];
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
+      locationsToDelete.push(`(province = '${province.replace(/'/g, "''")}' AND municipality = '${municipality.replace(/'/g, "''")}')`);
+    }
+    const whereClause = locationsToDelete.join(' OR ');
+
     const groupResult = await pool.query(
       `UPDATE group_municipalities
        SET deleted_at = NOW()
        WHERE group_id = $1
-         AND TRIM(municipality_id) = ANY($2)
+         AND (${whereClause})
          AND deleted_at IS NULL
        RETURNING id`,
-      [groupId, validated.municipality_ids.map(m => m.trim())]
+      [groupId]
     );
 
     // Also remove from caravan (user_locations table)
     let caravanDeleted = 0;
     if (caravanId) {
-      // Parse municipality_ids and delete each one
-      for (const municipalityId of validated.municipality_ids) {
-        const parts = municipalityId.split('-');
-        const province = parts[0];
-        const municipality = parts.slice(1).join('-');
+      for (const location of validated.locations) {
+        const { province, municipality } = location;
 
         const caravanResult = await pool.query(
           `UPDATE user_locations
@@ -705,7 +712,7 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locat
     }
 
     return c.json({
-      message: `Bulk unassigned ${groupResult.rows.length} municipalities`,
+      message: `Bulk unassigned ${groupResult.rows.length} locations`,
       group_deleted_count: groupResult.rows.length,
       caravan_deleted_count: caravanDeleted,
     });
@@ -722,11 +729,17 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locat
   }
 });
 
-// DELETE /api/groups/:id/municipalities/:municipalityId - Unassign municipality
-groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+// DELETE /api/groups/:id/locations/:province/:municipality - Unassign location
+groups.delete('/:id/locations/:province/:municipality', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const groupId = c.req.param('id');
-    const municipalityId = c.req.param('municipalityId');
+    const province = c.req.param('province');
+    const municipality = c.req.param('municipality');
+
+    // Validate required parameters
+    if (!province || !municipality) {
+      throw new ValidationError('province and municipality are required');
+    }
 
     // Get group to find caravan
     const groupCheck = await pool.query('SELECT caravan_id FROM groups WHERE id = $1', [groupId]);
@@ -736,10 +749,10 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requirePerm
 
     const caravanId = groupCheck.rows[0].caravan_id;
 
-    // Remove from group (use TRIM to handle whitespace issues)
+    // Remove from group using province and municipality
     const existing = await pool.query(
-      'SELECT id, deleted_at FROM group_municipalities WHERE group_id = $1 AND TRIM(municipality_id) = TRIM($2)',
-      [groupId, municipalityId]
+      'SELECT id, deleted_at FROM group_municipalities WHERE group_id = $1 AND province = $2 AND municipality = $3',
+      [groupId, province, municipality]
     );
 
     if (existing.rows.length === 0) {
@@ -757,19 +770,14 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requirePerm
     }
 
     // Also remove from caravan (user_locations table) - use province/municipality
-    if (caravanId && municipalityId) {
-      // Parse municipalityId into province and municipality
-      const parts = municipalityId.split('-');
-      const province = parts[0];
-      const municipality = parts.slice(1).join('-');
-
+    if (caravanId) {
       await pool.query(
         'UPDATE user_locations SET deleted_at = COALESCE(deleted_at, NOW()) WHERE user_id = $1 AND province = $2 AND municipality = $3',
         [caravanId, province, municipality]
       );
     }
 
-    return c.json({ message: 'Municipality unassigned successfully' });
+    return c.json({ message: 'Location unassigned successfully' });
   } catch (error) {
     console.error('Unassign municipality error:', error);
     throw new Error();

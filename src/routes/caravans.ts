@@ -433,14 +433,17 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
 
     const body = await c.req.json();
     const schema = z.object({
-      municipality_ids: z.array(z.string()).min(1),
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
     });
     const validated = schema.parse(body);
 
     console.log('[Assign Municipalities] Request:', {
       caravanId,
-      municipalityIds: validated.municipality_ids,
-      count: validated.municipality_ids.length
+      locations: validated.locations,
+      count: validated.locations.length
     });
 
     // Verify caravan exists (is a user with field_agent/caravan role)
@@ -469,15 +472,8 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
     const userId = caravanId;
 
     // Verify all municipalities exist in PSGC table
-    // Parse "province-municipality" format to get separate values
-    for (const municipalityId of validated.municipality_ids) {
-      if (!municipalityId || !municipalityId.includes('-')) {
-        throw new ValidationError(`Invalid municipality ID format: ${municipalityId}`);
-      }
-
-      const parts = municipalityId.split('-');
-      const province = parts[0];
-      const municipality = parts.slice(1).join('-');
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
 
       // Query using separate province and municipality
       const check = await pool.query(
@@ -486,7 +482,7 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
       );
 
       if (check.rows.length === 0) {
-        throw new NotFoundError(`Municipality not found: ${municipalityId}`);
+        throw new NotFoundError(`Municipality not found: ${province}-${municipality}`);
       }
     }
 
@@ -494,11 +490,8 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
     // This approach is atomic and prevents race conditions
     let assigned = 0;
 
-    for (const municipalityId of validated.municipality_ids) {
-      // Parse municipality_id to extract province and municipality
-      const parts = municipalityId.split('-');
-      const province = parts[0];
-      const municipality = parts.slice(1).join('-');
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
 
       try {
         // Try to insert - if unique constraint is violated, update the existing record
@@ -528,8 +521,8 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
 
         // Fallback: Try to find existing location
         const existing = await pool.query(
-          'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2 AND deleted_at IS NULL LIMIT 1',
-          [userId, municipalityId]
+          'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3 AND deleted_at IS NULL LIMIT 1',
+          [userId, province, municipality]
         );
 
         if (existing.rows.length === 0) {
@@ -538,9 +531,9 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
             [userId, province, municipality, currentUser.sub]
           );
           assigned++;
-          console.log('[Assign Municipalities] Created new assignment (fallback):', municipalityId);
+          console.log('[Assign Municipalities] Created new assignment (fallback):', province, municipality);
         } else {
-          console.log('[Assign Municipalities] Skipped (already active):', municipalityId);
+          console.log('[Assign Municipalities] Skipped (already active):', province, municipality);
         }
       }
     }
@@ -581,25 +574,24 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requirePermission('loc
     const body = await c.req.json();
 
     const schema = z.object({
-      municipality_ids: z.array(z.string()).min(1),
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
     });
     const validated = schema.parse(body);
 
     // caravanId IS the user_id
     const userId = caravanId;
 
-    // Bulk soft delete - parse municipality_ids to get province/municipality
+    // Bulk soft delete - use locations array with province/municipality
     const locationsToDelete = [];
-    for (const municipalityId of validated.municipality_ids) {
-      const parts = municipalityId.split('-');
-      if (parts.length >= 2) {
-        const province = parts[0];
-        const municipality = parts.slice(1).join('-');
-        locationsToDelete.push(`(province = '${province.replace(/'/g, "''")}' AND municipality = '${municipality.replace(/'/g, "''")}')`);
-      }
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
+      locationsToDelete.push(`(province = '${province.replace(/'/g, "''")}' AND municipality = '${municipality.replace(/'/g, "''")}')`);
     }
     if (locationsToDelete.length === 0) {
-      throw new ValidationError('No valid municipality IDs provided');
+      throw new ValidationError('No valid locations provided');
     }
     const whereClause = locationsToDelete.join(' OR ');
     const result = await pool.query(
@@ -613,7 +605,7 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requirePermission('loc
     );
 
     return c.json({
-      message: `Bulk unassigned ${result.rows.length} municipalities`,
+      message: `Bulk unassigned ${result.rows.length} locations`,
       deleted_count: result.rows.length,
     });
   } catch (error: any) {

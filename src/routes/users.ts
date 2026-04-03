@@ -914,15 +914,16 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
   }
 });
 
-// DELETE /api/users/:id/municipalities/:municipalityId - Unassign municipality from user (admin, area_manager, assistant_area_manager)
-users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
+// DELETE /api/users/:id/locations/:province/:municipality - Unassign location from user (admin, area_manager, assistant_area_manager)
+users.delete('/:id/locations/:province/:municipality', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
   try {
     const userId = c.req.param('id');
-    const municipalityId = c.req.param('municipalityId');
+    const province = c.req.param('province');
+    const municipality = c.req.param('municipality');
 
     // Validate required parameters
-    if (!municipalityId) {
-      throw new ValidationError('municipalityId is required');
+    if (!province || !municipality) {
+      throw new ValidationError('province and municipality are required');
     }
 
     // Verify user exists
@@ -931,10 +932,7 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
       throw new NotFoundError('User');
     }
 
-    // Remove from user (parse municipalityId into province and municipality)
-    const parts = municipalityId.split('-');
-    const province = parts[0];
-    const municipality = parts.slice(1).join('-');
+    // Note: province and municipality are already extracted from route params above
 
     const existing = await pool.query(
       'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
@@ -955,7 +953,7 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
       );
     }
 
-    return c.json({ message: 'Municipality unassigned successfully' });
+    return c.json({ message: 'Location unassigned successfully' });
   } catch (error: any) {
     // Re-throw AppError instances directly (they already have proper status codes)
     if (error instanceof AppError) {
@@ -964,13 +962,13 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
 
     // Wrap database errors in DatabaseError
     if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
-      throw new DatabaseError(`Database error while unassigning municipality: ${error.message}`)
+      throw new DatabaseError(`Database error while unassigning location: ${error.message}`)
         .addDetail('originalError', error.message);
     }
 
     // Wrap unknown errors
-    console.error('Unassign municipality error:', error);
-    throw new DatabaseError('Failed to unassign municipality')
+    console.error('Unassign location error:', error);
+    throw new DatabaseError('Failed to unassign location')
       .addDetail('originalError', error.message);
   }
 });
