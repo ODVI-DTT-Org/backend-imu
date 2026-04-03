@@ -1,0 +1,71 @@
+# PowerSync Sync Rules for IMU
+# See https://docs.powersync.com/sync/advanced/compatibility
+# Docs: https://docs.powersync.com/sync/streams/overview
+#
+# BUSINESS RULE: Caravan users can VIEW all clients
+# Touchpoint status controls who can CREATE touchpoints
+
+config:
+  edition: 3
+
+# Define Sync Streams to control which data is synced to each user
+streams:
+  # Global data - syncs to all users (reference tables)
+  global:
+    auto_subscribe: true
+    queries:
+      # Touchpoint reasons (26 standard reason codes)
+      - SELECT id, code, label, category, description FROM touchpoint_reasons
+      # PSGC geographic data (single table with all locations)
+      - SELECT id, region, province, mun_city_kind, mun_city, barangay, pin_location, zip_code FROM psgc
+
+  # User profile data - sync current user's profile
+  user_profile:
+    auto_subscribe: true
+    queries:
+      - SELECT up.id, up.user_id, up.name, up.email, up.role, up.avatar_url, up.updated_at
+        FROM user_profiles up
+        WHERE up.user_id = auth.user_id()
+
+  # User municipality assignments - for location-based filtering
+  user_municipalities:
+    auto_subscribe: true
+    queries:
+      - SELECT id, user_id, municipality_id, assigned_at, assigned_by, deleted_at
+        FROM user_locations
+        WHERE user_id = auth.user_id() AND deleted_at IS NULL
+
+  # Client data - ALL clients (business rule: caravan can see all clients)
+  # Optimized with selective column syncing to reduce bandwidth
+  clients:
+    auto_subscribe: true
+    queries:
+      # Core client data - all clients for visibility
+      - SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
+          c.client_type, c.product_type, c.market_type, c.pension_type,
+          c.municipality, c.is_starred, c.created_at, c.updated_at
+        FROM clients c
+
+      # Client addresses - only for active clients
+      - SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
+          a.province, a.postal_code, a.latitude, a.longitude, a.is_primary
+        FROM addresses a
+        JOIN clients c ON c.id = a.client_id
+
+      # Phone numbers - only primary numbers
+      - SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary
+        FROM phone_numbers p
+        WHERE p.is_primary = true
+
+      # Touchpoints - ALL touchpoints for touchpoint_status calculation
+      # This is required for the mobile app to show next touchpoint info
+      - SELECT t.id, t.client_id, t.user_id, t.touchpoint_number, t.type,
+          t.date, t.time_in, t.time_out, t.reason, t.status, t.photo_url,
+          t.odometer_arrival, t.odometer_departure, t.created_at, t.updated_at
+        FROM touchpoints t
+
+  # My touchpoints - touchpoints created by current user
+  my_touchpoints:
+    auto_subscribe: true
+    queries:
+      - SELECT t.* FROM touchpoints t WHERE t.user_id = auth.user_id()
