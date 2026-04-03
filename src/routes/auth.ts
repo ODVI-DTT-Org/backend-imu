@@ -13,10 +13,13 @@ import {
   TokenInvalidError,
   ValidationError,
   NotFoundError,
+  AppError,
+  AuthenticationError,
 } from '../errors/index.js';
 import { setPermissionsCookie, clearPermissionsCookie, getUserPermissionsAsString } from '../middleware/permissions.js';
 import { setCookie } from '../utils/cookie.js';
 import { authRateLimit } from '../middleware/rate-limit.js';
+import { logger } from '../utils/logger.js';
 
 // Load PowerSync RSA keys from environment variable for JWT signing
 const privateKeyInput = process.env.POWERSYNC_PRIVATE_KEY;
@@ -35,7 +38,7 @@ const publicKey = (publicKeyInput || privateKeyInput).trim().replace(/\\n/g, '\n
 const signingKey = privateKey as string;
 const verificationKey = publicKey as string;
 
-console.log('✅ PowerSync keys loaded from environment');
+logger.info('auth', 'PowerSync keys loaded from environment');
 
 const { sign, verify } = jwt;
 const { hash, compare } = bcryptjs;
@@ -181,10 +184,14 @@ auth.post('/refresh', async (c) => {
         // Fall back to old HS256 with JWT_SECRET for backward compatibility
         const jwtSecret = process.env.JWT_SECRET!;
         decoded = verify(refresh_token, jwtSecret, { algorithms: ['HS256'] }) as { sub: string; type: string };
-        console.log('⚠️ Verified old HS256 token - user will get new RS256 tokens');
       } catch (hs256Error) {
         throw new Error('Invalid token: neither RS256 nor HS256 verification succeeded');
       }
+    }
+
+    // Log if user is using old HS256 tokens (will get new RS256 tokens)
+    if (process.env.NODE_ENV !== 'production') {
+      logger.debug('auth/refresh', 'Verified old HS256 token - user will get new RS256 tokens');
     }
 
     if (decoded.type !== 'refresh') {
@@ -258,7 +265,8 @@ auth.post('/refresh', async (c) => {
       access_token: accessToken,
       refresh_token: newRefreshToken,
     });
-  } catch (error) {
+  } catch (error: any) {
+    // Handle Zod validation errors
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -266,8 +274,33 @@ auth.post('/refresh', async (c) => {
       });
       throw validationError;
     }
-    console.error('Refresh error:', error);
-    throw new TokenInvalidError('Invalid refresh token');
+
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      logger.warn('auth/refresh', `Token refresh failed: ${error.message}`);
+      throw error;
+    }
+
+    // Handle JWT specific errors
+    if (error.name === 'TokenExpiredError') {
+      logger.warn('auth/refresh', 'Refresh token expired');
+      throw new TokenExpiredError('Your refresh token has expired. Please log in again.');
+    }
+
+    if (error.name === 'JsonWebTokenError') {
+      logger.warn('auth/refresh', `Invalid token: ${error.message}`);
+      throw new TokenInvalidError('Invalid refresh token format');
+    }
+
+    // Handle database errors
+    if (error.code?.startsWith('23')) {
+      logger.error('auth/refresh', 'Database error during token refresh', { error: error.message });
+      throw new AuthenticationError('Failed to refresh token due to database error');
+    }
+
+    // Log unknown errors and throw a generic error
+    logger.error('auth/refresh', 'Unexpected error during token refresh', { error: error.message, stack: error.stack });
+    throw new AuthenticationError('Failed to refresh token');
   }
 });
 
@@ -286,8 +319,8 @@ auth.get('/me', authMiddleware, async (c) => {
     }
 
     return c.json({ user: result.rows[0] });
-  } catch (error) {
-    console.error('Get user error:', error);
+  } catch (error: any) {
+    logger.error('auth/me', error);
     return c.json({ message: 'Internal server error' }, 500);
   }
 });
@@ -314,7 +347,7 @@ auth.post('/register', authRateLimit, async (c) => {
     if (error.code === '23505') {
       return c.json({ message: 'Email already exists' }, 409);
     }
-    console.error('Register error:', error);
+    logger.error('auth/register', error);
     return c.json({ message: 'Internal server error' }, 500);
   }
 });
@@ -363,7 +396,7 @@ auth.post('/forgot-password', authRateLimit, async (c) => {
     );
 
     if (!emailResult.success) {
-      console.error('Failed to send password reset email:', emailResult.error);
+      logger.error('auth/forgot-password', 'Failed to send password reset email', { error: String(emailResult.error) });
     }
 
     return c.json({
@@ -371,7 +404,7 @@ auth.post('/forgot-password', authRateLimit, async (c) => {
       // Remove in production:
       _dev_reset_url: process.env.NODE_ENV === 'development' ? resetUrl : undefined
     });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -379,7 +412,7 @@ auth.post('/forgot-password', authRateLimit, async (c) => {
       });
       throw validationError;
     }
-    console.error('Forgot password error:', error);
+    logger.error('auth/forgot-password', error);
     throw new Error('Internal server error');
   }
 });
@@ -436,7 +469,7 @@ auth.post('/reset-password', authRateLimit, async (c) => {
     await pool.query('DELETE FROM password_reset_tokens WHERE id = $1', [resetRecord.id]);
 
     return c.json({ message: 'Password has been reset successfully' });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -444,7 +477,7 @@ auth.post('/reset-password', authRateLimit, async (c) => {
       });
       throw validationError;
     }
-    console.error('Reset password error:', error);
+    logger.error('auth/reset-password', error);
     throw new Error('Internal server error');
   }
 });
@@ -526,8 +559,8 @@ auth.get('/permissions', authMiddleware, async (c) => {
       success: true,
       permissions: result.rows,
     });
-  } catch (error) {
-    console.error('Error fetching permissions:', error);
+  } catch (error: any) {
+    logger.error('auth/permissions', error);
     return c.json({ success: false, message: 'Failed to fetch permissions' }, 500);
   }
 });
