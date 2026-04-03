@@ -60,6 +60,8 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
     const caravanId = c.req.query('user_id');
+    const municipality = c.req.query('municipality');
+    const province = c.req.query('province');
     const { startDate, endDate } = getDateRange(period);
 
     // Only admin/staff can view all, field agents can only see their own
@@ -73,6 +75,19 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
     } else if (caravanId) {
       whereClause += ` AND t.user_id = $${paramIndex}`;
       params.push(caravanId);
+      paramIndex++;
+    }
+
+    if (municipality) {
+      whereClause += ` AND c.municipality_id = $${paramIndex}`;
+      params.push(municipality);
+      paramIndex++;
+    }
+
+    if (province) {
+      whereClause += ` AND c.province = $${paramIndex}`;
+      params.push(province);
+      paramIndex++;
     }
 
     const result = await pool.query(
@@ -89,6 +104,7 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
         COUNT(DISTINCT CASE WHEN t.status = 'Completed' THEN t.id END) as completed_count
        FROM touchpoints t
        JOIN users u ON u.id = t.user_id
+       LEFT JOIN clients c ON c.id = t.client_id
        ${whereClause}
        GROUP BY t.user_id, u.first_name, u.last_name
        ORDER BY total_touchpoints DESC`,
