@@ -726,8 +726,10 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     // Insert user assignments (upsert - handle re-assignments)
     let assignedCount = 0;
     for (const municipalityId of validated.municipality_ids) {
-      // Extract province from municipality_id (format: "PROVINCE-MUNICIPALITY")
-      const province = municipalityId.split('-')[0];
+      // Extract province and municipality from municipality_id (format: "PROVINCE-MUNICIPALITY")
+      const parts = municipalityId.split('-');
+      const province = parts[0];
+      const municipality = parts.slice(1).join('-');
 
       const existing = await pool.query(
         'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2',
@@ -737,15 +739,15 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       if (existing.rows.length > 0) {
         if (existing.rows[0].deleted_at) {
           await pool.query(
-            'UPDATE user_locations SET deleted_at = NULL, province = $1, assigned_at = NOW(), assigned_by = $2 WHERE id = $3',
-            [province, currentUser.sub, existing.rows[0].id]
+            'UPDATE user_locations SET deleted_at = NULL, province = $1, municipality = $2, assigned_at = NOW(), assigned_by = $3 WHERE id = $4',
+            [province, municipality, currentUser.sub, existing.rows[0].id]
           );
           assignedCount++;
         }
       } else {
         await pool.query(
-          'INSERT INTO user_locations (id, user_id, municipality_id, province, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
-          [userId, municipalityId, province, currentUser.sub]
+          'INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)',
+          [userId, municipalityId, province, municipality, currentUser.sub]
         );
         assignedCount++;
       }

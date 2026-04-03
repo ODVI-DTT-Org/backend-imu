@@ -403,6 +403,39 @@ app.get('/api/migrate', authMiddleware, requireRole('admin'), async (c) => {
       } catch (e: any) {
         results.push(`⏭️  Migration 042: ${e.message.substring(0, 100)}`);
       }
+
+      // Migration 043: Add municipality column to user_locations table
+      try {
+        await client.query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1
+              FROM information_schema.columns
+              WHERE table_name = 'user_locations'
+              AND column_name = 'municipality'
+            ) THEN
+              ALTER TABLE user_locations ADD COLUMN municipality TEXT;
+            END IF;
+          END $$;
+        `);
+
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_locations_municipality ON user_locations(municipality)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_user_locations_user_province_municipality ON user_locations(user_id, province, municipality) WHERE deleted_at IS NULL`);
+
+        // Backfill existing records
+        await client.query(`
+          UPDATE user_locations
+          SET municipality = SUBSTRING(municipality_id FROM POSITION('-' IN municipality_id) + 1)
+          WHERE municipality IS NULL
+            AND municipality_id IS NOT NULL
+            AND municipality_id LIKE '%-%'
+        `);
+
+        results.push('✅ Migration 043: Added municipality column to user_locations table for PowerSync compatibility');
+      } catch (e: any) {
+        results.push(`⏭️  Migration 043: ${e.message.substring(0, 100)}`);
+      }
     } finally {
       client.release();
     }

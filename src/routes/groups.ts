@@ -575,18 +575,25 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
     // Also assign to the caravan (user_locations table)
     let caravanAssigned = 0;
     for (const municipalityId of validated.municipality_ids) {
+      // Extract province and municipality from municipality_id (format: "PROVINCE-MUNICIPALITY")
+      const parts = municipalityId.split('-');
+      const province = parts[0];
+      const municipality = parts.slice(1).join('-');
+
       try {
         // Use INSERT ... ON CONFLICT to prevent duplicates
         const result = await pool.query(
-          `INSERT INTO user_locations (user_id, municipality_id, assigned_at, assigned_by, deleted_at)
-           VALUES ($1, $2, NOW(), $3, NULL)
+          `INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by)
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)
            ON CONFLICT (user_id, municipality_id)
            DO UPDATE SET
              deleted_at = NULL,
+             province = $3,
+             municipality = $4,
              assigned_at = NOW(),
-             assigned_by = $3
+             assigned_by = $5
            RETURNING (xmax = 0) as inserted`,
-          [caravanId, municipalityId, currentUser.sub]
+          [caravanId, municipalityId, province, municipality, currentUser.sub]
         );
 
         const wasInserted = result.rows[0].inserted;
@@ -603,8 +610,8 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
 
           if (existing.rows.length === 0) {
             await pool.query(
-              'INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)',
-              [caravanId, municipalityId, currentUser.sub]
+              'INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)',
+              [caravanId, municipalityId, province, municipality, currentUser.sub]
             );
             caravanAssigned++;
           }
