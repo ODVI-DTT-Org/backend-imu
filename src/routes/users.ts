@@ -71,6 +71,9 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
     const perPage = parseInt(c.req.query('perPage') || '20');
     const search = c.req.query('search');
     const role = c.req.query('role');
+    const municipality = c.req.query('municipality');
+    const province = c.req.query('province');
+    const status = c.req.query('status');
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -86,6 +89,36 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
     if (role && role !== 'all') {
       conditions.push(`role = $${paramIndex}`);
       params.push(role);
+      paramIndex++;
+    }
+
+    if (status && status !== 'all') {
+      if (status === 'active') {
+        conditions.push(`deleted_at IS NULL`);
+      } else if (status === 'deleted') {
+        conditions.push(`deleted_at IS NOT NULL`);
+      }
+    }
+
+    if (municipality) {
+      conditions.push(`EXISTS (
+        SELECT 1 FROM user_locations ul
+        WHERE ul.user_id = users.id
+          AND ul.municipality_id = $${paramIndex}
+          AND ul.deleted_at IS NULL
+      )`);
+      params.push(municipality);
+      paramIndex++;
+    }
+
+    if (province) {
+      conditions.push(`EXISTS (
+        SELECT 1 FROM user_locations ul
+        WHERE ul.user_id = users.id
+          AND ul.province = $${paramIndex}
+          AND ul.deleted_at IS NULL
+      )`);
+      params.push(province);
       paramIndex++;
     }
 
@@ -655,15 +688,15 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
     const result = await pool.query(
       `SELECT
         ums.id,
-        ums.municipality_id,
         ums.province,
+        ums.municipality,
         ums.assigned_at,
         ums.assigned_by,
         p.region,
         p.province as psgc_province,
         p.mun_city as municipality_name
        FROM user_locations ums
-       LEFT JOIN psgc p ON TRIM(p.province) || '-' || TRIM(p.mun_city) = ums.municipality_id
+       LEFT JOIN psgc p ON TRIM(p.province) = ums.province AND TRIM(p.mun_city) = ums.municipality
        WHERE ums.user_id = $1 AND ums.deleted_at IS NULL
        ORDER BY ums.assigned_at DESC`,
       [userId]
@@ -672,10 +705,9 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
     // Map results to expected format
     const items = result.rows.map(row => ({
       id: row.id,
-      municipality_id: row.municipality_id,
-      municipality_name: row.municipality_name || row.municipality_id,
-      municipality_code: row.municipality_id,
       province: row.province || row.psgc_province || '',
+      municipality: row.municipality,
+      municipality_name: row.municipality_name || row.municipality,
       region_name: row.region || '',
       region_code: row.region || '',
       assigned_at: row.assigned_at,
@@ -732,22 +764,22 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       const municipality = parts.slice(1).join('-');
 
       const existing = await pool.query(
-        'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2',
-        [userId, municipalityId]
+        'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
+        [userId, province, municipality]
       );
 
       if (existing.rows.length > 0) {
         if (existing.rows[0].deleted_at) {
           await pool.query(
-            'UPDATE user_locations SET deleted_at = NULL, province = $1, municipality = $2, assigned_at = NOW(), assigned_by = $3 WHERE id = $4',
-            [province, municipality, currentUser.sub, existing.rows[0].id]
+            'UPDATE user_locations SET deleted_at = NULL, assigned_at = NOW(), assigned_by = $1 WHERE id = $2',
+            [currentUser.sub, existing.rows[0].id]
           );
           assignedCount++;
         }
       } else {
         await pool.query(
-          'INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)',
-          [userId, municipalityId, province, municipality, currentUser.sub]
+          'INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
+          [userId, province, municipality, currentUser.sub]
         );
         assignedCount++;
       }
@@ -831,20 +863,30 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
       throw new NotFoundError('User');
     }
 
-    // Bulk soft delete from user_locations using ANY()
-    const result = await pool.query(
-      `UPDATE user_locations
-       SET deleted_at = NOW()
-       WHERE user_id = $1
-         AND TRIM(municipality_id) = ANY($2)
-         AND deleted_at IS NULL
-       RETURNING id`,
-      [userId, validated.municipality_ids.map(m => m.trim())]
-    );
+    // Bulk soft delete from user_locations
+    // Parse municipality_ids and delete each one
+    let deletedCount = 0;
+    for (const municipalityId of validated.municipality_ids) {
+      const parts = municipalityId.split('-');
+      const province = parts[0];
+      const municipality = parts.slice(1).join('-');
+
+      const result = await pool.query(
+        `UPDATE user_locations
+         SET deleted_at = NOW()
+         WHERE user_id = $1
+           AND province = $2
+           AND municipality = $3
+           AND deleted_at IS NULL
+         RETURNING id`,
+        [userId, province, municipality]
+      );
+      deletedCount += result.rowCount || 0;
+    }
 
     return c.json({
-      message: `Bulk unassigned ${result.rows.length} municipalities`,
-      deleted_count: result.rows.length,
+      message: `Bulk unassigned ${deletedCount} municipalities`,
+      deleted_count: deletedCount,
     });
   } catch (error: any) {
     // Handle Zod validation errors
@@ -886,10 +928,14 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
       throw new NotFoundError('User');
     }
 
-    // Remove from user (use TRIM to handle whitespace issues)
+    // Remove from user (parse municipalityId into province and municipality)
+    const parts = municipalityId.split('-');
+    const province = parts[0];
+    const municipality = parts.slice(1).join('-');
+
     const existing = await pool.query(
-      'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND TRIM(municipality_id) = TRIM($2)',
-      [userId, municipalityId]
+      'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
+      [userId, province, municipality]
     );
 
     if (existing.rows.length === 0) {
