@@ -174,6 +174,12 @@ auth.post('/refresh', async (c) => {
     const body = await c.req.json();
     const { refresh_token } = refreshSchema.parse(body);
 
+    // Log refresh attempt (token partially redacted for security)
+    logger.info('auth/refresh', `Token refresh attempt`, {
+      tokenPrefix: refresh_token.substring(0, 20) + '...',
+      tokenLength: refresh_token.length,
+    });
+
     // Verify refresh token - try RS256 first (new tokens), then HS256 (old tokens for backward compatibility)
     let decoded: { sub: string; type: string };
     try {
@@ -292,14 +298,23 @@ auth.post('/refresh', async (c) => {
       throw new TokenInvalidError('Invalid refresh token format');
     }
 
+    if (error.name === 'NotBeforeError') {
+      logger.warn('auth/refresh', `Token not yet valid: ${error.message}`);
+      throw new TokenInvalidError('Refresh token not yet valid');
+    }
+
     // Handle database errors
     if (error.code?.startsWith('23')) {
       logger.error('auth/refresh', 'Database error during token refresh', { error: error.message });
       throw new AuthenticationError('Failed to refresh token due to database error');
     }
 
-    // Log unknown errors and throw a generic error
-    logger.error('auth/refresh', 'Unexpected error during token refresh', { error: error.message, stack: error.stack });
+    // Log unknown errors with full details for debugging
+    logger.error('auth/refresh', 'Unexpected error during token refresh', {
+      error: error.message,
+      name: error.name,
+      stack: error.stack,
+    });
     throw new AuthenticationError('Failed to refresh token');
   }
 });
