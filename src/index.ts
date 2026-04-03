@@ -354,10 +354,33 @@ app.notFound((c) => {
 // Error handler
 app.onError((err, c) => {
   console.error('Server error:', err);
-  return c.json({
-    message: 'Internal Server Error',
-    error: process.env.NODE_ENV === 'development' ? err.message : undefined,
-  }, 500);
+
+  // Use statusCode from error object if available, otherwise default to 500
+  const statusCode = (err as any).statusCode || 500;
+
+  // Build error response
+  const errorResponse: Record<string, any> = {
+    success: false,
+    message: err.message || 'Internal Server Error',
+  };
+
+  // Include additional error details in development
+  if (process.env.NODE_ENV === 'development') {
+    errorResponse.error = err.message;
+    if ((err as any).code) {
+      errorResponse.code = (err as any).code;
+    }
+    if ((err as any).suggestions) {
+      errorResponse.suggestions = (err as any).suggestions;
+    }
+  }
+
+  // Include statusCode from custom errors
+  if ((err as any).statusCode) {
+    errorResponse.statusCode = statusCode;
+  }
+
+  return c.json(errorResponse, statusCode as any);
 });
 
 // Start server

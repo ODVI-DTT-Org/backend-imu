@@ -839,13 +839,13 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       let psgcId = null;
       let matchType = '';
 
-      // Try 1: Exact match on province AND municipality
+      // Try 1: Exact match on province AND municipality (case-insensitive)
       if (client.province && client.municipality) {
         const exactMatch = await pool.query(`
           SELECT id, region, province, mun_city, barangay
           FROM psgc
-          WHERE province = $1
-          AND mun_city = $2
+          WHERE province ILIKE $1
+          AND mun_city ILIKE $2
           LIMIT 1
         `, [client.province, client.municipality]);
 
@@ -855,12 +855,12 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
         }
       }
 
-      // Try 2: Province-only match (use first match for that province)
+      // Try 2: Province-only match (use first match for that province, case-insensitive)
       if (!psgcId && client.province) {
         const provinceMatch = await pool.query(`
           SELECT id, region, province, mun_city, barangay
           FROM psgc
-          WHERE province = $1
+          WHERE province ILIKE $1
           ORDER BY mun_city ASC
           LIMIT 1
         `, [client.province]);
