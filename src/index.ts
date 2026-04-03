@@ -292,6 +292,70 @@ app.get('/api/migrate', authMiddleware, requireRole('admin'), async (c) => {
       } catch (e: any) {
         results.push(`⏭️  Migration 014: ${e.message.substring(0, 100)}`);
       }
+
+      // Migration 038: Create error_logs table
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS error_logs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            request_id VARCHAR(36) UNIQUE NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            code VARCHAR(50) NOT NULL,
+            message TEXT NOT NULL,
+            status_code INTEGER NOT NULL,
+            path VARCHAR(500) NOT NULL,
+            method VARCHAR(10) NOT NULL,
+            user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            ip_address INET,
+            user_agent TEXT,
+            details JSONB DEFAULT '{}',
+            errors JSONB DEFAULT '[]',
+            stack_trace TEXT,
+            suggestions TEXT[] DEFAULT '{}',
+            documentation_url VARCHAR(500),
+            resolved BOOLEAN DEFAULT FALSE,
+            resolved_at TIMESTAMPTZ,
+            resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            resolution_notes TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+
+        // Create indexes
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_logs_request_id ON error_logs(request_id)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_logs_timestamp ON error_logs(timestamp DESC)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_logs_code ON error_logs(code)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_logs_resolved ON error_logs(resolved)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_logs_user_id ON error_logs(user_id)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_error_logs_resolved_timestamp ON error_logs(resolved, timestamp DESC)`);
+
+        // Create trigger function
+        await client.query(`
+          CREATE OR REPLACE FUNCTION update_error_logs_updated_at()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+
+        await client.query(`
+          DROP TRIGGER IF EXISTS trigger_update_error_logs_updated_at ON error_logs
+        `);
+
+        await client.query(`
+          CREATE TRIGGER trigger_update_error_logs_updated_at
+            BEFORE UPDATE ON error_logs
+            FOR EACH ROW
+            EXECUTE FUNCTION update_error_logs_updated_at()
+        `);
+
+        results.push('✅ Migration 038: Created error_logs table with indexes and triggers');
+      } catch (e: any) {
+        results.push(`⏭️  Migration 038: ${e.message.substring(0, 100)}`);
+      }
     } finally {
       client.release();
     }
