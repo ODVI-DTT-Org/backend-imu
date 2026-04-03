@@ -70,7 +70,7 @@ app.use('*', cors({
     return null;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'idempotency-key'],
   exposeHeaders: ['Content-Length', 'X-Request-Id'],
   credentials: true,
   maxAge: 86400,
