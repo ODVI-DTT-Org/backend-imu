@@ -295,4 +295,100 @@ attendance.get('/', authMiddleware, requirePermission('attendance', 'read'), asy
   }
 });
 
+// GET /api/attendance/:id - Get single attendance record
+attendance.get('/:id', authMiddleware, requirePermission('attendance', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const attendanceId = c.req.param('id');
+
+    const result = await pool.query(
+      `SELECT a.*, u.first_name, u.last_name, u.email
+       FROM attendance a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1
+       LIMIT 1`,
+      [attendanceId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new NotFoundError('Attendance record');
+    }
+
+    const record = result.rows[0];
+
+    // Check ownership or admin/staff role
+    if (record.user_id !== user.sub && user.role !== 'admin' && user.role !== 'staff') {
+      throw new AuthorizationError('You do not have permission to view this attendance record');
+    }
+
+    return c.json({
+      ...mapRowToAttendance(record),
+      user: {
+        id: record.user_id,
+        first_name: record.first_name,
+        last_name: record.last_name,
+        email: record.email,
+      },
+    });
+  } catch (error) {
+    console.error('Get attendance by ID error:', error);
+    throw error;
+  }
+});
+
+// POST /api/attendance/:id/check-out - Check out for specific attendance record
+attendance.post('/:id/check-out', authMiddleware, requirePermission('attendance', 'update'), auditMiddleware('attendance'), async (c) => {
+  try {
+    const user = c.get('user');
+    const attendanceId = c.req.param('id');
+    const body = await c.req.json();
+    const validated = checkOutSchema.parse(body);
+
+    // Find attendance record
+    const existing = await pool.query(
+      'SELECT * FROM attendance WHERE id = $1',
+      [attendanceId]
+    );
+
+    if (existing.rows.length === 0) {
+      throw new NotFoundError('Attendance record');
+    }
+
+    const attendanceRecord = existing.rows[0];
+
+    // Check ownership or admin/staff role
+    if (attendanceRecord.user_id !== user.sub && user.role !== 'admin' && user.role !== 'staff') {
+      throw new AuthorizationError('You do not have permission to check out this attendance record');
+    }
+
+    if (attendanceRecord.time_out) {
+      throw new ConflictError('Already checked out');
+    }
+
+    // Update with check-out time and location
+    const result = await pool.query(
+      `UPDATE attendance
+       SET time_out = NOW(),
+           location_out_lat = $1,
+           location_out_lng = $2,
+           notes = COALESCE($3, notes)
+       WHERE id = $4
+       RETURNING *`,
+      [validated.latitude, validated.longitude, validated.notes, attendanceId]
+    );
+
+    return c.json(mapRowToAttendance(result.rows[0]));
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    console.error('Check-out by ID error:', error);
+    throw error;
+  }
+});
+
 export default attendance;

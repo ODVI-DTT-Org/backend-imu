@@ -1,7 +1,15 @@
-import { defineConfig } from 'vitest/config'
+/**
+ * Test Setup Configuration
+ *
+ * Sets up environment variables for tests
+ */
 
-// Set environment variables at module level
-process.env.POWERSYNC_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+import { beforeAll } from 'vitest';
+
+// Set required environment variables for tests
+beforeAll(() => {
+  // PowerSync keys (using test keys for testing)
+  process.env.POWERSYNC_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cJK
 ZmLuFKXaYNdTWaUB+bhXmPLcqIxHG1OLvLzY1BqEgHxQ1jBrLpLN+4nUmBPyR/xJ
 vD8S8zJYLhVHUjN1aYJKMHlyJK4mCqLpKWWsQHfP5QKXHEVX+FOWLYJSRHuS8XSj
@@ -11,7 +19,7 @@ vP5l3FVwLMlAThxAz2DwYWNZYgYD5YLMAGW9lCYMVTIBE7/ZBK2hXF+YKmMHpDQJXR
 YWFBdGVzdC1rZXktMjAyNjA0MDMwEAAoIBAQC7VJTUt9Us8cJKZmLuFKXaYNdTWaU
 -----END PRIVATE KEY-----`;
 
-process.env.POWERSYNC_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+  process.env.POWERSYNC_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvWUlPS31SzxwkpmYu4U
 pdoh11NZpQH5FleY8pyojEcbU4u8vNjUGoSAfFDWMGsuk0/7idSQE/JH/Em8PxLzM
 lguFUdSM3VpgOkweXIkrjYKokolZaxAd8/lBpccRVf4U5YtglJEe5LxdKPdsoU0BZ
@@ -21,15 +29,21 @@ BPFEDPYPBhY1liBgPlgswBZb2UJxhVMgETr9kEraFcX5iqYwekJFdCkF0ZXN0LWtl
 eS0yMDI2MDQwMzAwIDAQAB
 -----END PUBLIC KEY-----`;
 
-process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/imu_db_test';
-process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-key-for-unit-tests-min-32-chars';
-process.env.POWERSYNC_URL = process.env.POWERSYNC_URL || 'http://localhost:8080';
-process.env.NODE_ENV = 'test';
+  // Database (using connection string from env or default)
+  if (!process.env.DATABASE_URL) {
+    process.env.DATABASE_URL = 'postgresql://postgres:postgres@localhost:5432/imu_db_test';
+  }
 
-export default defineConfig({
-  test: {
-    globals: true,
-    environment: 'node',
-    setupFiles: ['./src/tests/setup.ts'],
-  },
-})
+  // JWT
+  if (!process.env.JWT_SECRET) {
+    process.env.JWT_SECRET = 'test-secret-key-for-unit-tests-min-32-chars';
+  }
+
+  // PowerSync URL
+  if (!process.env.POWERSYNC_URL) {
+    process.env.POWERSYNC_URL = 'http://localhost:8080';
+  }
+
+  // Node environment
+  process.env.NODE_ENV = 'test';
+});
