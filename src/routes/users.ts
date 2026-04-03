@@ -529,7 +529,7 @@ const resetPasswordSchema = z.object({
   new_password: z.string().regex(passwordComplexityRegex, 'Password must be at least 8 characters with 1 uppercase, 1 lowercase, and 1 number'),
 });
 
-users.post('/:id/reset-password', authMiddleware, requirePermission('users', 'update'), auditMiddleware('user'), async (c) => {
+users.post('/:id/reset-password', authMiddleware, requirePermission('users', 'update'), async (c) => {
   try {
     const currentUser = c.get('user');
     const id = c.req.param('id');
@@ -549,7 +549,7 @@ users.post('/:id/reset-password', authMiddleware, requirePermission('users', 'up
     // Audit log password reset
     await auditLog({
       userId: currentUser.sub,
-      action: 'reset_password',
+      action: 'password_reset',
       entity: 'user',
       entityId: id,
       newValues: {
