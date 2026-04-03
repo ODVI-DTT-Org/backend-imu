@@ -125,6 +125,9 @@ clients.get('/', authMiddleware, async (c) => {
     const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
     const municipalityIds = c.req.query('municipality_ids'); // Comma-separated list
+    const municipality = c.req.query('municipality');
+    const province = c.req.query('province');
+    const productType = c.req.query('product_type');
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -160,9 +163,27 @@ clients.get('/', authMiddleware, async (c) => {
       paramIndex++;
     }
 
+    if (productType && productType !== 'all') {
+      conditions.push(`c.product_type = $${paramIndex}`);
+      params.push(productType);
+      paramIndex++;
+    }
+
     if (agencyId) {
       conditions.push(`c.agency_id = $${paramIndex}`);
       params.push(agencyId);
+      paramIndex++;
+    }
+
+    if (municipality) {
+      conditions.push(`c.municipality_id = $${paramIndex}`);
+      params.push(municipality);
+      paramIndex++;
+    }
+
+    if (province) {
+      conditions.push(`c.province = $${paramIndex}`);
+      params.push(province);
       paramIndex++;
     }
 
