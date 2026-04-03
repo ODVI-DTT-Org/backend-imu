@@ -156,14 +156,8 @@ users.post('/', authMiddleware, requirePermission('users', 'create'), auditMiddl
     const validated = createUserSchema.parse(body);
 
     // Validate role-specific manager assignment constraints
-    if (CARAVAN_ROLES.includes(validated.role as any)) {
-      // Caravans must have at least one manager assigned
-      if (!validated.area_manager_id && !validated.assistant_area_manager_id) {
-        return c.json({
-          message: 'Caravan users must be assigned to an Area Manager or Assistant Area Manager'
-        }, 400);
-      }
-    } else if (validated.role === 'tele') {
+    // Note: Caravan users can be created without manager assignments (optional)
+    if (validated.role === 'tele') {
       // Tele users work independently and cannot have manager assignments
       if (validated.area_manager_id || validated.assistant_area_manager_id) {
         return c.json({
@@ -290,11 +284,8 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
     }
 
     // Role-based validation constraints
-    if (validated.role === 'caravan' || CARAVAN_ROLES.includes(validated.role as any)) {
-      if (!validated.area_manager_id && !validated.assistant_area_manager_id) {
-        throw new ValidationError('Caravan requires an Area Manager or Assistant Area Manager assignment');
-      }
-    } else if (validated.role === 'tele') {
+    // Note: Caravan users don't require manager assignments (optional)
+    if (validated.role === 'tele') {
       // Tele users work independently and don't require manager assignments
       if (validated.area_manager_id || validated.assistant_area_manager_id) {
         throw new ValidationError('Tele users cannot have manager assignments');
