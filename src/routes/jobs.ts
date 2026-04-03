@@ -21,6 +21,8 @@ import { psgcMatchingProcessor } from '../services/psgcJobProcessor.js';
 import { reportsJobProcessor } from '../services/reportsJobProcessor.js';
 import { userLocationAssignmentProcessor } from '../services/userLocationJobProcessor.js';
 import { logger } from '../utils/logger.js';
+import { getQueueManager } from '../queues/index.js';
+import { requireRole } from '../middleware/auth.js';
 
 const jobs = new Hono();
 
@@ -278,6 +280,29 @@ jobs.delete('/:id', async (c) => {
   } catch (error: any) {
     logger.error('jobs/cancel', error);
     throw error;
+  }
+});
+
+/**
+ * GET /api/jobs/health
+ * Get queue system health status (admin only)
+ */
+jobs.get('/health', authMiddleware, requireRole('admin'), async (c) => {
+  try {
+    const queueManager = getQueueManager();
+    const health = await queueManager.getHealth();
+
+    return c.json({
+      success: true,
+      health,
+    });
+  } catch (error: any) {
+    logger.error('jobs/health', error);
+    return c.json({
+      success: false,
+      message: 'Failed to get queue health',
+      error: error.message,
+    }, 500);
   }
 });
 

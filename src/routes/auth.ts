@@ -51,10 +51,6 @@ const loginSchema = z.object({
   password: z.string().min(6),
 });
 
-const refreshSchema = z.object({
-  refresh_token: z.string(),
-});
-
 const forgotPasswordSchema = z.object({
   email: z.string().email(),
 });
@@ -95,9 +91,8 @@ auth.post('/login', authRateLimit, async (c) => {
     throw new InvalidCredentialsError();
   }
 
-  // Generate tokens
-  const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
-  const refreshExpiryDays = parseInt(process.env.JWT_REFRESH_EXPIRY_DAYS || '30');
+  // Generate access token (7 days = 168 hours)
+  const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '168');
 
   const accessToken = sign(
     {
@@ -113,20 +108,6 @@ auth.post('/login', authRateLimit, async (c) => {
       algorithm: 'RS256',
       keyid: 'imu-production-key-20260326',
       expiresIn: `${expiryHours}h`,
-    }
-  );
-
-  const refreshToken = sign(
-    {
-      sub: user.id,
-      aud: powerSyncUrl,
-      type: 'refresh',
-    },
-    signingKey,
-    {
-      algorithm: 'RS256',
-      keyid: 'imu-production-key-20260326',
-      expiresIn: `${refreshExpiryDays}d`,
     }
   );
 
@@ -175,7 +156,6 @@ auth.post('/login', authRateLimit, async (c) => {
 
   return c.json({
     access_token: accessToken,
-    refresh_token: refreshToken,
     user: {
       id: user.id,
       email: user.email,
@@ -184,175 +164,6 @@ auth.post('/login', authRateLimit, async (c) => {
       role: user.role,
     },
   });
-});
-
-// Refresh token endpoint
-auth.post('/refresh', async (c) => {
-  try {
-    const body = await c.req.json();
-    const { refresh_token } = refreshSchema.parse(body);
-
-    // Log refresh attempt (token partially redacted for security)
-    logger.info('auth/refresh', `Token refresh attempt`, {
-      tokenPrefix: refresh_token.substring(0, 20) + '...',
-      tokenLength: refresh_token.length,
-    });
-
-    // Verify refresh token - try RS256 first (new tokens), then HS256 (old tokens for backward compatibility)
-    let decoded: { sub: string; type: string };
-    try {
-      // Try verifying with new RS256 public key
-      decoded = verify(refresh_token, verificationKey, { algorithms: ['RS256'] }) as { sub: string; type: string };
-    } catch (rs256Error) {
-      try {
-        // Fall back to old HS256 with JWT_SECRET for backward compatibility
-        const jwtSecret = process.env.JWT_SECRET!;
-        decoded = verify(refresh_token, jwtSecret, { algorithms: ['HS256'] }) as { sub: string; type: string };
-      } catch (hs256Error) {
-        throw new Error('Invalid token: neither RS256 nor HS256 verification succeeded');
-      }
-    }
-
-    // Log if user is using old HS256 tokens (will get new RS256 tokens)
-    if (process.env.NODE_ENV !== 'production') {
-      logger.debug('auth/refresh', 'Verified old HS256 token - user will get new RS256 tokens');
-    }
-
-    if (decoded.type !== 'refresh') {
-      throw new TokenInvalidError('Invalid token type');
-    }
-
-    // Get user from database
-    const result = await pool.query(
-      'SELECT id, email, first_name, last_name, role FROM users WHERE id = $1',
-      [decoded.sub]
-    );
-
-    if (result.rows.length === 0) {
-      throw new NotFoundError('User');
-    }
-
-    const user = result.rows[0];
-    const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
-    const refreshExpiryDays = parseInt(process.env.JWT_REFRESH_EXPIRY_DAYS || '30');
-
-    // Get fresh permissions and update cookie
-    const permissions = await getUserPermissionsAsString(user.id, user.role);
-    const cookie = setPermissionsCookie(
-      permissions.map((p) => {
-        // Handle wildcard permission for admin users
-        if (p === '*') {
-          return {
-            resource: '*',
-            action: '*',
-            constraint_name: undefined,
-            role_slug: user.role,
-          };
-        }
-
-        // Parse standard permission format: resource.action or resource.action:constraint
-        const [resource, actionPart] = p.split('.');
-        if (!actionPart) {
-          // Invalid permission format, skip this permission
-          logger.warn('auth/refresh', `Invalid permission format: ${p}`);
-          return null;
-        }
-
-        const [action, constraint] = actionPart.split(':');
-        return {
-          resource,
-          action,
-          constraint_name: constraint || undefined,
-          role_slug: user.role,
-        };
-      }).filter((p): p is Exclude<typeof p, null> => p !== null), // Filter out null values
-      { sub: user.id, role: user.role }
-    );
-    setCookie(c, cookie);
-
-    // Generate new access token
-    const accessToken = sign(
-      {
-        sub: user.id,
-        aud: powerSyncUrl,
-        email: user.email,
-        first_name: user.first_name,
-        last_name: user.last_name,
-        role: user.role,
-      },
-      signingKey,
-      {
-        algorithm: 'RS256',
-        keyid: 'imu-production-key-20260326',
-        expiresIn: `${expiryHours}h`,
-      }
-    );
-
-    // Generate new refresh token
-    const newRefreshToken = sign(
-      {
-        sub: user.id,
-        aud: powerSyncUrl,
-        type: 'refresh',
-      },
-      signingKey,
-      {
-        algorithm: 'RS256',
-        keyid: 'imu-production-key-20260326',
-        expiresIn: `${refreshExpiryDays}d`,
-      }
-    );
-
-    return c.json({
-      access_token: accessToken,
-      refresh_token: newRefreshToken,
-    });
-  } catch (error: any) {
-    // Handle Zod validation errors
-    if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Invalid input');
-      error.errors.forEach((err: any) => {
-        validationError.addFieldError(err.path[0] || 'unknown', err.message);
-      });
-      throw validationError;
-    }
-
-    // Re-throw AppError instances directly (they already have proper status codes)
-    if (error instanceof AppError) {
-      logger.warn('auth/refresh', `Token refresh failed: ${error.message}`);
-      throw error;
-    }
-
-    // Handle JWT specific errors
-    if (error.name === 'TokenExpiredError') {
-      logger.warn('auth/refresh', 'Refresh token expired');
-      throw new TokenExpiredError('Your refresh token has expired. Please log in again.');
-    }
-
-    if (error.name === 'JsonWebTokenError') {
-      logger.warn('auth/refresh', `Invalid token: ${error.message}`);
-      throw new TokenInvalidError('Invalid refresh token format');
-    }
-
-    if (error.name === 'NotBeforeError') {
-      logger.warn('auth/refresh', `Token not yet valid: ${error.message}`);
-      throw new TokenInvalidError('Refresh token not yet valid');
-    }
-
-    // Handle database errors
-    if (error.code?.startsWith('23')) {
-      logger.error('auth/refresh', 'Database error during token refresh', { error: error.message });
-      throw new AuthenticationError('Failed to refresh token due to database error');
-    }
-
-    // Log unknown errors with full details for debugging
-    logger.error('auth/refresh', 'Unexpected error during token refresh', {
-      error: error.message,
-      name: error.name,
-      stack: error.stack,
-    });
-    throw new AuthenticationError('Failed to refresh token');
-  }
 });
 
 // Get current user profile
