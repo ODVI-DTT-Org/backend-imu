@@ -35,9 +35,6 @@ const createUserSchema = z.object({
   role: z.enum(VALID_ROLES).default('caravan'),
   phone: z.string().optional(),
   avatar_url: z.string().optional(),
-  // Manager assignment fields
-  area_manager_id: z.string().uuid().optional(),
-  assistant_area_manager_id: z.string().uuid().optional(),
 });
 
 const updateUserSchema = createUserSchema.partial().omit({ password: true });
@@ -58,8 +55,6 @@ function mapRowToUser(row: Record<string, any>) {
     role: row.role,
     phone: row.phone,
     avatar: row.avatar_url,
-    area_manager_id: row.area_manager_id,
-    assistant_area_manager_id: row.assistant_area_manager_id,
     created: row.created_at,
     updated: row.updated_at,
   };
@@ -155,27 +150,6 @@ users.post('/', authMiddleware, requirePermission('users', 'create'), auditMiddl
     const body = await c.req.json();
     const validated = createUserSchema.parse(body);
 
-    // Validate role-specific manager assignment constraints
-    // Note: Caravan users can be created without manager assignments (optional)
-    if (validated.role === 'tele') {
-      // Tele users work independently and cannot have manager assignments
-      if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        return c.json({
-          message: 'Tele users cannot have manager assignments'
-        }, 400);
-      }
-    } else if (validated.role === 'assistant_area_manager') {
-      // Assistant Area Managers must have an Area Manager
-      if (!validated.area_manager_id) {
-        throw new ValidationError('Assistant Area Manager must be assigned to an Area Manager');
-      }
-    } else if (validated.role === 'area_manager') {
-      // Area Managers cannot have manager assignments
-      if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        throw new ValidationError('Area Managers cannot be assigned to other managers');
-      }
-    }
-
     // Check if email already exists
     const existing = await pool.query('SELECT id FROM users WHERE email = $1', [validated.email]);
     if (existing.rows.length > 0) {
@@ -198,12 +172,11 @@ users.post('/', authMiddleware, requirePermission('users', 'create'), auditMiddl
     // Get current user for audit logging and RBAC assignment
     const currentUser = c.get('user');
 
-    // Create user profile with manager assignments
+    // Create user profile (note: manager assignments not stored in user_profiles table)
     await pool.query(
-      `INSERT INTO user_profiles (id, user_id, name, email, role, area_manager_id, assistant_area_manager_id)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6)`,
-      [newUser.id, `${validated.first_name} ${validated.last_name}`, validated.email,
-       validated.role, validated.area_manager_id, validated.assistant_area_manager_id]
+      `INSERT INTO user_profiles (id, user_id, name, email, role)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4)`,
+      [newUser.id, `${validated.first_name} ${validated.last_name}`, validated.email, validated.role]
     );
 
     // RBAC Sync: Create user_roles entry for new RBAC system
@@ -244,8 +217,6 @@ users.post('/', authMiddleware, requirePermission('users', 'create'), auditMiddl
         last_name: validated.last_name,
         role: validated.role,
         phone: validated.phone,
-        area_manager_id: validated.area_manager_id,
-        assistant_area_manager_id: validated.assistant_area_manager_id,
       },
       ipAddress: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
       userAgent: c.req.header('user-agent'),
@@ -278,31 +249,9 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
       throw new AuthorizationError('You can only update your own profile');
     }
 
-   // Only admins can change roles and manager assignments
-    if ((validated.role || validated.area_manager_id || validated.assistant_area_manager_id) && currentUser.role !== 'admin') {
-      throw new AuthorizationError('Only admins can change roles and manager assignments');
-    }
-
-    // Role-based validation constraints
-    // Note: Caravan users don't require manager assignments (optional)
-    if (validated.role === 'tele') {
-      // Tele users work independently and don't require manager assignments
-      if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        throw new ValidationError('Tele users cannot have manager assignments');
-      }
-    } else if (validated.role === 'assistant_area_manager') {
-      if (!validated.area_manager_id) {
-        throw new ValidationError('Assistant Area Manager requires an Area Manager assignment');
-      }
-    } else if (validated.role === 'area_manager') {
-      if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        throw new ValidationError('Area Manager cannot have manager assignments');
-      }
-    } else if (validated.role === 'admin') {
-      // Admins should not have manager assignments
-      if (validated.area_manager_id || validated.assistant_area_manager_id) {
-        throw new ValidationError('Admin cannot have manager assignments');
-      }
+   // Only admins can change roles
+    if (validated.role && currentUser.role !== 'admin') {
+      throw new AuthorizationError('Only admins can change roles');
     }
 
     // Check if user exists
@@ -326,8 +275,6 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
       role: 'role',
       phone: 'phone',
       avatar_url: 'avatar_url',
-      area_manager_id: 'area_manager_id',
-      assistant_area_manager_id: 'assistant_area_manager_id',
     };
 
     // Handle password separately (needs hashing)
@@ -359,25 +306,20 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
 
     const updatedUser = result.rows[0];
 
-    // Update user_profiles if name, role, or manager assignments changed
-    if (validated.first_name || validated.last_name || validated.role ||
-        validated.area_manager_id !== undefined || validated.assistant_area_manager_id !== undefined) {
+    // Update user_profiles if name, email, or role changed
+    if (validated.first_name || validated.last_name || validated.email || validated.role) {
       try {
         await pool.query(
           `UPDATE user_profiles
            SET name = COALESCE($1, name),
                email = COALESCE($2, email),
-               role = COALESCE($3, role),
-               area_manager_id = COALESCE($4, area_manager_id),
-               assistant_area_manager_id = COALESCE($5, assistant_area_manager_id)
-           WHERE user_id = $6`,
+               role = COALESCE($3, role)
+           WHERE user_id = $4`,
           [
             validated.first_name && validated.last_name ?
               `${validated.first_name} ${validated.last_name}` : null,
             validated.email || null,
             validated.role || null,
-            validated.area_manager_id !== undefined ? validated.area_manager_id : null,
-            validated.assistant_area_manager_id !== undefined ? validated.assistant_area_manager_id : null,
             id
           ]
         );
