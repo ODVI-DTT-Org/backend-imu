@@ -5,6 +5,7 @@ import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.
 import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog, auditAuth } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import { logger } from '../utils/logger.js';
 import {
   AppError,
   ValidationError,
@@ -774,8 +775,21 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
         .addDetail('originalError', error.message);
     }
 
-    // Wrap unknown errors
+    // Check for relation does not exist error
+    if (error.code === '42P01') {
+      logger.error('users/municipalities', 'Table does not exist', {
+        table: error.message,
+        hint: 'Run migration 020 to create user_locations table'
+      });
+      throw new DatabaseError('Database table missing. Please contact administrator.')
+        .addDetail('missingTable', 'user_locations');
+    }
+
+    // Wrap unknown errors with full details
     console.error('Assign municipalities error:', error);
+    console.error('Error name:', error.name);
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
     throw new DatabaseError('Failed to assign municipalities')
       .addDetail('originalError', error.message);
   }
