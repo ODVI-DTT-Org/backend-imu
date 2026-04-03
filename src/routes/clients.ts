@@ -124,15 +124,29 @@ clients.get('/', authMiddleware, async (c) => {
     const clientType = c.req.query('client_type');
     const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
+    const municipalityIds = c.req.query('municipality_ids'); // Comma-separated list
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
 
-    // NOTE: Business rule - Caravan users can VIEW all clients
-    // Touchpoint status controls who can CREATE touchpoints
-    // No municipality filtering needed for viewing clients
+    // Area-based filtering for non-admin/non-assistant-area-manager roles
+    // Admin and Assistant Area Manager see all clients
+    // Area Manager, Caravan, Tele see only clients in assigned municipalities
+    const shouldFilterByMunicipality = !['admin', 'assistant_area_manager'].includes(user.role);
+
+    if (shouldFilterByMunicipality && municipalityIds) {
+      const idList = municipalityIds.split(',').map(id => id.trim()).filter(id => id);
+      if (idList.length > 0) {
+        conditions.push(`c.psgc_id IN (
+          SELECT id FROM psgc
+          WHERE province || '-' || mun_city = ANY($${paramIndex})
+        )`);
+        params.push(idList);
+        paramIndex++;
+      }
+    }
 
     if (search) {
       conditions.push(`(c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);

@@ -172,6 +172,7 @@ class ErrorLoggerService {
       const appError = error as any;
 
       // Extract first IP from comma-separated list (for x-forwarded-for headers)
+      // PostgreSQL INET type expects a single IP address, not comma-separated list
       const firstIp = context.ipAddress?.split(',')[0]?.trim();
 
       const logData: ErrorLogData = {
