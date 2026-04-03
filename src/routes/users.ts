@@ -656,10 +656,11 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
       `SELECT
         ums.id,
         ums.municipality_id,
+        ums.province,
         ums.assigned_at,
         ums.assigned_by,
         p.region,
-        p.province,
+        p.province as psgc_province,
         p.mun_city as municipality_name
        FROM user_locations ums
        LEFT JOIN psgc p ON TRIM(p.province) || '-' || TRIM(p.mun_city) = ums.municipality_id
@@ -674,6 +675,7 @@ users.get('/:id/municipalities', authMiddleware, async (c) => {
       municipality_id: row.municipality_id,
       municipality_name: row.municipality_name || row.municipality_id,
       municipality_code: row.municipality_id,
+      province: row.province || row.psgc_province || '',
       region_name: row.region || '',
       region_code: row.region || '',
       assigned_at: row.assigned_at,
@@ -724,6 +726,9 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     // Insert user assignments (upsert - handle re-assignments)
     let assignedCount = 0;
     for (const municipalityId of validated.municipality_ids) {
+      // Extract province from municipality_id (format: "PROVINCE-MUNICIPALITY")
+      const province = municipalityId.split('-')[0];
+
       const existing = await pool.query(
         'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2',
         [userId, municipalityId]
@@ -732,15 +737,15 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       if (existing.rows.length > 0) {
         if (existing.rows[0].deleted_at) {
           await pool.query(
-            'UPDATE user_locations SET deleted_at = NULL, assigned_at = NOW(), assigned_by = $1 WHERE id = $2',
-            [currentUser.sub, existing.rows[0].id]
+            'UPDATE user_locations SET deleted_at = NULL, province = $1, assigned_at = NOW(), assigned_by = $2 WHERE id = $3',
+            [province, currentUser.sub, existing.rows[0].id]
           );
           assignedCount++;
         }
       } else {
         await pool.query(
-          'INSERT INTO user_locations (id, user_id, municipality_id, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, NOW(), $3)',
-          [userId, municipalityId, currentUser.sub]
+          'INSERT INTO user_locations (id, user_id, municipality_id, province, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
+          [userId, municipalityId, province, currentUser.sub]
         );
         assignedCount++;
       }
