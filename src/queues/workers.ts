@@ -7,6 +7,10 @@
 
 import { bulkDeleteProcessor } from './processors/bulk-delete-processor.js';
 import { bulkApprovalsProcessor } from './processors/bulk-approvals-processor.js';
+import { reportsProcessor } from './processors/reports-processor.js';
+import { csvExportsProcessor } from './processors/csv-exports-processor.js';
+import { locationAssignmentsProcessor } from './processors/location-assignments-processor.js';
+import { syncOperationsProcessor } from './processors/sync-operations-processor.js';
 import { getQueueManager } from './queue-manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -33,6 +37,38 @@ export async function startWorkers() {
       queueManager.registerWorker('bulk-operations', approvalsWorker);
     }
 
+    // Register reports processor
+    logger.info('Workers', 'Starting reports processor...');
+    await reportsProcessor.start();
+    const reportsWorker = reportsProcessor.getWorker();
+    if (reportsWorker) {
+      queueManager.registerWorker('reports', reportsWorker);
+    }
+
+    // Register CSV exports processor
+    logger.info('Workers', 'Starting CSV exports processor...');
+    await csvExportsProcessor.start();
+    const csvExportsWorker = csvExportsProcessor.getWorker();
+    if (csvExportsWorker) {
+      queueManager.registerWorker('reports', csvExportsWorker);
+    }
+
+    // Register location assignments processor
+    logger.info('Workers', 'Starting location assignments processor...');
+    await locationAssignmentsProcessor.start();
+    const locationAssignmentsWorker = locationAssignmentsProcessor.getWorker();
+    if (locationAssignmentsWorker) {
+      queueManager.registerWorker('location-assignments', locationAssignmentsWorker);
+    }
+
+    // Register sync operations processor
+    logger.info('Workers', 'Starting sync operations processor...');
+    await syncOperationsProcessor.start();
+    const syncOperationsWorker = syncOperationsProcessor.getWorker();
+    if (syncOperationsWorker) {
+      queueManager.registerWorker('sync-operations', syncOperationsWorker);
+    }
+
     logger.info('Workers', 'All workers started successfully');
   } catch (error) {
     logger.error('Workers', 'Failed to start workers', error);
@@ -50,6 +86,18 @@ export async function stopWorkers() {
 
     logger.info('Workers', 'Stopping bulk approvals processor...');
     await bulkApprovalsProcessor.stop();
+
+    logger.info('Workers', 'Stopping reports processor...');
+    await reportsProcessor.stop();
+
+    logger.info('Workers', 'Stopping CSV exports processor...');
+    await csvExportsProcessor.stop();
+
+    logger.info('Workers', 'Stopping location assignments processor...');
+    await locationAssignmentsProcessor.stop();
+
+    logger.info('Workers', 'Stopping sync operations processor...');
+    await syncOperationsProcessor.stop();
 
     logger.info('Workers', 'All workers stopped successfully');
   } catch (error) {

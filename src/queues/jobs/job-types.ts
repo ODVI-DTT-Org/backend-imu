@@ -124,6 +124,7 @@ export interface ReportJobData extends BaseJobData {
     userId?: string;
     municipality?: string;
     province?: string;
+    clientType?: string;
     format?: 'json' | 'csv';
   };
 }
