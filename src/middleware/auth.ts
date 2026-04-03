@@ -51,11 +51,16 @@ export const authMiddleware = async (c: Context, next: Next) => {
     return c.json({ message: 'Unauthorized - No token provided' }, 401);
   }
 
+  // Debug: Log token verification attempt
+  const tokenPrefix = token.substring(0, 20);
+  console.log(`[auth] Verifying token, prefix: ${tokenPrefix}...`);
+
   try {
     // Try verifying with new RS256 public key first
     let decoded: JwtPayload;
     try {
       decoded = verify(token, publicKey, { algorithms: ['RS256'] }) as JwtPayload;
+      console.log(`[auth] ✅ RS256 token verified for user: ${decoded.email}`);
     } catch (rs256Error) {
       // Fall back to old HS256 with JWT_SECRET for backward compatibility
       try {
@@ -63,12 +68,14 @@ export const authMiddleware = async (c: Context, next: Next) => {
         decoded = verify(token, jwtSecret, { algorithms: ['HS256'] }) as JwtPayload;
         console.log('⚠️ Auth middleware: Verified old HS256 token');
       } catch (hs256Error) {
+        console.log(`[auth] ❌ Token verification failed (RS256 and HS256 both failed)`);
         throw new Error('Invalid token: neither RS256 nor HS256 verification succeeded');
       }
     }
     c.set('user', decoded);
     await next();
   } catch (error) {
+    console.log(`[auth] ❌ Auth failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
     return c.json({ message: 'Invalid or expired token' }, 401);
   }
 };
