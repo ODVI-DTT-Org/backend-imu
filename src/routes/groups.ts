@@ -15,8 +15,6 @@ const groups = new Hono();
 const createGroupSchema = z.object({
   name: z.string().min(1).max(100),
   description: z.string().optional(),
-  area_manager_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
-  assistant_area_manager_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
   caravan_id: z.union([z.string().uuid(), z.literal(''), z.null()]).optional(),
   members: z.array(z.string().uuid()).optional(),
 });
@@ -66,13 +64,9 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
 
     const result = await pool.query(
       `SELECT g.*,
-              CONCAT(am.first_name, ' ', am.last_name) as area_manager_name,
-              CONCAT(aam.first_name, ' ', aam.last_name) as assistant_area_manager_name,
               CONCAT(c.first_name, ' ', c.last_name) as caravan_name,
               COALESCE(gm.member_count, 0) as member_count
        FROM groups g
-       LEFT JOIN users am ON am.id = g.area_manager_id
-       LEFT JOIN users aam ON aam.id = g.assistant_area_manager_id
        LEFT JOIN users c ON c.id = g.caravan_id
        LEFT JOIN (
          SELECT group_id, COUNT(*) as member_count
@@ -90,10 +84,6 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
         id: row.id,
         name: row.name,
         description: row.description,
-        area_manager_id: row.area_manager_id,
-        area_manager_name: row.area_manager_name || null,
-        assistant_area_manager_id: row.assistant_area_manager_id,
-        assistant_area_manager_name: row.assistant_area_manager_name || null,
         caravan_id: row.caravan_id,
         caravan_name: row.caravan_name || null,
         member_count: row.member_count || 0,
@@ -124,12 +114,8 @@ groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c
 
     const result = await pool.query(
       `SELECT g.*,
-              CONCAT(am.first_name, ' ', am.last_name) as area_manager_name,
-              CONCAT(aam.first_name, ' ', aam.last_name) as assistant_area_manager_name,
               CONCAT(c.first_name, ' ', c.last_name) as caravan_name
        FROM groups g
-       LEFT JOIN users am ON am.id = g.area_manager_id
-       LEFT JOIN users aam ON aam.id = g.assistant_area_manager_id
        LEFT JOIN users c ON c.id = g.caravan_id
        ${whereClause}`,
       params
@@ -141,17 +127,26 @@ groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c
 
     const group = result.rows[0];
 
+    // Fetch members for this group
+    const membersResult = await pool.query(
+      `SELECT gm.user_id, u.first_name, u.last_name, u.email
+       FROM group_members gm
+       JOIN users u ON u.id = gm.user_id
+       WHERE gm.group_id = $1`,
+      [id]
+    );
+
     return c.json({
       id: group.id,
       name: group.name,
       description: group.description,
-      area_manager_id: group.area_manager_id,
-      area_manager_name: group.area_manager_name || null,
-      assistant_area_manager_id: group.assistant_area_manager_id,
-      assistant_area_manager_name: group.assistant_area_manager_name || null,
       caravan_id: group.caravan_id,
       caravan_name: group.caravan_name || null,
-      members: group.members || [],
+      members: membersResult.rows.map(m => ({
+        id: m.user_id,
+        name: `${m.first_name} ${m.last_name}`,
+        email: m.email
+      })),
       created: group.created_at,
     });
   } catch (error) {
@@ -169,25 +164,35 @@ groups.post('/', authMiddleware, requirePermission('groups', 'create'), auditMid
 
     const members = validated.members || [];
 
+    // Insert group (only columns that exist in schema)
     const result = await pool.query(
-      `INSERT INTO groups (id, name, description, area_manager_id, assistant_area_manager_id, caravan_id, members)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO groups (id, name, description, caravan_id)
+       VALUES (gen_random_uuid(), $1, $2, $3) RETURNING *`,
       [
         validated.name,
-        validated.description,
-        validated.area_manager_id || null,
-        validated.assistant_area_manager_id || null,
-        validated.caravan_id || null,
-        JSON.stringify(members)
+        validated.description || null,
+        validated.caravan_id || null
       ]
     );
 
+    const groupId = result.rows[0].id;
+
+    // Insert members into group_members junction table
+    if (members.length > 0) {
+      const memberValues = members.map((memberId, index) => {
+        return `($${index + 1}, '${groupId}', '${memberId}')`;
+      }).join(', ');
+
+      await pool.query(
+        `INSERT INTO group_members (group_id, user_id) VALUES ${memberValues}
+         ON CONFLICT (group_id, user_id) DO NOTHING`
+      );
+    }
+
     return c.json({
-      id: result.rows[0].id,
+      id: groupId,
       name: result.rows[0].name,
       description: result.rows[0].description,
-      area_manager_id: result.rows[0].area_manager_id,
-      assistant_area_manager_id: result.rows[0].assistant_area_manager_id,
       caravan_id: result.rows[0].caravan_id,
       members: members,
       created: result.rows[0].created_at,
@@ -212,25 +217,11 @@ groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditM
     const id = c.req.param('id');
     const body = await c.req.json();
 
-    // Convert empty strings to null for role fields
-    const processedBody = {
-      ...body,
-      area_manager_id: body.area_manager_id === '' ? null : body.area_manager_id,
-      assistant_area_manager_id: body.assistant_area_manager_id === '' ? null : body.assistant_area_manager_id,
-      caravan_id: body.caravan_id === '' ? null : body.caravan_id
-    };
+    console.log('[Groups] PUT request body:', JSON.stringify(body, null, 2));
+    const validated = updateGroupSchema.parse(body);
 
-    console.log('[Groups] PUT request body:', JSON.stringify(processedBody, null, 2));
-    const validated = updateGroupSchema.parse(processedBody);
-
-    let whereClause = 'WHERE id = $1';
-    const params: any[] = [id];
-    if (user.role === 'field_agent') {
-      whereClause += ' AND area_manager_id = $2';
-      params.push(user.sub);
-    }
-
-    const groupCheck = await pool.query(`SELECT * FROM groups ${whereClause}`, params);
+    // Check if group exists
+    const groupCheck = await pool.query('SELECT * FROM groups WHERE id = $1', [id]);
     if (groupCheck.rows.length === 0) {
       throw new NotFoundError('Group');
     }
@@ -247,21 +238,9 @@ groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditM
       updateFields.push(`description = $${paramIndex++}`);
       updateValues.push(validated.description);
     }
-    if (validated.area_manager_id !== undefined) {
-      updateFields.push(`area_manager_id = $${paramIndex++}`);
-      updateValues.push(validated.area_manager_id);
-    }
-    if (validated.assistant_area_manager_id !== undefined) {
-      updateFields.push(`assistant_area_manager_id = $${paramIndex++}`);
-      updateValues.push(validated.assistant_area_manager_id);
-    }
     if (validated.caravan_id !== undefined) {
       updateFields.push(`caravan_id = $${paramIndex++}`);
       updateValues.push(validated.caravan_id);
-    }
-    if (validated.members !== undefined) {
-      updateFields.push(`members = $${paramIndex++}`);
-      updateValues.push(JSON.stringify(validated.members));
     }
 
     if (updateFields.length === 0) {
@@ -274,14 +253,43 @@ groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditM
       updateValues
     );
 
+    // Handle members update if provided
+    if (validated.members !== undefined) {
+      // Delete existing members
+      await pool.query('DELETE FROM group_members WHERE group_id = $1', [id]);
+
+      // Insert new members
+      if (validated.members.length > 0) {
+        const memberValues = validated.members.map((memberId, index) => {
+          return `($${index + 1}, '${id}', '${memberId}')`;
+        }).join(', ');
+
+        await pool.query(
+          `INSERT INTO group_members (group_id, user_id) VALUES ${memberValues}
+           ON CONFLICT (group_id, user_id) DO NOTHING`
+        );
+      }
+    }
+
+    // Fetch updated members
+    const membersResult = await pool.query(
+      `SELECT gm.user_id, u.first_name, u.last_name, u.email
+       FROM group_members gm
+       JOIN users u ON u.id = gm.user_id
+       WHERE gm.group_id = $1`,
+      [id]
+    );
+
     return c.json({
       id: result.rows[0].id,
       name: result.rows[0].name,
       description: result.rows[0].description,
-      area_manager_id: result.rows[0].area_manager_id,
-      assistant_area_manager_id: result.rows[0].assistant_area_manager_id,
       caravan_id: result.rows[0].caravan_id,
-      members: result.rows[0].members || [],
+      members: membersResult.rows.map(m => ({
+        id: m.user_id,
+        name: `${m.first_name} ${m.last_name}`,
+        email: m.email
+      })),
       created: result.rows[0].created_at,
     });
   } catch (error: any) {
