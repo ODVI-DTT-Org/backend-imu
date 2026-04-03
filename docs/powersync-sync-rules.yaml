@@ -31,7 +31,7 @@ streams:
   user_municipalities:
     auto_subscribe: true
     queries:
-      - SELECT id, user_id, municipality_id, assigned_at, assigned_by, deleted_at
+      - SELECT id, user_id, province, municipality, assigned_at, assigned_by, deleted_at
         FROM user_locations
         WHERE user_id = auth.user_id() AND deleted_at IS NULL
 

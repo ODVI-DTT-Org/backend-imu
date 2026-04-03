@@ -1,27 +1,110 @@
 # PowerSync Sync Configuration for IMU
-# Minimal configuration to get started
+# Docs: https://docs.powersync.com/sync/streams/overview
+#
+# BUSINESS RULE: Caravan users can VIEW all clients
+# Touchpoint status controls who can CREATE touchpoints
 
 config:
   edition: 3
 
+# Define Sync Streams to control which data is synced to each user
 streams:
   # ============================================================
-  # GLOBAL DATA - Sync to all users
+  # GLOBAL DATA - Sync to all users (reference tables)
   # ============================================================
 
-  # PSGC (Philippine Standard Geographic Code) - for location picker
+  # PSGC geographic data (single table with all locations)
   psgc:
     auto_subscribe: true
     query: |
-      SELECT id, region, province, mun_city, mun_city_kind, barangay, zip_code
+      SELECT id, region, province, mun_city_kind, mun_city, barangay, pin_location, zip_code
       FROM psgc
 
-  # Touchpoint Reasons - categorized reasons for touchpoints
-  # Categories: e.g., "Follow-up", "Closing", "Information Gathering", etc.
-  # Used to group touchpoint reasons by business purpose in the mobile app
+  # Touchpoint reasons (26 standard reason codes)
   touchpoint_reasons:
     auto_subscribe: true
     query: |
       SELECT id, reason_code, label, touchpoint_type, role, category, sort_order, is_active
       FROM touchpoint_reasons
       WHERE is_active = true
+
+  # ============================================================
+  # USER-SPECIFIC DATA
+  # ============================================================
+
+  # User profile data - sync current user's profile
+  user_profile:
+    auto_subscribe: true
+    query: |
+      SELECT up.id, up.user_id, up.name, up.email, up.role, up.avatar_url, up.updated_at
+      FROM user_profiles up
+      WHERE up.user_id = auth.user_id()
+
+  # User municipality assignments - for location-based filtering
+  # Using separate province and municipality columns
+  user_municipalities:
+    auto_subscribe: true
+    query: |
+      SELECT id, user_id, province, municipality, assigned_at, assigned_by, deleted_at
+      FROM user_locations
+      WHERE user_id = auth.user_id() AND deleted_at IS NULL
+
+  # ============================================================
+  # CLIENT DATA - ALL clients (business rule: caravan can see all)
+  # ============================================================
+
+  clients:
+    auto_subscribe: true
+    query: |
+      SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
+        c.client_type, c.product_type, c.market_type, c.pension_type,
+        c.municipality, c.is_starred, c.created_at, c.updated_at
+      FROM clients c
+
+  # Client addresses - only for active clients
+  client_addresses:
+    auto_subscribe: true
+    query: |
+      SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
+        a.province, a.postal_code, a.latitude, a.longitude, a.is_primary
+      FROM addresses a
+      JOIN clients c ON c.id = a.client_id
+
+  # Phone numbers - only primary numbers
+  phone_numbers:
+    auto_subscribe: true
+    query: |
+      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary
+      FROM phone_numbers p
+      WHERE p.is_primary = true
+
+  # Touchpoints - ALL touchpoints for touchpoint_status calculation
+  # Required for mobile app to show next touchpoint info
+  touchpoints:
+    auto_subscribe: true
+    query: |
+      SELECT t.id, t.client_id, t.user_id, t.touchpoint_number, t.type,
+        t.date, t.time_in, t.time_out, t.reason, t.status, t.photo_url,
+        t.odometer_arrival, t.odometer_departure, t.created_at, t.updated_at
+      FROM touchpoints t
+
+  # ============================================================
+  # USER-SPECIFIC DATA
+  # ============================================================
+
+  # My touchpoints - touchpoints created by current user
+  my_touchpoints:
+    auto_subscribe: true
+    query: |
+      SELECT t.* FROM touchpoints t WHERE t.user_id = auth.user_id()
+
+  # Approvals - for caravan/tele approval workflow
+  approvals:
+    auto_subscribe: true
+    query: |
+      SELECT a.id, a.type, a.status, a.client_id, a.user_id, a.touchpoint_number,
+        a.role, a.reason, a.notes, a.updated_client_information, a.updated_udi,
+        a.udi_number, a.approved_by, a.approved_at, a.rejected_by, a.rejected_at,
+        a.rejection_reason, a.created_at, a.updated_at
+      FROM approvals a
+      WHERE a.user_id = auth.user_id()
