@@ -143,15 +143,32 @@ auth.post('/login', authRateLimit, async (c) => {
   const cookie = setPermissionsCookie(
     // Convert string[] to Permission[] format for cookie function
     permissions.map((p) => {
+      // Handle wildcard permission for admin users
+      if (p === '*') {
+        return {
+          resource: '*',
+          action: '*',
+          constraint_name: undefined,
+          role_slug: user.role,
+        };
+      }
+
+      // Parse standard permission format: resource.action or resource.action:constraint
       const [resource, actionPart] = p.split('.');
+      if (!actionPart) {
+        // Invalid permission format, skip this permission
+        logger.warn('auth/login', `Invalid permission format: ${p}`);
+        return null;
+      }
+
       const [action, constraint] = actionPart.split(':');
       return {
         resource,
         action,
-        constraint_name: constraint,
+        constraint_name: constraint || undefined,
         role_slug: user.role,
       };
-    }),
+    }).filter((p): p is Exclude<typeof p, null> => p !== null), // Filter out null values
     { sub: user.id, role: user.role }
   );
   setCookie(c, cookie);
@@ -223,15 +240,32 @@ auth.post('/refresh', async (c) => {
     const permissions = await getUserPermissionsAsString(user.id, user.role);
     const cookie = setPermissionsCookie(
       permissions.map((p) => {
+        // Handle wildcard permission for admin users
+        if (p === '*') {
+          return {
+            resource: '*',
+            action: '*',
+            constraint_name: undefined,
+            role_slug: user.role,
+          };
+        }
+
+        // Parse standard permission format: resource.action or resource.action:constraint
         const [resource, actionPart] = p.split('.');
+        if (!actionPart) {
+          // Invalid permission format, skip this permission
+          logger.warn('auth/refresh', `Invalid permission format: ${p}`);
+          return null;
+        }
+
         const [action, constraint] = actionPart.split(':');
         return {
           resource,
           action,
-          constraint_name: constraint,
+          constraint_name: constraint || undefined,
           role_slug: user.role,
         };
-      }),
+      }).filter((p): p is Exclude<typeof p, null> => p !== null), // Filter out null values
       { sub: user.id, role: user.role }
     );
     setCookie(c, cookie);
