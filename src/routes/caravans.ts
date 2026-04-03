@@ -11,6 +11,8 @@ import {
   AuthenticationError,
   ConflictError,
 } from '../errors/index.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const caravans = new Hono();
 
@@ -292,7 +294,7 @@ caravans.delete('/:id', authMiddleware, requirePermission('caravans', 'delete'),
   }
 });
 
-// POST /api/caravans/bulk-delete - Bulk delete caravans (admin only)
+// POST /api/caravans/bulk-delete - Bulk delete caravans (admin only, now queued)
 caravans.post('/bulk-delete', authMiddleware, requirePermission('caravans', 'delete'), auditMiddleware('caravan', 'bulk_delete'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
@@ -306,33 +308,22 @@ caravans.post('/bulk-delete', authMiddleware, requirePermission('caravans', 'del
       throw new ValidationError('Cannot delete your own account');
     }
 
-    const success: string[] = [];
-    const failed: Array<{ id: string; error: string; code?: string }> = [];
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_CARAVANS,
+      user.sub,
+      ids,
+      { preventSelfDeletion: true }
+    );
 
-    // Process each delete independently (no transaction wrapper)
-    for (const id of ids) {
-      try {
-        const result = await pool.query(
-          'DELETE FROM users WHERE id = $1 AND role = ANY($2) RETURNING id',
-          [id, CARAVAN_ROLES]
-        );
-
-        if (result.rowCount === 0) {
-          success.push(id); // Already deleted or not a caravan
-        } else {
-          success.push(id);
-        }
-      } catch (error: any) {
-        // Check if foreign key constraint
-        if (error.code === '23503') {
-          failed.push({ id, error: 'Cannot delete caravan with dependent records', code: error.code });
-        } else {
-          failed.push({ id, error: 'Failed to delete caravan', code: error.code });
-        }
-      }
-    }
-
-    return c.json({ success, failed });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} caravans`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -342,7 +333,7 @@ caravans.post('/bulk-delete', authMiddleware, requirePermission('caravans', 'del
       throw validationError;
     }
     console.error('Bulk delete caravans error:', error);
-    throw new Error('Failed to bulk delete caravans');
+    throw new Error('Failed to create bulk delete job');
   }
 });
 

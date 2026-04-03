@@ -9,6 +9,8 @@ import {
   NotFoundError,
   AuthenticationError,
 } from '../errors/index.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const groups = new Hono();
 
@@ -346,7 +348,7 @@ groups.delete('/:id', authMiddleware, requirePermission('groups', 'delete'), aud
   }
 });
 
-// POST /api/groups/bulk-delete - Bulk delete groups
+// POST /api/groups/bulk-delete - Bulk delete groups (now queued)
 groups.post('/bulk-delete', authMiddleware, requirePermission('groups', 'delete'), auditMiddleware('group', 'bulk_delete'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
@@ -355,33 +357,21 @@ groups.post('/bulk-delete', authMiddleware, requirePermission('groups', 'delete'
     const body = await c.req.json();
     const { ids } = bulkDeleteSchema.parse(body);
 
-    const success: string[] = [];
-    const failed: Array<{ id: string; error: string; code?: string }> = [];
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_GROUPS,
+      user.sub,
+      ids
+    );
 
-    // Process each delete independently (no transaction wrapper)
-    for (const id of ids) {
-      try {
-        const result = await pool.query(
-          'DELETE FROM groups WHERE id = $1 RETURNING id',
-          [id]
-        );
-
-        if (result.rowCount === 0) {
-          success.push(id); // Already deleted
-        } else {
-          success.push(id);
-        }
-      } catch (error: any) {
-        // Check if foreign key constraint
-        if (error.code === '23503') {
-          failed.push({ id, error: 'Cannot delete group with dependent records', code: error.code });
-        } else {
-          failed.push({ id, error: 'Failed to delete group', code: error.code });
-        }
-      }
-    }
-
-    return c.json({ success, failed });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} groups`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -391,7 +381,7 @@ groups.post('/bulk-delete', authMiddleware, requirePermission('groups', 'delete'
       throw validationError;
     }
     console.error('Bulk delete groups error:', error);
-    throw new Error('Failed to bulk delete groups');
+    throw new Error('Failed to create bulk delete job');
   }
 });
 

@@ -9,6 +9,8 @@ import {
   NotFoundError,
   AuthorizationError,
 } from '../errors/index.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const itineraries = new Hono();
 
@@ -413,38 +415,29 @@ const bulkDeleteSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100)
 });
 
-// POST /api/itineraries/bulk-delete - Bulk delete itineraries
+// POST /api/itineraries/bulk-delete - Bulk delete itineraries (now queued)
 itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'delete'), auditMiddleware('itinerary', 'bulk_delete'), async (c) => {
   try {
+    const user = c.get('user');
+    if (!user) throw new AuthorizationError('Unauthorized');
+
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
-    const success: string[] = [];
-    const failed: Array<{ id: string; error: string; code?: string }> = [];
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_ITINERARIES,
+      user.sub,
+      ids
+    );
 
-    // Process each delete independently (no transaction wrapper - deletes are idempotent)
-    for (const id of ids) {
-      try {
-        const result = await pool.query(
-          'DELETE FROM itineraries WHERE id = $1 RETURNING id',
-          [id]
-        );
-
-        if (result.rowCount === 0) {
-          success.push(id); // Already deleted (404 as success)
-        } else {
-          success.push(id);
-        }
-      } catch (error: any) {
-        // Check if foreign key constraint (itineraries with touchpoints)
-        if (error.code === '23503') {
-          failed.push({ id, error: 'Cannot delete itinerary with dependent touchpoints', code: error.code });
-        } else {
-          failed.push({ id, error: 'Failed to delete itinerary', code: error.code });
-        }
-      }
-    }
-
-    return c.json({ success, failed });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} itineraries`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -454,7 +447,7 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
       throw validationError;
     }
     console.error('Bulk delete itineraries error:', error);
-    throw new Error('Failed to bulk delete itineraries');
+    throw new Error('Failed to create bulk delete job');
   }
 });
 
