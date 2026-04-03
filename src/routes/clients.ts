@@ -747,4 +747,189 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
   }
 });
 
+// GET /api/clients/psgc/status - Get PSGC assignment status
+clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update'), async (c) => {
+  try {
+    // Get statistics about PSGC assignments
+    const statsResult = await pool.query(`
+      SELECT
+        COUNT(*) as total_clients,
+        COUNT(c.psgc_id) as with_psgc,
+        COUNT(*) - COUNT(c.psgc_id) as without_psgc
+      FROM clients c
+    `);
+
+    // Get sample of clients without PSGC (up to 20)
+    const unmatchedResult = await pool.query(`
+      SELECT
+        c.id,
+        c.first_name,
+        c.last_name,
+        c.region,
+        c.province,
+        c.municipality,
+        c.barangay
+      FROM clients c
+      WHERE c.psgc_id IS NULL
+      AND (c.province IS NOT NULL OR c.municipality IS NOT NULL)
+      ORDER BY c.created_at DESC
+      LIMIT 20
+    `);
+
+    // Get sample of recently matched clients (up to 10)
+    const matchedResult = await pool.query(`
+      SELECT
+        c.id,
+        c.first_name,
+        c.last_name,
+        c.region,
+        c.province,
+        c.municipality,
+        c.barangay,
+        psg.region as matched_region,
+        psg.province as matched_province,
+        psg.mun_city as matched_municipality,
+        psg.barangay as matched_barangay,
+        c.updated_at as matched_at
+      FROM clients c
+      INNER JOIN psgc psg ON psg.id = c.psgc_id
+      ORDER BY c.updated_at DESC
+      LIMIT 10
+    `);
+
+    return c.json({
+      stats: statsResult.rows[0],
+      unmatched: unmatchedResult.rows,
+      recently_matched: matchedResult.rows,
+    });
+  } catch (error) {
+    console.error('Get PSGC status error:', error);
+    throw new Error();
+  }
+});
+
+// POST /api/clients/psgc/assign - Assign PSGC IDs to clients
+clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'update'), async (c) => {
+  try {
+    const body = await c.req.json();
+    const { dryRun = false } = body;
+
+    // Get clients without PSGC ID but with province/municipality data
+    const clientsResult = await pool.query(`
+      SELECT
+        c.id,
+        c.first_name,
+        c.last_name,
+        c.region,
+        c.province,
+        c.municipality,
+        c.barangay
+      FROM clients c
+      WHERE c.psgc_id IS NULL
+      AND (c.province IS NOT NULL OR c.municipality IS NOT NULL)
+      ORDER BY c.created_at ASC
+    `);
+
+    const clientsToProcess = clientsResult.rows;
+    const matched: any[] = [];
+    const unmatched: any[] = [];
+
+    for (const client of clientsToProcess) {
+      // Progressive matching strategy
+      let psgcId = null;
+      let matchType = '';
+
+      // Try 1: Exact match on province AND municipality
+      if (client.province && client.municipality) {
+        const exactMatch = await pool.query(`
+          SELECT id, region, province, mun_city, barangay
+          FROM psgc
+          WHERE province = $1
+          AND mun_city = $2
+          LIMIT 1
+        `, [client.province, client.municipality]);
+
+        if (exactMatch.rows.length > 0) {
+          psgcId = exactMatch.rows[0].id;
+          matchType = 'exact';
+        }
+      }
+
+      // Try 2: Province-only match (use first match for that province)
+      if (!psgcId && client.province) {
+        const provinceMatch = await pool.query(`
+          SELECT id, region, province, mun_city, barangay
+          FROM psgc
+          WHERE province = $1
+          ORDER BY mun_city ASC
+          LIMIT 1
+        `, [client.province]);
+
+        if (provinceMatch.rows.length > 0) {
+          psgcId = provinceMatch.rows[0].id;
+          matchType = 'province_fallback';
+        }
+      }
+
+      if (psgcId && !dryRun) {
+        // Update client with PSGC ID
+        await pool.query(`
+          UPDATE clients
+          SET psgc_id = $1,
+              region = COALESCE($2, region),
+              province = COALESCE($3, province),
+              municipality = COALESCE($4, municipality),
+              barangay = COALESCE($5, barangay),
+              updated_at = NOW()
+          WHERE id = $6
+        `, [
+          psgcId,
+          client.region,
+          client.province,
+          client.municipality,
+          client.barangay,
+          client.id
+        ]);
+      }
+
+      if (psgcId) {
+        matched.push({
+          client_id: client.id,
+          client_name: `${client.first_name} ${client.last_name}`,
+          psgc_id: psgcId,
+          match_type: matchType,
+          province: client.province,
+          municipality: client.municipality,
+        });
+      } else {
+        unmatched.push({
+          client_id: client.id,
+          client_name: `${client.first_name} ${client.last_name}`,
+          province: client.province,
+          municipality: client.municipality,
+          barangay: client.barangay,
+        });
+      }
+    }
+
+    return c.json({
+      success: true,
+      dry_run: dryRun,
+      summary: {
+        total_processed: clientsToProcess.length,
+        matched_count: matched.length,
+        unmatched_count: unmatched.length,
+        success_rate: clientsToProcess.length > 0
+          ? (matched.length / clientsToProcess.length * 100).toFixed(1)
+          : 0,
+      },
+      matched,
+      unmatched,
+    });
+  } catch (error) {
+    console.error('Assign PSGC error:', error);
+    throw new Error();
+  }
+});
+
 export default clients;

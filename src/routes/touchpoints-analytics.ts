@@ -20,7 +20,8 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
     const parseAndValidateDate = (dateStr: string): string | null => {
       if (!dateStr) return null;
       const date = new Date(dateStr);
-      if (!date instanceof Date || isNaN(date.getTime())) return null;
+      // Check if date is invalid
+      if (!(date instanceof Date) || isNaN(date.getTime())) return null;
 
       // Normalize to YYYY-MM-DD format for database queries
       const year = date.getFullYear();
@@ -30,8 +31,8 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
     };
 
     // Validate and normalize date formats
-    const normalizedStartDate = parseAndValidateDate(startDate);
-    const normalizedEndDate = parseAndValidateDate(endDate);
+    const normalizedStartDate = parseAndValidateDate(startDate ?? '');
+    const normalizedEndDate = parseAndValidateDate(endDate ?? '');
 
     if (startDate && !normalizedStartDate) {
       return c.json({ message: 'Invalid startDate format. Use YYYY-MM-DD or ISO format' }, 400);

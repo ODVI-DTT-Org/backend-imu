@@ -14,10 +14,12 @@ const TEST_JWT_SECRET = 'test-secret-key-for-integration-tests';
 
 export interface TestUser {
   id: string;
+  sub: string; // Required for JwtPayload compatibility
   email: string;
   first_name: string;
   last_name: string;
   role: string;
+  role_slug?: string;
 }
 
 export interface TestTokens {
@@ -33,11 +35,13 @@ export interface TestTokens {
  */
 export function generateTestToken(user: TestUser): string {
   const payload = {
-    sub: user.id,
+    sub: user.id, // JWT standard subject claim
+    id: user.id, // Include id for compatibility
     email: user.email,
     first_name: user.first_name,
     last_name: user.last_name,
     role: user.role,
+    role_slug: user.role_slug || user.role,
     iat: Math.floor(Date.now() / 1000),
     exp: Math.floor(Date.now() / 1000) + (60 * 60), // 1 hour
   };

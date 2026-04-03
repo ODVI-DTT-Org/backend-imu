@@ -1,18 +1,10 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
-import { v4 as uuidv4 } from 'uuid';
 import 'dotenv/config';
-
-// IMPORTANT: Import database logger BEFORE pool to wrap query methods
-import './middleware/database-logger.js';
 
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
-import { simpleRequestLogger } from './middleware/request-logger.js';
-import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import { errorLogger } from './services/errorLogger.js';
-import { idempotency } from './middleware/idempotency.js';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -36,13 +28,8 @@ import touchpointReasonsRoutes from './routes/touchpoint-reasons.js';
 import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
-import permissionsRoutes from './routes/permissions.js';
-import errorLogsRoutes from './routes/error-logs.js';
 
 const app = new Hono();
-
-// Request logging - log all incoming requests
-app.use('*', simpleRequestLogger());
 
 // CORS configuration for web and mobile app
 app.use('*', cors({
@@ -56,8 +43,6 @@ app.use('*', cors({
       /^capacitor:\/\/localhost$/,
       /^ionic:\/\/localhost$/,
       /^https?:\/\/.*\.preview\.app\.github\.dev$/, // GitHub Codespaces
-      /^https:\/\/imu\.cfbtools\.app$/, // Production web app
-      /^https:\/\/.*\.cfbtools\.app$/, // Any subdomain of cfbtools.app
     ];
 
     // In development, allow all origins
@@ -70,69 +55,14 @@ app.use('*', cors({
       return origin;
     }
 
-    // If origin is null (like mobile apps or curl requests), allow it
-    if (!origin) {
-      return '*';
-    }
-
-    // Log blocked origins for debugging
-    console.warn('CORS: Blocked origin:', origin);
     return null;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'idempotency-key'],
+  allowHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   exposeHeaders: ['Content-Length', 'X-Request-Id'],
   credentials: true,
   maxAge: 86400,
 }));
-
-// Idempotency - Prevent duplicate requests from double-clicks
-app.use('*', idempotency({ expireAfter: 60000 }));
-
-// Error handling - catch all errors and format responses
-app.use('*', simpleRequestLogger());
-
-// Use Hono's built-in error handler instead of middleware
-app.onError((err, c) => {
-  // Get or generate request ID (might be set by request logger middleware)
-  let requestId = (c.get('requestId' as never) as string | undefined);
-  if (!requestId) {
-    requestId = uuidv4();
-  }
-
-  console.error('🔍🔍🔍 APP.ONERROR CALLED 🔍🔍🔍');
-  console.error('🔍 Error type:', err instanceof Error ? err.name : typeof err);
-  console.error('🔍 Error statusCode:', (err as any).statusCode);
-  console.error('🔍 Error message:', err instanceof Error ? err.message : String(err));
-
-  const statusCode = (err as any).statusCode || 500;
-
-  // Get request context for error logging
-  const path = c.req.path;
-  const method = c.req.method;
-  const userId = (c.get('userId' as never) as string | undefined);
-  const ipAddress = c.req.header('x-forwarded-for') || c.req.header('x-real-ip') || undefined;
-  const userAgent = c.req.header('user-agent') || undefined;
-
-  // Log error to database (async, non-blocking)
-  errorLogger.log(err, {
-    requestId,
-    timestamp: new Date().toISOString(),
-    path,
-    method,
-    userId,
-    ipAddress,
-    userAgent,
-  });
-
-  // Return error response with proper status code
-  return c.json({
-    success: false,
-    message: err instanceof Error ? err.message : 'Unknown error',
-    statusCode: statusCode,
-    requestId: requestId,
-  }, statusCode as any);
-});
 
 // Health check endpoint
 app.get('/api/health', async (c) => {
@@ -153,96 +83,6 @@ app.get('/api/health', async (c) => {
     database: dbStatus,
     version: '1.0.0',
   });
-});
-
-// RBAC health check endpoint (admin only)
-app.get('/api/health/rbac', authMiddleware, requireRole('admin'), async (c) => {
-  try {
-    const client = await pool.connect();
-    try {
-      // Check if RBAC components exist
-      const componentsCheck = await client.query(`
-        SELECT
-          (SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_name = 'roles'
-          )) as roles_table,
-          (SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_name = 'permissions'
-          )) as permissions_table,
-          (SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_name = 'user_roles'
-          )) as user_roles_table,
-          (SELECT EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_name = 'role_permissions'
-          )) as role_permissions_table,
-          (SELECT EXISTS (
-            SELECT 1 FROM information_schema.views
-            WHERE view_name = 'user_permissions_view'
-          )) as user_permissions_view,
-          (SELECT EXISTS (
-            SELECT 1 FROM pg_proc
-            WHERE proname = 'has_permission'
-          )) as has_permission_function,
-          (SELECT EXISTS (
-            SELECT 1 FROM pg_proc
-            WHERE proname = 'get_user_permissions'
-          )) as get_user_permissions_function,
-          (SELECT EXISTS (
-            SELECT 1 FROM pg_proc
-            WHERE proname = 'has_role'
-          )) as has_role_function
-      `);
-
-      const components = componentsCheck.rows[0];
-      const allComponentsInstalled = Object.values(components).every((v: any) => v === true);
-
-      let rbacStatus = allComponentsInstalled ? 'installed' : 'partial';
-      if (!components.roles_table) {
-        rbacStatus = 'not_installed';
-      }
-
-      // Get additional stats if RBAC is installed
-      let stats = null;
-      if (components.roles_table) {
-        const statsResult = await client.query(`
-          SELECT
-            (SELECT COUNT(*) FROM roles) as total_roles,
-            (SELECT COUNT(*) FROM permissions) as total_permissions,
-            (SELECT COUNT(*) FROM role_permissions) as total_role_permissions,
-            (SELECT COUNT(*) FROM user_roles WHERE is_active = TRUE) as total_active_user_roles
-        `);
-        stats = statsResult.rows[0];
-      }
-
-      return c.json({
-        rbac_status: rbacStatus,
-        components: {
-          roles_table: components.roles_table,
-          permissions_table: components.permissions_table,
-          user_roles_table: components.user_roles_table,
-          role_permissions_table: components.role_permissions_table,
-          user_permissions_view: components.user_permissions_view,
-          has_permission_function: components.has_permission_function,
-          get_user_permissions_function: components.get_user_permissions_function,
-          has_role_function: components.has_role_function,
-        },
-        stats,
-        timestamp: new Date().toISOString(),
-      });
-    } finally {
-      client.release();
-    }
-  } catch (error: any) {
-    return c.json({
-      rbac_status: 'error',
-      error: error.message,
-      timestamp: new Date().toISOString(),
-    }, 500);
-  }
 });
 
 // Debug endpoint to check and fix approvals table (admin only)
@@ -446,7 +286,6 @@ app.get('/', (c) => {
     version: '1.0.0',
     endpoints: {
       health: '/api/health',
-      healthRbac: '/api/health/rbac',
       auth: '/api/auth',
       upload: '/api/upload',
       clients: '/api/clients',
@@ -467,7 +306,6 @@ app.get('/', (c) => {
       psgc: '/api/psgc',
       touchpointReasons: '/api/touchpoint-reasons',
       touchpointsAnalytics: '/api/touchpoints/analytics',
-      permissions: '/api/permissions',
     },
   });
 });
@@ -479,6 +317,7 @@ app.route('/api/clients', clientsRoutes);
 app.route('/api/users', usersRoutes);
 app.route('/api/agencies', agenciesRoutes);
 app.route('/api/caravans', caravansRoutes);
+app.route('/api/touchpoints', touchpointsRoutes);
 app.route('/api/itineraries', itinerariesRoutes);
 app.route('/api/dashboard', dashboardRoutes);
 app.route('/api/attendance', attendanceRoutes);
@@ -493,13 +332,21 @@ app.route('/api/psgc', psgcRoutes);
 app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
-app.route('/api/touchpoints', touchpointsRoutes);
 app.route('/api/search', searchRoutes);
-app.route('/api/permissions', permissionsRoutes);
-app.route('/api/error-logs', errorLogsRoutes);
 
 // 404 handler
-app.notFound(notFoundHandler);
+app.notFound((c) => {
+  return c.json({ message: 'Not Found' }, 404);
+});
+
+// Error handler
+app.onError((err, c) => {
+  console.error('Server error:', err);
+  return c.json({
+    message: 'Internal Server Error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+  }, 500);
+});
 
 // Start server
 const port = parseInt(process.env.PORT || '3000');

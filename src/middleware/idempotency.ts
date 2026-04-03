@@ -7,12 +7,12 @@
  */
 
 import { Context, Next } from 'hono';
-import { set } from 'lodash-es';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 
 // In-memory cache (in production, use Redis)
 const idempotencyCache = new Map<string, {
   response: any;
-  status: number;
+  status: ContentfulStatusCode;
   timestamp: number;
 }>();
 
@@ -57,11 +57,15 @@ export function idempotency(options?: {
     const originalJson = c.json.bind(c);
 
     // Override to intercept response
-    c.json = (data: any, status?: number) => {
+    c.json = ((data: any, arg?: any) => {
+      // Handle both status number and init object
+      const status = typeof arg === 'number' ? arg : arg?.status;
+      const statusCode = (status ?? 200) as ContentfulStatusCode;
+
       // Cache the response
       idempotencyCache.set(idempotencyKey, {
         response: data,
-        status: status ?? 200,
+        status: statusCode,
         timestamp: Date.now()
       });
 
@@ -75,8 +79,8 @@ export function idempotency(options?: {
         }
       }
 
-      return originalJson(data, status);
-    };
+      return originalJson(data, arg);
+    }) as typeof c.json;
 
     return next();
   };

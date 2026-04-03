@@ -32,15 +32,15 @@ const clientTypes = ['POTENTIAL', 'EXISTING'];
 const employmentStatuses = ['Active', 'Retired', 'Separated', 'On Leave'];
 const departments = ['Police Office', 'Fire Department', 'Bureau of Jail Management', 'NBI'];
 
-function getRandomItem(arr) {
+function getRandomItem<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
-function getRandomInt(min, max) {
+function getRandomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function getRandomEmail(firstName, lastName) {
+function getRandomEmail(firstName: string, lastName: string): string {
   const domains = ['gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com'];
   const randomNum = getRandomInt(1, 999);
   return `${firstName.toLowerCase()}.${lastName.toLowerCase()}${randomNum}@${getRandomItem(domains)}`;
@@ -68,7 +68,7 @@ function getRandomDate() {
   return pastDate.toISOString().split('T')[0];
 }
 
-function generateClient(index) {
+function generateClient(index: number) {
   const firstName = getRandomItem(firstNames);
   const lastName = getRandomItem(lastNames);
   const middleInitial = getRandomItem(middleInitials);
@@ -151,9 +151,10 @@ async function insertClients() {
       await pool.query(query);
       inserted += currentBatchSize;
       console.log(`✅ Inserted ${inserted}/${totalClients} clients`);
-    } catch (error) {
-      console.error(`❌ Error inserting batch ${batch}-${batch + currentBatchSize}:`, error.message);
-      throw error;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error(`❌ Error inserting batch ${batch}-${batch + currentBatchSize}:`, errorMessage);
+      throw err;
     }
   }
 

@@ -6,10 +6,6 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
-import {
-  ValidationError,
-  NotFoundError,
-} from '../errors/index.js';
 
 const psgc = new Hono();
 
@@ -34,7 +30,7 @@ psgc.get('/regions', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch regions error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -71,7 +67,7 @@ psgc.get('/provinces', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch provinces error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -131,7 +127,7 @@ psgc.get('/municipalities', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch municipalities error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -221,7 +217,7 @@ psgc.get('/barangays', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch barangays error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -329,7 +325,7 @@ psgc.get('/search', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Search PSGC error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -356,7 +352,7 @@ psgc.get('/barangays/:id', authMiddleware, async (c) => {
     `, [id]);
 
     if (result.rows.length === 0) {
-      throw new NotFoundError('Barangay');
+      return c.json({ message: 'Barangay not found' }, 404);
     }
 
     const row = result.rows[0];
@@ -372,7 +368,7 @@ psgc.get('/barangays/:id', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch barangay error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -447,7 +443,7 @@ psgc.get('/hierarchy', authMiddleware, async (c) => {
     return c.json({ hierarchy });
   } catch (error) {
     console.error('Fetch hierarchy error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -496,7 +492,7 @@ psgc.get('/user/:userId/assignments', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch user assignments error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -509,13 +505,13 @@ psgc.post('/user/:userId/assignments', authMiddleware, async (c) => {
 
     const psgcIds = body.psgc_ids;
     if (!Array.isArray(psgcIds) || psgcIds.length === 0) {
-      throw new ValidationError('psgc_ids array is required');
+      return c.json({ message: 'psgc_ids array is required' }, 400);
     }
 
     // Verify user exists
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userCheck.rows.length === 0) {
-      throw new NotFoundError('User');
+      return c.json({ message: 'User not found' }, 404);
     }
 
     // Verify all PSGC IDs exist
@@ -525,7 +521,7 @@ psgc.post('/user/:userId/assignments', authMiddleware, async (c) => {
     );
 
     if (psgcCheck.rows.length !== psgcIds.length) {
-      throw new ValidationError('One or more PSGC IDs not found');
+      return c.json({ message: 'One or more PSGC IDs not found' }, 400);
     }
 
     let assigned = 0;
@@ -561,7 +557,7 @@ psgc.post('/user/:userId/assignments', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Assign PSGC error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
@@ -577,7 +573,7 @@ psgc.delete('/user/:userId/assignments/:psgcId', authMiddleware, async (c) => {
     );
 
     if (existing.rows.length === 0) {
-      throw new NotFoundError('Assignment');
+      return c.json({ message: 'Assignment not found' }, 404);
     }
 
     // Soft delete
@@ -589,7 +585,7 @@ psgc.delete('/user/:userId/assignments/:psgcId', authMiddleware, async (c) => {
     return c.json({ message: 'Assignment removed successfully' });
   } catch (error) {
     console.error('Unassign PSGC error:', error);
-    throw new Error();
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
