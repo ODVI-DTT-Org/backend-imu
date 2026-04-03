@@ -839,15 +839,79 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       let psgcId = null;
       let matchType = '';
 
-      // Try 1: Exact match on province AND municipality (case-insensitive)
+      // Try 1: Advanced matching on province AND municipality
+      // This handles word order differences like "CEBU CITY" vs "City of Cebu"
       if (client.province && client.municipality) {
-        const exactMatch = await pool.query(`
+        let exactMatch = null;
+
+        // Strategy 1: Direct pattern match (PSGC municipality in client municipality)
+        exactMatch = await pool.query(`
           SELECT id, region, province, mun_city, barangay
           FROM psgc
-          WHERE province ILIKE $1
-          AND mun_city ILIKE $2
+          WHERE province ILIKE '%' || $1 || '%'
+          AND mun_city ILIKE '%' || $2 || '%'
           LIMIT 1
         `, [client.province, client.municipality]);
+
+        // Strategy 2: Reverse pattern match (client municipality in PSGC municipality)
+        if (exactMatch.rows.length === 0) {
+          exactMatch = await pool.query(`
+            SELECT id, region, province, mun_city, barangay
+            FROM psgc
+            WHERE province ILIKE '%' || $1 || '%'
+            AND $2 ILIKE '%' || mun_city || '%'
+            LIMIT 1
+          `, [client.province, client.municipality]);
+        }
+
+        // Strategy 3: Keyword match - extract main keyword from client municipality
+        // Remove "CITY" suffix from client municipality and try again
+        if (exactMatch.rows.length === 0) {
+          const clientMunicipalityKeyword = client.municipality.replace(/ CITY$/i, '').trim();
+          exactMatch = await pool.query(`
+            SELECT id, region, province, mun_city, barangay
+            FROM psgc
+            WHERE province ILIKE '%' || $1 || '%'
+            AND (
+              mun_city ILIKE '%' || $2 || '%'
+              OR mun_city ILIKE '%' || $3 || '%'
+            )
+            LIMIT 1
+          `, [client.province, client.municipality, clientMunicipalityKeyword]);
+        }
+
+        // Strategy 4: Keyword match - extract main keyword from PSGC municipality
+        if (exactMatch.rows.length === 0) {
+          // Get all PSGC entries for this province and check keyword match
+          const provinceMatches = await pool.query(`
+            SELECT id, region, province, mun_city, barangay
+            FROM psgc
+            WHERE province ILIKE '%' || $1 || '%'
+          `, [client.province]);
+
+          // Extract keyword from client municipality (remove "CITY", "OF", etc.)
+          const clientKeywords = client.municipality
+            .replace(/ CITY$/i, '')
+            .replace(/^(CITY OF|CITY)\s*/i, '')
+            .trim()
+            .toLowerCase();
+
+          // Find PSGC entry where keyword matches in municipality name
+          for (const psgcRow of provinceMatches.rows) {
+            const psgcKeywords = psgcRow.mun_city
+              .replace(/ CITY$/i, '')
+              .replace(/^(CITY OF|CITY)\s*/i, '')
+              .trim()
+              .toLowerCase();
+
+            if (psgcKeywords === clientKeywords ||
+                psgcRow.mun_city.toLowerCase().includes(clientKeywords) ||
+                clientKeywords.includes(psgcKeywords)) {
+              exactMatch = { rows: [psgcRow] };
+              break;
+            }
+          }
+        }
 
         if (exactMatch.rows.length > 0) {
           psgcId = exactMatch.rows[0].id;
@@ -855,21 +919,14 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
         }
       }
 
-      // Try 2: Province-only match (use first match for that province, case-insensitive)
-      if (!psgcId && client.province) {
-        const provinceMatch = await pool.query(`
-          SELECT id, region, province, mun_city, barangay
-          FROM psgc
-          WHERE province ILIKE $1
-          ORDER BY mun_city ASC
-          LIMIT 1
-        `, [client.province]);
-
-        if (provinceMatch.rows.length > 0) {
-          psgcId = provinceMatch.rows[0].id;
-          matchType = 'province_fallback';
+        if (exactMatch.rows.length > 0) {
+          psgcId = exactMatch.rows[0].id;
+          matchType = 'exact';
         }
       }
+
+      // NOTE: No province fallback - we only match when BOTH province AND municipality match
+      // This ensures accuracy rather than false positive matches
 
       if (psgcId && !dryRun) {
         // Update client with PSGC ID
