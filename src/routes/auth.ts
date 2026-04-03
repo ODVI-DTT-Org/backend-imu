@@ -97,6 +97,7 @@ auth.post('/login', authRateLimit, async (c) => {
 
   // Generate tokens
   const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
+  const refreshExpiryDays = parseInt(process.env.JWT_REFRESH_EXPIRY_DAYS || '30');
 
   const accessToken = sign(
     {
@@ -125,7 +126,7 @@ auth.post('/login', authRateLimit, async (c) => {
     {
       algorithm: 'RS256',
       keyid: 'imu-production-key-20260326',
-      expiresIn: '1d',
+      expiresIn: `${refreshExpiryDays}d`,
     }
   );
 
@@ -216,6 +217,7 @@ auth.post('/refresh', async (c) => {
 
     const user = result.rows[0];
     const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
+    const refreshExpiryDays = parseInt(process.env.JWT_REFRESH_EXPIRY_DAYS || '30');
 
     // Get fresh permissions and update cookie
     const permissions = await getUserPermissionsAsString(user.id, user.role);
@@ -263,7 +265,7 @@ auth.post('/refresh', async (c) => {
       {
         algorithm: 'RS256',
         keyid: 'imu-production-key-20260326',
-        expiresIn: '1d',
+        expiresIn: `${refreshExpiryDays}d`,
       }
     );
 
