@@ -35,6 +35,8 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '50');
     const search = c.req.query('search');
+    const status = c.req.query('status');
+    const userId = c.req.query('user_id');
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -46,11 +48,22 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
       conditions.push(`g.caravan_id = $${paramIndex}`);
       params.push(user.sub);
       paramIndex++;
+    } else if (userId) {
+      // Managers can filter by user_id
+      conditions.push(`g.caravan_id = $${paramIndex}`);
+      params.push(userId);
+      paramIndex++;
     }
 
     if (search) {
       conditions.push(`g.name ILIKE $${paramIndex}`);
       params.push(`%${search}%`);
+      paramIndex++;
+    }
+
+    if (status && status !== 'all') {
+      conditions.push(`g.status = $${paramIndex}`);
+      params.push(status);
       paramIndex++;
     }
 
