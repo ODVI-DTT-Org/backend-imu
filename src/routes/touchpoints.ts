@@ -187,6 +187,9 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
     const status = c.req.query('status');
+    const reason = c.req.query('reason');
+    const municipality = c.req.query('municipality');
+    const province = c.req.query('province');
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -223,6 +226,24 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     if (type && type !== 'all') {
       conditions.push(`t.type = $${paramIndex}`);
       params.push(type);
+      paramIndex++;
+    }
+
+    if (reason) {
+      conditions.push(`t.reason = $${paramIndex}`);
+      params.push(reason);
+      paramIndex++;
+    }
+
+    if (municipality) {
+      conditions.push(`c.municipality_id = $${paramIndex}`);
+      params.push(municipality);
+      paramIndex++;
+    }
+
+    if (province) {
+      conditions.push(`c.province = $${paramIndex}`);
+      params.push(province);
       paramIndex++;
     }
 
