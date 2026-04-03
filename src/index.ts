@@ -7,6 +7,7 @@ import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
 import { logger, simpleRequestLogger } from './utils/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { errorLogger } from './services/errorLogger.js';
 import './middleware/database-logger.js'; // Initialize database query logging
 
 import authRoutes from './routes/auth.js';
@@ -374,7 +375,6 @@ app.onError((err, c) => {
   const requestId = (c as any).get('requestId') || `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
   // Log error to database (async, non-blocking)
-  const { errorLogger } = require('./services/errorLogger.js');
   errorLogger.log(error, {
     requestId,
     timestamp: new Date().toISOString(),
