@@ -55,6 +55,9 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
     const date = c.req.query('date');
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
+    const userId = c.req.query('user_id');
+    const municipality = c.req.query('municipality');
+    const province = c.req.query('province');
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -66,6 +69,11 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
       // Filter by user_id (itineraries assigned to this user)
       conditions.push(`i.user_id = $${paramIndex}`);
       params.push(user.sub);
+      paramIndex++;
+    } else if (userId) {
+      // Managers can filter by user_id
+      conditions.push(`i.user_id = $${paramIndex}`);
+      params.push(userId);
       paramIndex++;
     }
 
@@ -96,6 +104,18 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
     if (endDate) {
       conditions.push(`i.scheduled_date <= $${paramIndex}`);
       params.push(endDate);
+      paramIndex++;
+    }
+
+    if (municipality) {
+      conditions.push(`c.municipality_id = $${paramIndex}`);
+      params.push(municipality);
+      paramIndex++;
+    }
+
+    if (province) {
+      conditions.push(`c.province = $${paramIndex}`);
+      params.push(province);
       paramIndex++;
     }
 
