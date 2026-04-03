@@ -596,17 +596,15 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
       try {
         // Use INSERT ... ON CONFLICT to prevent duplicates
         const result = await pool.query(
-          `INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)
-           ON CONFLICT (user_id, municipality_id)
+          `INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by)
+           VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)
+           ON CONFLICT (user_id, province, municipality)
            DO UPDATE SET
              deleted_at = NULL,
-             province = $3,
-             municipality = $4,
              assigned_at = NOW(),
-             assigned_by = $5
+             assigned_by = $4
            RETURNING (xmax = 0) as inserted`,
-          [caravanId, municipalityId, province, municipality, currentUser.sub]
+          [caravanId, province, municipality, currentUser.sub]
         );
 
         const wasInserted = result.rows[0].inserted;
@@ -617,14 +615,14 @@ groups.post('/:id/municipalities', authMiddleware, requirePermission('locations'
         // If constraint doesn't exist yet, fall back to manual check
         if (error.code === '42710' || error.code === '23505') {
           const existing = await pool.query(
-            'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2 AND deleted_at IS NULL LIMIT 1',
-            [caravanId, municipalityId]
+            'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3 AND deleted_at IS NULL LIMIT 1',
+            [caravanId, province, municipality]
           );
 
           if (existing.rows.length === 0) {
             await pool.query(
-              'INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)',
-              [caravanId, municipalityId, province, municipality, currentUser.sub]
+              'INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
+              [caravanId, province, municipality, currentUser.sub]
             );
             caravanAssigned++;
           }
@@ -683,19 +681,27 @@ groups.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locat
       [groupId, validated.municipality_ids.map(m => m.trim())]
     );
 
-    // Also remove from caravan (user_locations table) using ANY()
+    // Also remove from caravan (user_locations table)
     let caravanDeleted = 0;
     if (caravanId) {
-      const caravanResult = await pool.query(
-        `UPDATE user_locations
-         SET deleted_at = NOW()
-         WHERE user_id = $1
-           AND TRIM(municipality_id) = ANY($2)
-           AND deleted_at IS NULL
-         RETURNING id`,
-        [caravanId, validated.municipality_ids.map(m => m.trim())]
-      );
-      caravanDeleted = caravanResult.rows.length;
+      // Parse municipality_ids and delete each one
+      for (const municipalityId of validated.municipality_ids) {
+        const parts = municipalityId.split('-');
+        const province = parts[0];
+        const municipality = parts.slice(1).join('-');
+
+        const caravanResult = await pool.query(
+          `UPDATE user_locations
+           SET deleted_at = NOW()
+           WHERE user_id = $1
+             AND province = $2
+             AND municipality = $3
+             AND deleted_at IS NULL
+           RETURNING id`,
+          [caravanId, province, municipality]
+        );
+        caravanDeleted += caravanResult.rowCount || 0;
+      }
     }
 
     return c.json({
@@ -750,11 +756,16 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requirePerm
       );
     }
 
-    // Also remove from caravan (user_locations table) - use TRIM, idempotent
+    // Also remove from caravan (user_locations table) - use province/municipality
     if (caravanId) {
+      // Parse municipalityId into province and municipality
+      const parts = municipalityId.split('-');
+      const province = parts[0];
+      const municipality = parts.slice(1).join('-');
+
       await pool.query(
-        'UPDATE user_locations SET deleted_at = COALESCE(deleted_at, NOW()) WHERE user_id = $1 AND TRIM(municipality_id) = TRIM($2)',
-        [caravanId, municipalityId]
+        'UPDATE user_locations SET deleted_at = COALESCE(deleted_at, NOW()) WHERE user_id = $1 AND province = $2 AND municipality = $3',
+        [caravanId, province, municipality]
       );
     }
 

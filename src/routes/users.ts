@@ -729,7 +729,10 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
 
     const body = await c.req.json();
     const schema = z.object({
-      municipality_ids: z.array(z.string()).min(1),
+      assignments: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
     });
     const validated = schema.parse(body);
 
@@ -740,28 +743,23 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
     }
 
     // Verify all municipalities exist in PSGC table
-    for (const municipalityId of validated.municipality_ids) {
-      if (!municipalityId || !municipalityId.includes('-')) {
-        throw new ValidationError(`Invalid municipality ID format: ${municipalityId}`);
-      }
+    for (const assignment of validated.assignments) {
+      const { province, municipality } = assignment;
 
       const check = await pool.query(
-        `SELECT 1 FROM psgc WHERE TRIM(province) || '-' || TRIM(mun_city) = $1 LIMIT 1`,
-        [municipalityId]
+        `SELECT 1 FROM psgc WHERE TRIM(province) = $1 AND TRIM(mun_city) = $2 LIMIT 1`,
+        [province, municipality]
       );
 
       if (check.rows.length === 0) {
-        throw new NotFoundError(`Municipality not found: ${municipalityId}`);
+        throw new NotFoundError(`Municipality not found: ${province}-${municipality}`);
       }
     }
 
     // Insert user assignments (upsert - handle re-assignments)
     let assignedCount = 0;
-    for (const municipalityId of validated.municipality_ids) {
-      // Extract province and municipality from municipality_id (format: "PROVINCE-MUNICIPALITY")
-      const parts = municipalityId.split('-');
-      const province = parts[0];
-      const municipality = parts.slice(1).join('-');
+    for (const assignment of validated.assignments) {
+      const { province, municipality } = assignment;
 
       const existing = await pool.query(
         'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
@@ -853,7 +851,10 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
     const body = await c.req.json();
 
     const schema = z.object({
-      municipality_ids: z.array(z.string()).min(1),
+      assignments: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
     });
     const validated = schema.parse(body);
 
@@ -864,12 +865,9 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
     }
 
     // Bulk soft delete from user_locations
-    // Parse municipality_ids and delete each one
     let deletedCount = 0;
-    for (const municipalityId of validated.municipality_ids) {
-      const parts = municipalityId.split('-');
-      const province = parts[0];
-      const municipality = parts.slice(1).join('-');
+    for (const assignment of validated.assignments) {
+      const { province, municipality } = assignment;
 
       const result = await pool.query(
         `UPDATE user_locations

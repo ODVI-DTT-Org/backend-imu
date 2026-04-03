@@ -436,6 +436,26 @@ app.get('/api/migrate', authMiddleware, requireRole('admin'), async (c) => {
       } catch (e: any) {
         results.push(`⏭️  Migration 043: ${e.message.substring(0, 100)}`);
       }
+
+      // Migration 044: Remove municipality_id column from user_locations table
+      try {
+        // Drop old unique constraint on (user_id, municipality_id) if it exists
+        await client.query(`DROP INDEX IF EXISTS idx_user_locations_user_municipality_id`);
+
+        // Drop the municipality_id column
+        await client.query(`ALTER TABLE user_locations DROP COLUMN IF EXISTS municipality_id`);
+
+        // Create unique constraint on (user_id, province, municipality) for data integrity
+        await client.query(`
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_user_locations_user_province_municipality_unique
+          ON user_locations(user_id, province, municipality)
+          WHERE deleted_at IS NULL
+        `);
+
+        results.push('✅ Migration 044: Removed municipality_id column from user_locations table');
+      } catch (e: any) {
+        results.push(`⏭️  Migration 044: ${e.message.substring(0, 100)}`);
+      }
     } finally {
       client.release();
     }

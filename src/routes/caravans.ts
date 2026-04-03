@@ -502,17 +502,15 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
 
         // Try to insert - if unique constraint is violated, update the existing record
         const result = await pool.query(
-          `INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)
-           ON CONFLICT (user_id, municipality_id)
+          `INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by)
+           VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)
+           ON CONFLICT (user_id, province, municipality)
            DO UPDATE SET
              deleted_at = NULL,
-             province = $3,
-             municipality = $4,
              assigned_at = NOW(),
-             assigned_by = $5
+             assigned_by = $4
            RETURNING (xmax = 0) as inserted`,
-          [userId, municipalityId.trim(), province.trim(), municipality.trim(), currentUser.sub]
+          [userId, province.trim(), municipality.trim(), currentUser.sub]
         );
 
         // xmax = 0 means the row was inserted, not updated
@@ -535,8 +533,8 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
 
         if (existing.rows.length === 0) {
           await pool.query(
-            'INSERT INTO user_locations (id, user_id, municipality_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5)',
-            [userId, municipalityId, province, municipality, currentUser.sub]
+            'INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by) VALUES (gen_random_uuid(), $1, $2, $3, NOW(), $4)',
+            [userId, province, municipality, currentUser.sub]
           );
           assigned++;
           console.log('[Assign Municipalities] Created new assignment (fallback):', municipalityId);
@@ -652,10 +650,15 @@ caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, r
     // caravanId IS the user_id
     const userId = caravanId;
 
+    // Parse municipalityId into province and municipality
+    const parts = municipalityId.split('-');
+    const province = parts[0];
+    const municipality = parts.slice(1).join('-');
+
     // Check if assignment exists (including deleted records for idempotency)
     const existing = await pool.query(
-      'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND municipality_id = $2',
-      [userId, municipalityId]
+      'SELECT id, deleted_at FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3',
+      [userId, province, municipality]
     );
 
     if (existing.rows.length === 0) {
