@@ -5,6 +5,7 @@ import 'dotenv/config';
 
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
+import { logger, simpleRequestLogger } from './utils/logger.js';
 import './middleware/database-logger.js'; // Initialize database query logging
 
 import authRoutes from './routes/auth.js';
@@ -31,6 +32,9 @@ import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
 
 const app = new Hono();
+
+// Request logging middleware (simplified format)
+app.use('*', simpleRequestLogger);
 
 // CORS configuration for web and mobile app
 app.use('*', cors({
@@ -353,7 +357,7 @@ app.notFound((c) => {
 
 // Error handler
 app.onError((err, c) => {
-  console.error('Server error:', err);
+  logger.error('Server', err, { path: c.req.path, method: c.req.method });
 
   // Use statusCode from error object if available, otherwise default to 500
   const statusCode = (err as any).statusCode || 500;
@@ -386,10 +390,10 @@ app.onError((err, c) => {
 // Start server
 const port = parseInt(process.env.PORT || '3000');
 
-console.log('🚀 Starting IMU Backend API...');
-console.log(`📡 Server running on http://localhost:${port}`);
-console.log(`🔑 JWT Secret: ${process.env.JWT_SECRET ? 'configured' : 'NOT SET'}`);
-console.log(`📊 Database: ${process.env.DATABASE_URL ? 'configured' : 'NOT SET'}`);
+logger.info('Startup', 'Starting IMU Backend API...');
+logger.info('Startup', `Server running on http://localhost:${port}`);
+logger.info('Startup', `JWT Secret: ${process.env.JWT_SECRET ? 'configured' : 'NOT SET'}`);
+logger.info('Startup', `Database: ${process.env.DATABASE_URL ? 'configured' : 'NOT SET'}`);
 
 serve({
   fetch: app.fetch,

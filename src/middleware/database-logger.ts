@@ -4,6 +4,7 @@
  */
 
 import { Pool, PoolClient } from 'pg';
+import { logger } from '../utils/logger.js';
 
 interface QueryLog {
   timestamp: string;
@@ -14,17 +15,6 @@ interface QueryLog {
   error?: string;
 }
 
-// Color codes for console output
-const colors = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  cyan: '\x1b[36m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  red: '\x1b[31m',
-  magenta: '\x1b[35m',
-};
-
 // Enable/disable database logging via environment variable
 const DB_LOGGING_ENABLED = process.env.DB_LOGGING !== 'false'; // Enabled by default
 
@@ -33,18 +23,44 @@ const originalQuery = Pool.prototype.query;
 const originalConnect = Pool.prototype.connect;
 
 /**
- * Format SQL query for better readability
+ * Extract table name from SQL query
  */
-function formatQuery(query: string): string {
-  // Remove excessive whitespace
-  let formatted = query.replace(/\s+/g, ' ').trim();
-  // Add newline before major SQL keywords
-  const keywords = ['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'FROM', 'WHERE', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'ORDER BY', 'GROUP BY', 'HAVING', 'LIMIT', 'OFFSET'];
-  keywords.forEach(keyword => {
-    const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-    formatted = formatted.replace(regex, `\n   ${keyword}`);
-  });
-  return formatted;
+function extractTableName(query: string): string {
+  const trimmedQuery = query.trim().toUpperCase();
+
+  // Try to extract table name from different query types
+  const patterns = [
+    /FROM\s+(\w+)/i,
+    /INSERT\s+INTO\s+(\w+)/i,
+    /UPDATE\s+(\w+)/i,
+    /DELETE\s+FROM\s+(\w+)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = query.match(pattern);
+    if (match && match[1]) {
+      return match[1];
+    }
+  }
+
+  return 'unknown';
+}
+
+/**
+ * Extract operation type from SQL query
+ */
+function extractOperation(query: string): string {
+  const trimmedQuery = query.trim().toUpperCase();
+
+  if (trimmedQuery.startsWith('SELECT')) return 'SELECT';
+  if (trimmedQuery.startsWith('INSERT')) return 'INSERT';
+  if (trimmedQuery.startsWith('UPDATE')) return 'UPDATE';
+  if (trimmedQuery.startsWith('DELETE')) return 'DELETE';
+  if (trimmedQuery.startsWith('CREATE')) return 'CREATE';
+  if (trimmedQuery.startsWith('ALTER')) return 'ALTER';
+  if (trimmedQuery.startsWith('DROP')) return 'DROP';
+
+  return 'QUERY';
 }
 
 /**
@@ -68,73 +84,18 @@ function sanitizeParams(params: any[]): any[] {
 }
 
 /**
- * Log a database query
+ * Log a database query using simplified logger
  */
 function logQuery(queryLog: QueryLog) {
   if (!DB_LOGGING_ENABLED) return;
 
-  const timestamp = new Date().toISOString();
-  const duration = queryLog.duration.toFixed(2);
+  const tableName = extractTableName(queryLog.query);
+  const operation = extractOperation(queryLog.query);
 
   if (queryLog.error) {
-    // Log error queries in red with full details
-    console.error(`${colors.red}${colors.bright}❌ DATABASE QUERY ERROR [${timestamp}]${colors.reset}`);
-    console.error(`${colors.red}${'='.repeat(60)}${colors.reset}`);
-    console.error(`${colors.red}📝 Query:${colors.reset}`);
-    console.error(`${colors.red}   ${formatQuery(queryLog.query)}${colors.reset}`);
-
-    if (queryLog.params && queryLog.params.length > 0) {
-      console.error(`${colors.red}📋 Parameters:${colors.reset}`);
-      console.error(`${colors.red}   ${JSON.stringify(sanitizeParams(queryLog.params), null, 2)}${colors.reset}`);
-    }
-
-    console.error(`${colors.red}❌ Error Message:${colors.reset}`);
-    console.error(`${colors.red}   ${queryLog.error}${colors.reset}`);
-
-    // Try to parse PostgreSQL error details
-    if (queryLog.error.includes('code:')) {
-      const match = queryLog.error.match(/code: '([^']+)'/);
-      if (match) {
-        console.error(`${colors.red}🔍 Error Code: ${match[1]}${colors.reset}`);
-      }
-      const detailMatch = queryLog.error.match(/detail: '([^']+)'/);
-      if (detailMatch) {
-        console.error(`${colors.red}📄 Detail: ${detailMatch[1]}${colors.reset}`);
-      }
-      const tableMatch = queryLog.error.match(/table: '([^']+)'/);
-      if (tableMatch) {
-        console.error(`${colors.red}📊 Table: ${tableMatch[1]}${colors.reset}`);
-      }
-      const columnMatch = queryLog.error.match(/column: '([^']+)'/);
-      if (columnMatch) {
-        console.error(`${colors.red}📌 Column: ${columnMatch[1]}${colors.reset}`);
-      }
-      const constraintMatch = queryLog.error.match(/constraint: '([^']+)'/);
-      if (constraintMatch) {
-        console.error(`${colors.red}🔗 Constraint: ${constraintMatch[1]}${colors.reset}`);
-      }
-    }
-
-    console.error(`${colors.red}${'='.repeat(60)}${colors.reset}`);
-    console.error(`${colors.red}⏱️  Duration: ${duration}ms${colors.reset}\n`);
-  } else if (queryLog.duration > 1000) {
-    // Log slow queries in yellow
-    console.warn(`${colors.yellow}⚠️  SLOW DB QUERY [${timestamp}]${colors.reset}`);
-    console.warn(`${colors.yellow}   Query: ${queryLog.query.substring(0, 200)}${queryLog.query.length > 200 ? '...' : ''}${colors.reset}`);
-    if (queryLog.params && queryLog.params.length > 0) {
-      console.warn(`${colors.yellow}   Params: ${JSON.stringify(sanitizeParams(queryLog.params))}${colors.reset}`);
-    }
-    console.warn(`${colors.yellow}   Duration: ${duration}ms | Rows: ${queryLog.rows || 'N/A'}${colors.reset}\n`);
+    logger.databaseError(tableName, { message: queryLog.error, operation });
   } else {
-    // Log regular queries in cyan (compact format)
-    const queryPreview = queryLog.query.replace(/\s+/g, ' ').trim().substring(0, 100);
-    const paramsStr = queryLog.params && queryLog.params.length > 0
-      ? ` | Params: ${JSON.stringify(sanitizeParams(queryLog.params)).substring(0, 50)}...`
-      : '';
-
-    console.log(`${colors.cyan}💾 DB QUERY [${timestamp}]${colors.reset}`);
-    console.log(`${colors.cyan}   ${queryPreview}${queryLog.query.length > 100 ? '...' : ''}${paramsStr}${colors.reset}`);
-    console.log(`${colors.cyan}   Duration: ${duration}ms | Rows: ${queryLog.rows || 'N/A'}${colors.reset}\n`);
+    logger.databaseQuery(tableName, operation, queryLog.duration);
   }
 }
 
