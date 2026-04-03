@@ -5,6 +5,7 @@ import 'dotenv/config';
 
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
+import './middleware/database-logger.js'; // Initialize database query logging
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
