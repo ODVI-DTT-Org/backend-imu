@@ -769,10 +769,16 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       throw error;
     }
 
-    // Wrap database errors in DatabaseError
-    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
-      throw new DatabaseError(`Database error while assigning municipalities: ${error.message}`)
-        .addDetail('originalError', error.message);
+    // Check for column does not exist error (schema mismatch)
+    if (error.code === '42703') {
+      logger.error('users/municipalities', 'Database schema mismatch', {
+        column: error.message,
+        hint: 'Run migration 037 to fix user_locations column name',
+        table: 'user_locations'
+      });
+      throw new DatabaseError('Database schema mismatch. Please contact administrator.')
+        .addDetail('missingColumn', 'municipality_id')
+        .addDetail('requiredMigration', '037_fix_user_locations_municipality_column');
     }
 
     // Check for relation does not exist error
@@ -783,6 +789,12 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       });
       throw new DatabaseError('Database table missing. Please contact administrator.')
         .addDetail('missingTable', 'user_locations');
+    }
+
+    // Wrap other database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while assigning municipalities: ${error.message}`)
+        .addDetail('originalError', error.message);
     }
 
     // Wrap unknown errors with full details
