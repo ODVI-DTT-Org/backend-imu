@@ -495,11 +495,12 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
     let assigned = 0;
 
     for (const municipalityId of validated.municipality_ids) {
-      try {
-        const parts = municipalityId.split('-');
-        const province = parts[0];
-        const municipality = parts.slice(1).join('-');
+      // Parse municipality_id to extract province and municipality
+      const parts = municipalityId.split('-');
+      const province = parts[0];
+      const municipality = parts.slice(1).join('-');
 
+      try {
         // Try to insert - if unique constraint is violated, update the existing record
         const result = await pool.query(
           `INSERT INTO user_locations (id, user_id, province, municipality, assigned_at, assigned_by)
@@ -650,10 +651,7 @@ caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, r
     // caravanId IS the user_id
     const userId = caravanId;
 
-    // Parse municipalityId into province and municipality
-    const parts = municipalityId.split('-');
-    const province = parts[0];
-    const municipality = parts.slice(1).join('-');
+    // Note: province and municipality are already extracted from route params above
 
     // Check if assignment exists (including deleted records for idempotency)
     const existing = await pool.query(

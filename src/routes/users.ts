@@ -920,6 +920,11 @@ users.delete('/:id/municipalities/:municipalityId', authMiddleware, requireAnyRo
     const userId = c.req.param('id');
     const municipalityId = c.req.param('municipalityId');
 
+    // Validate required parameters
+    if (!municipalityId) {
+      throw new ValidationError('municipalityId is required');
+    }
+
     // Verify user exists
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
     if (userCheck.rows.length === 0) {

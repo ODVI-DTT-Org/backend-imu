@@ -757,7 +757,7 @@ groups.delete('/:id/municipalities/:municipalityId', authMiddleware, requirePerm
     }
 
     // Also remove from caravan (user_locations table) - use province/municipality
-    if (caravanId) {
+    if (caravanId && municipalityId) {
       // Parse municipalityId into province and municipality
       const parts = municipalityId.split('-');
       const province = parts[0];
