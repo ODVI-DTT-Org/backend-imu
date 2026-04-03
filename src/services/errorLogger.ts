@@ -171,6 +171,9 @@ class ErrorLoggerService {
       const sanitized = sanitizeError(error);
       const appError = error as any;
 
+      // Extract first IP from comma-separated list (for x-forwarded-for headers)
+      const firstIp = context.ipAddress?.split(',')[0]?.trim();
+
       const logData: ErrorLogData = {
         request_id: context.requestId,
         timestamp: new Date(context.timestamp),
@@ -180,7 +183,7 @@ class ErrorLoggerService {
         path: context.path,
         method: context.method,
         user_id: context.userId,
-        ip_address: context.ipAddress,
+        ip_address: firstIp,
         user_agent: context.userAgent,
         details: JSON.stringify(sanitized.details),
         errors: JSON.stringify(sanitized.errors),

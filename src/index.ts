@@ -356,6 +356,29 @@ app.get('/api/migrate', authMiddleware, requireRole('admin'), async (c) => {
       } catch (e: any) {
         results.push(`⏭️  Migration 038: ${e.message.substring(0, 100)}`);
       }
+
+      // Migration 041: Fix user_locations table
+      try {
+        await client.query(`
+          DO $$
+          BEGIN
+            IF NOT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_name = 'user_locations'
+              AND column_name = 'municipality_id'
+            ) THEN
+              ALTER TABLE user_locations ADD COLUMN municipality_id TEXT;
+
+              RAISE NOTICE 'Added municipality_id column to user_locations table';
+            ELSE
+              RAISE NOTICE 'municipality_id column already exists in user_locations table';
+            END IF;
+          END $$;
+        `);
+        results.push('✅ Migration 041: Fixed user_locations table (added municipality_id column)');
+      } catch (e: any) {
+        results.push(`⏭️  Migration 041: ${e.message.substring(0, 100)}`);
+      }
     } finally {
       client.release();
     }
