@@ -23,11 +23,32 @@ vi.mock('../../src/middleware/auth.js', () => ({
   }),
 }));
 
+// Mock the permission middleware to bypass permission checks
+vi.mock('../../src/middleware/permissions.js', () => ({
+  requirePermission: vi.fn(() => async (c: any, next: any) => {
+    await next();
+  }),
+  requireAnyPermission: vi.fn(() => async (c: any, next: any) => {
+    await next();
+  }),
+  requireAllPermissions: vi.fn(() => async (c: any, next: any) => {
+    await next();
+  }),
+  getUserPermissions: vi.fn(),
+  hasPermission: vi.fn(),
+  hasAnyPermission: vi.fn(),
+  hasAllPermissions: vi.fn(),
+  clearPermissionCache: vi.fn(),
+  clearAllPermissionCache: vi.fn(),
+}));
+
 import searchRouter from '../../src/routes/search.js';
 import { pool } from '../../src/db/index.js';
+import { errorHandler } from '../../src/middleware/errorHandler.js';
 
-// Create test app
+// Create test app with error handler
 const app = new Hono();
+app.use('*', errorHandler); // Add error handler middleware
 app.route('/api/search', searchRouter);
 
 describe('Search API', () => {
@@ -146,6 +167,10 @@ describe('Search API', () => {
         query: '',
       }),
     });
+
+    // Debug logging
+    console.log('Response status:', response.status);
+    console.log('Response headers:', Object.fromEntries(response.headers.entries()));
 
     expect(response.status).toBe(400);
 

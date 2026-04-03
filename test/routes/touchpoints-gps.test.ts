@@ -23,6 +23,25 @@ vi.mock('../../src/middleware/auth.js', () => ({
   }),
 }));
 
+// Mock the permission middleware to bypass permission checks
+vi.mock('../../src/middleware/permissions.js', () => ({
+  requirePermission: vi.fn(() => async (c: any, next: any) => {
+    await next();
+  }),
+  requireAnyPermission: vi.fn(() => async (c: any, next: any) => {
+    await next();
+  }),
+  requireAllPermissions: vi.fn(() => async (c: any, next: any) => {
+    await next();
+  }),
+  getUserPermissions: vi.fn(),
+  hasPermission: vi.fn(),
+  hasAnyPermission: vi.fn(),
+  hasAllPermissions: vi.fn(),
+  clearPermissionCache: vi.fn(),
+  clearAllPermissionCache: vi.fn(),
+}));
+
 // Mock the GPS validation service
 vi.mock('../../src/services/gps-validation.js', () => ({
   validateTouchpointLocation: vi.fn(),
