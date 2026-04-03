@@ -8,7 +8,7 @@
 import { pool } from '../db/index.js';
 import { logger } from '../utils/logger.js';
 
-export type JobType = 'psgc_matching' | 'report_generation';
+export type JobType = 'psgc_matching' | 'report_generation' | 'user_location_assignment';
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 

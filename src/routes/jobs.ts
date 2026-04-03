@@ -19,6 +19,7 @@ import {
 } from '../services/backgroundJob.js';
 import { psgcMatchingProcessor } from '../services/psgcJobProcessor.js';
 import { reportsJobProcessor } from '../services/reportsJobProcessor.js';
+import { userLocationAssignmentProcessor } from '../services/userLocationJobProcessor.js';
 import { logger } from '../utils/logger.js';
 
 const jobs = new Hono();
@@ -37,6 +38,11 @@ const createReportJobSchema = z.object({
   report_type: z.enum(['agent_performance', 'client_activity', 'touchpoint_summary']),
   start_date: z.string().optional(),
   end_date: z.string().optional(),
+  user_id: z.string().optional(),
+});
+
+const createUserLocationAssignmentSchema = z.object({
+  municipality_ids: z.array(z.string()).min(1),
   user_id: z.string().optional(),
 });
 
@@ -110,6 +116,43 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
       throw validationError;
     }
     logger.error('jobs/reports/generate', error);
+    throw error;
+  }
+});
+
+/**
+ * POST /api/jobs/user-locations/assign
+ * Assign municipalities to users in background
+ */
+jobs.post('/user-locations/assign', requirePermission('users', 'update'), async (c) => {
+  try {
+    const user = c.get('user');
+    const body = await c.req.json();
+    const validated = createUserLocationAssignmentSchema.parse(body);
+
+    // Create background job
+    const job = await createJob({
+      type: 'user_location_assignment',
+      params: validated,
+      created_by: user.sub,
+    });
+
+    // Return immediately with job ID
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: 'User location assignment job started',
+      status_url: `/api/jobs/${job.id}`,
+    }, 201);
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    logger.error('jobs/user-locations/assign', error);
     throw error;
   }
 });
@@ -239,6 +282,6 @@ jobs.delete('/:id', async (c) => {
 });
 
 // Start job processor when this module is loaded
-startJobProcessor([psgcMatchingProcessor, reportsJobProcessor], 5000);
+startJobProcessor([psgcMatchingProcessor, reportsJobProcessor, userLocationAssignmentProcessor], 5000);
 
 export default jobs;
