@@ -919,12 +919,6 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
         }
       }
 
-        if (exactMatch.rows.length > 0) {
-          psgcId = exactMatch.rows[0].id;
-          matchType = 'exact';
-        }
-      }
-
       // NOTE: No province fallback - we only match when BOTH province AND municipality match
       // This ensures accuracy rather than false positive matches
 
