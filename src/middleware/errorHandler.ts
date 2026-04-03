@@ -35,40 +35,43 @@ export const errorHandler = async (c: Context, next: Next) => {
   // Add request ID to response headers for debugging
   c.header('X-Request-Id', requestId);
 
-  // DEBUG: Log that error handler was invoked
-  console.log('🔍 ERROR HANDLER INVOKED for requestId:', requestId);
-
   try {
     await next();
-    console.log('🔍 ERROR HANDLER: next() completed successfully');
   } catch (error) {
-    // DEBUG: This should ALWAYS execute when an error is caught
-    console.error('🔍🔍🔍 ERROR HANDLER CATCH BLOCK EXECUTED 🔍🔍🔍');
-    console.error('🔍 Error type:', error instanceof Error ? error.name : typeof error);
-    console.error('🔍 Error constructor:', error?.constructor?.name);
-    console.error('🔍 Error statusCode:', (error as any).statusCode);
-    console.error('🔍 Error message:', error instanceof Error ? error.message : String(error));
+    // Log error to database (async, non-blocking)
+    const err = error instanceof Error ? error : new Error(String(error));
 
-    // SIMPLIFIED: Just return a simple response for debugging
+    // Extract context from request
+    const context = {
+      requestId,
+      timestamp: new Date().toISOString(),
+      path: c.req.path,
+      method: c.req.method,
+      userId: (c as any).get('userId') as string | undefined,
+      ipAddress: c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip'),
+      userAgent: c.req.header('user-agent'),
+    };
+
+    // Log to database (fire-and-forget)
+    errorLogger.log(err, context);
+
+    // Build error response
     const statusCode = (error as any).statusCode || 500;
-    console.error('🔍 Returning response with status:', statusCode);
+    const errorCode = (error as any).code || 'INTERNAL_SERVER_ERROR';
+    const suggestions = (error as any).suggestions || [];
 
-    // IMPORTANT: Don't use c.json() - it might not work properly in error handler
-    // Use c.newResponse() with explicit status
     c.header('Content-Type', 'application/json');
     const response = c.newResponse(JSON.stringify({
       success: false,
-      message: error instanceof Error ? error.message : 'Unknown error',
-      statusCode: statusCode,
-      requestId: requestId,
+      message: err.message,
+      statusCode,
+      code: errorCode,
+      requestId,
+      ...(suggestions.length > 0 && { suggestions }),
     }), statusCode);
 
-    console.error('🔍 Created response, status:', response.status);
     return response;
   }
-
-  // If we get here, next() completed without error
-  console.log('🔍 ERROR HANDLER: Request completed without error');
 };
 
 /**

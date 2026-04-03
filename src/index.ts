@@ -6,6 +6,7 @@ import 'dotenv/config';
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
 import { logger, simpleRequestLogger } from './utils/logger.js';
+import { errorHandler } from './middleware/errorHandler.js';
 import './middleware/database-logger.js'; // Initialize database query logging
 
 import authRoutes from './routes/auth.js';
@@ -37,6 +38,9 @@ const app = new Hono();
 
 // Request logging middleware (simplified format)
 app.use('*', simpleRequestLogger);
+
+// Error handler middleware (must be after request logging)
+app.use('*', errorHandler);
 
 // CORS configuration for web and mobile app
 app.use('*', cors({
@@ -363,7 +367,23 @@ app.notFound((c) => {
 
 // Error handler
 app.onError((err, c) => {
-  logger.error('Server', err, { path: c.req.path, method: c.req.method });
+  const error = err instanceof Error ? err : new Error(String(err));
+  logger.error('Server', error, { path: c.req.path, method: c.req.method });
+
+  // Get or generate request ID
+  const requestId = (c as any).get('requestId') || `req-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+
+  // Log error to database (async, non-blocking)
+  const { errorLogger } = require('./services/errorLogger.js');
+  errorLogger.log(error, {
+    requestId,
+    timestamp: new Date().toISOString(),
+    path: c.req.path,
+    method: c.req.method,
+    userId: (c as any).get('userId'),
+    ipAddress: c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip'),
+    userAgent: c.req.header('user-agent'),
+  });
 
   // Use statusCode from error object if available, otherwise default to 500
   const statusCode = (err as any).statusCode || 500;
@@ -371,23 +391,19 @@ app.onError((err, c) => {
   // Build error response
   const errorResponse: Record<string, any> = {
     success: false,
-    message: err.message || 'Internal Server Error',
+    message: error.message || 'Internal Server Error',
+    statusCode,
+    requestId,
   };
 
   // Include additional error details in development
   if (process.env.NODE_ENV === 'development') {
-    errorResponse.error = err.message;
     if ((err as any).code) {
       errorResponse.code = (err as any).code;
     }
     if ((err as any).suggestions) {
       errorResponse.suggestions = (err as any).suggestions;
     }
-  }
-
-  // Include statusCode from custom errors
-  if ((err as any).statusCode) {
-    errorResponse.statusCode = statusCode;
   }
 
   return c.json(errorResponse, statusCode as any);
