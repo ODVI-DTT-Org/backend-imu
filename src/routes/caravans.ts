@@ -425,8 +425,13 @@ caravans.get('/:id/municipalities', authMiddleware, requirePermission('caravans'
   }
 });
 
-// POST /api/caravans/:id/municipalities - Assign municipalities (admin, area_manager, assistant_area_manager)
-caravans.post('/:id/municipalities', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+// ========================================
+// BULK OPERATIONS FOR MUNICIPALITY ASSIGNMENTS
+// All bulk operations use action-based endpoints
+// ========================================
+
+// POST /api/caravans/:id/municipalities/bulk/create - Bulk create municipalities assignments (admin, area_manager, assistant_area_manager)
+caravans.post('/:id/municipalities/bulk/create', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
     const currentUser = c.get('user');
     const caravanId = c.req.param('id');
@@ -440,7 +445,7 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
     });
     const validated = schema.parse(body);
 
-    console.log('[Assign Municipalities] Request:', {
+    console.log('[Bulk Create Municipalities] Request:', {
       caravanId,
       locations: validated.locations,
       count: validated.locations.length
@@ -486,7 +491,7 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
       }
     }
 
-    // Insert assignments using upsert (INSERT ... ON CONFLICT)
+    // Bulk insert assignments using upsert (INSERT ... ON CONFLICT)
     // This approach is atomic and prevents race conditions
     let assigned = 0;
 
@@ -512,12 +517,12 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
 
         if (wasInserted) {
           assigned++;
-          console.log('[Assign Municipalities] Created new assignment:', province, municipality);
+          console.log('[Bulk Create Municipalities] Created new assignment:', province, municipality);
         } else {
-          console.log('[Assign Municipalities] Re-activated existing:', province, municipality);
+          console.log('[Bulk Create Municipalities] Re-activated existing:', province, municipality);
         }
       } catch (error: any) {
-        console.error('[Assign Municipalities] Error inserting location:', error);
+        console.error('[Bulk Create Municipalities] Error inserting location:', error);
 
         // Fallback: Try to find existing location
         const existing = await pool.query(
@@ -531,14 +536,14 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
             [userId, province, municipality, currentUser.sub]
           );
           assigned++;
-          console.log('[Assign Municipalities] Created new assignment (fallback):', province, municipality);
+          console.log('[Bulk Create Municipalities] Created new assignment (fallback):', province, municipality);
         } else {
-          console.log('[Assign Municipalities] Skipped (already active):', province, municipality);
+          console.log('[Bulk Create Municipalities] Skipped (already active):', province, municipality);
         }
       }
     }
 
-    console.log('[Assign Municipalities] Final result:', { assigned });
+    console.log('[Bulk Create Municipalities] Final result:', { assigned });
 
     // If no municipalities were actually assigned, return an error
     if (assigned === 0) {
@@ -561,15 +566,171 @@ caravans.post('/:id/municipalities', authMiddleware, requirePermission('location
       });
       throw validationError;
     }
-    console.error('Assign municipalities error:', error);
-    throw new Error('Failed to assign municipalities');
+    console.error('Bulk create municipalities error:', error);
+    throw new Error('Failed to bulk create municipalities');
   }
 });
 
-// POST /api/caravans/:id/municipalities/bulk - Bulk unassign municipalities (admin, area_manager, assistant_area_manager)
-// IMPORTANT: This route must be defined BEFORE the GET /municipalities route
-caravans.post('/:id/municipalities/bulk', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+// POST /api/caravans/:id/municipalities/bulk/update - Bulk update municipalities assignments (admin, area_manager, assistant_area_manager)
+caravans.post('/:id/municipalities/bulk/update', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
   try {
+    const currentUser = c.get('user');
+    const caravanId = c.req.param('id');
+
+    const body = await c.req.json();
+    const schema = z.object({
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+        oldProvince: z.string().min(1).optional(),
+        oldMunicipality: z.string().min(1).optional(),
+      })).min(1),
+    });
+    const validated = schema.parse(body);
+
+    console.log('[Bulk Update Municipalities] Request:', {
+      caravanId,
+      locations: validated.locations,
+      count: validated.locations.length
+    });
+
+    // Verify caravan exists (is a user with field_agent/caravan role)
+    const caravanCheck = await pool.query(
+      'SELECT id FROM users WHERE id = $1 AND role = ANY($2)',
+      [caravanId, CARAVAN_ROLES]
+    );
+
+    if (caravanCheck.rows.length === 0) {
+      throw new NotFoundError('Caravan');
+    }
+
+    // Check if user_locations table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'user_locations'
+      )
+    `);
+
+    if (!tableCheck.rows[0].exists) {
+      throw new Error('Municipality assignments feature not available. Please run database migrations.');
+    }
+
+    // caravanId IS the user_id - we query users table directly now
+    const userId = caravanId;
+
+    let updated = 0;
+
+    for (const location of validated.locations) {
+      const { province, municipality, oldProvince, oldMunicipality } = location;
+
+      // If old values provided, update specific location; otherwise verify new location exists
+      if (oldProvince && oldMunicipality) {
+        // Update existing assignment
+        const checkResult = await pool.query(
+          'SELECT id FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3 AND deleted_at IS NULL LIMIT 1',
+          [userId, oldProvince.trim(), oldMunicipality.trim()]
+        );
+
+        if (checkResult.rows.length === 0) {
+          console.log('[Bulk Update Municipalities] Assignment not found:', oldProvince, oldMunicipality);
+          continue;
+        }
+
+        // Verify new municipality exists in PSGC table
+        const psgcCheck = await pool.query(
+          `SELECT 1 FROM psgc WHERE TRIM(province) = $1 AND TRIM(mun_city) = $2 LIMIT 1`,
+          [province.trim(), municipality.trim()]
+        );
+
+        if (psgcCheck.rows.length === 0) {
+          throw new NotFoundError(`Municipality not found: ${province}-${municipality}`);
+        }
+
+        // Check if new location already exists
+        const existingCheck = await pool.query(
+          'SELECT id FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3 AND deleted_at IS NULL LIMIT 1',
+          [userId, province.trim(), municipality.trim()]
+        );
+
+        if (existingCheck.rows.length > 0) {
+          // New location already exists, delete old one
+          await pool.query(
+            'UPDATE user_locations SET deleted_at = NOW() WHERE user_id = $1 AND province = $2 AND municipality = $3 AND deleted_at IS NULL',
+            [userId, oldProvince.trim(), oldMunicipality.trim()]
+          );
+          updated++;
+          console.log('[Bulk Update Municipalities] Removed old assignment (new already exists):', oldProvince, oldMunicipality);
+        } else {
+          // Update the existing assignment
+          await pool.query(
+            `UPDATE user_locations
+             SET province = $1, municipality = $2, updated_at = NOW(), updated_by = $3
+             WHERE user_id = $4 AND province = $5 AND municipality = $6 AND deleted_at IS NULL`,
+            [province.trim(), municipality.trim(), currentUser.sub, userId, oldProvince.trim(), oldMunicipality.trim()]
+          );
+          updated++;
+          console.log('[Bulk Update Municipalities] Updated assignment:', oldProvince, oldMunicipality, '->', province, municipality);
+        }
+      } else {
+        // Just verify the municipality exists (for validation purposes)
+        const psgcCheck = await pool.query(
+          `SELECT 1 FROM psgc WHERE TRIM(province) = $1 AND TRIM(mun_city) = $2 LIMIT 1`,
+          [province.trim(), municipality.trim()]
+        );
+
+        if (psgcCheck.rows.length === 0) {
+          throw new NotFoundError(`Municipality not found: ${province}-${municipality}`);
+        }
+
+        // Check if assignment exists and update timestamp
+        const checkResult = await pool.query(
+          'SELECT id FROM user_locations WHERE user_id = $1 AND province = $2 AND municipality = $3 AND deleted_at IS NULL LIMIT 1',
+          [userId, province.trim(), municipality.trim()]
+        );
+
+        if (checkResult.rows.length > 0) {
+          await pool.query(
+            'UPDATE user_locations SET updated_at = NOW(), updated_by = $1 WHERE id = $2',
+            [currentUser.sub, checkResult.rows[0].id]
+          );
+          updated++;
+          console.log('[Bulk Update Municipalities] Refreshed assignment:', province, municipality);
+        }
+      }
+    }
+
+    console.log('[Bulk Update Municipalities] Final result:', { updated });
+
+    if (updated === 0) {
+      return c.json({
+        message: 'No municipalities were updated. Check that the assignments exist.',
+        updated_count: 0,
+      }, 400);
+    }
+
+    return c.json({
+      message: 'Municipalities updated successfully',
+      updated_count: updated,
+    });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    console.error('Bulk update municipalities error:', error);
+    throw new Error('Failed to bulk update municipalities');
+  }
+});
+
+// POST /api/caravans/:id/municipalities/bulk/delete - Bulk delete municipalities assignments (admin, area_manager, assistant_area_manager)
+// IMPORTANT: This route must be defined BEFORE the GET /municipalities route
+caravans.post('/:id/municipalities/bulk/delete', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+  try {
+    const currentUser = c.get('user');
     const caravanId = c.req.param('id');
     const body = await c.req.json();
 
@@ -580,6 +741,12 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requirePermission('loc
       })).min(1),
     });
     const validated = schema.parse(body);
+
+    console.log('[Bulk Delete Municipalities] Request:', {
+      caravanId,
+      locations: validated.locations,
+      count: validated.locations.length
+    });
 
     // caravanId IS the user_id
     const userId = caravanId;
@@ -596,13 +763,17 @@ caravans.post('/:id/municipalities/bulk', authMiddleware, requirePermission('loc
     const whereClause = locationsToDelete.join(' OR ');
     const result = await pool.query(
       `UPDATE user_locations
-       SET deleted_at = NOW()
-       WHERE user_id = $1
+       SET deleted_at = NOW(), deleted_by = $1
+       WHERE user_id = $2
        AND (${whereClause})
        AND deleted_at IS NULL
        RETURNING id`,
-      [userId]
+      [currentUser.sub, userId]
     );
+
+    console.log('[Bulk Delete Municipalities] Result:', {
+      deleted_count: result.rows.length
+    });
 
     return c.json({
       message: `Bulk unassigned ${result.rows.length} locations`,
