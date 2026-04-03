@@ -191,11 +191,13 @@ export const tables: Table[] = [
     columns: [
       new Column({ name: 'id', type: ColumnType.TEXT, primary_key: true }),
       new Column({ name: 'user_id', type: ColumnType.TEXT }),
-      new Column({ name: 'psgc_id', type: ColumnType.INTEGER }),
-      new Column({ name: 'region', type: ColumnType.TEXT }),
       new Column({ name: 'province', type: ColumnType.TEXT }),
       new Column({ name: 'municipality', type: ColumnType.TEXT }),
+      new Column({ name: 'assigned_at', type: ColumnType.TEXT }),
+      new Column({ name: 'assigned_by', type: ColumnType.TEXT }),
+      new Column({ name: 'deleted_at', type: ColumnType.TEXT }),
       new Column({ name: 'created_at', type: ColumnType.TEXT }),
+      new Column({ name: 'updated_at', type: ColumnType.TEXT }),
     ],
   }),
 
