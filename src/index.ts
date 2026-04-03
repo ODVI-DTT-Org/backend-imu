@@ -329,6 +329,7 @@ app.route('/api/clients', clientsRoutes);
 app.route('/api/users', usersRoutes);
 app.route('/api/agencies', agenciesRoutes);
 app.route('/api/caravans', caravansRoutes);
+app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
 app.route('/api/touchpoints', touchpointsRoutes);
 app.route('/api/itineraries', itinerariesRoutes);
 app.route('/api/dashboard', dashboardRoutes);
@@ -343,7 +344,6 @@ app.route('/api/audit-logs', auditLogsRoutes);
 app.route('/api/psgc', psgcRoutes);
 app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
-app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
 app.route('/api/search', searchRoutes);
 
 // 404 handler
