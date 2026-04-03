@@ -31,6 +31,7 @@ import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
 import errorLogsRoutes from './routes/error-logs.js';
+import jobsRoutes from './routes/jobs.js';
 
 const app = new Hono();
 
@@ -324,6 +325,7 @@ app.get('/', (c) => {
       touchpointReasons: '/api/touchpoint-reasons',
       touchpointsAnalytics: '/api/touchpoints/analytics',
       errorLogs: '/api/error-logs',
+      jobs: '/api/jobs',
     },
   });
 });
@@ -352,6 +354,7 @@ app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/search', searchRoutes);
 app.route('/api/error-logs', errorLogsRoutes);
+app.route('/api/jobs', jobsRoutes);
 
 // 404 handler
 app.notFound((c) => {
