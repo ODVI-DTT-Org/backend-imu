@@ -30,6 +30,7 @@ import touchpointReasonsRoutes from './routes/touchpoint-reasons.js';
 import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
+import errorLogsRoutes from './routes/error-logs.js';
 
 const app = new Hono();
 
@@ -322,6 +323,7 @@ app.get('/', (c) => {
       psgc: '/api/psgc',
       touchpointReasons: '/api/touchpoint-reasons',
       touchpointsAnalytics: '/api/touchpoints/analytics',
+      errorLogs: '/api/error-logs',
     },
   });
 });
@@ -349,6 +351,7 @@ app.route('/api/psgc', psgcRoutes);
 app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/search', searchRoutes);
+app.route('/api/error-logs', errorLogsRoutes);
 
 // 404 handler
 app.notFound((c) => {
