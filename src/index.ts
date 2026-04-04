@@ -10,6 +10,8 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
 import './middleware/database-logger.js'; // Initialize database query logging
 import { initializeBackend, isInitializationSuccessful } from './utils/init-logger.js';
+import { processMobileErrorLogs } from './services/errorLogsBatchProcessor.js';
+import cron from 'node-cron';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -689,6 +691,26 @@ if (!isInitializationSuccessful(initSummary, initResults)) {
 
 logger.info('Startup', 'Starting IMU Backend API...');
 logger.info('Startup', `Server running on http://localhost:${port}`);
+
+// Batch process mobile error logs every 5 minutes
+cron.schedule('*/5 * * * *', async () => {
+  await processMobileErrorLogs();
+});
+
+// Clean up old synced mobile error logs daily at 2 AM
+cron.schedule('0 2 * * *', async () => {
+  try {
+    const result = await pool.query(`
+      DELETE FROM error_logs
+      WHERE is_synced = 1
+        AND platform = 'mobile'
+        AND created_at < NOW() - INTERVAL '7 days'
+    `);
+    logger.info('error-logs', `Cleaned up ${result.rowCount} old mobile error logs`);
+  } catch (e) {
+    logger.error('error-logs', 'Failed to cleanup old error logs', { error: e });
+  }
+});
 
 serve({
   fetch: app.fetch,
