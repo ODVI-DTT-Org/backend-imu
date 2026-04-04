@@ -1034,6 +1034,100 @@ users.post('/:id/municipalities/bulk/update', authMiddleware, requirePermission(
   }
 });
 
+// POST /api/users/:id/municipalities/bulk/delete - Bulk delete municipalities assignments (admin, area_manager, assistant_area_manager)
+// IMPORTANT: This route must be defined BEFORE the GET /municipalities route
+users.post('/:id/municipalities/bulk/delete', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+  try {
+    const currentUser = c.get('user');
+    const userId = c.req.param('id');
+    const body = await c.req.json();
+
+    const schema = z.object({
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
+    });
+    const validated = schema.parse(body);
+
+    console.log('[Bulk Delete Municipalities] Request:', {
+      userId,
+      locations: validated.locations,
+      count: validated.locations.length
+    });
+
+    // Verify user exists
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new NotFoundError('User');
+    }
+
+    // Check if user_locations table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'user_locations'
+      )
+    `);
+
+    if (!tableCheck.rows[0].exists) {
+      throw new Error('Municipality assignments feature not available. Please run database migrations.');
+    }
+
+    // Bulk soft delete - use locations array with province/municipality
+    const locationsToDelete = [];
+    for (const location of validated.locations) {
+      const { province, municipality } = location;
+      locationsToDelete.push(`(province = '${province.replace(/'/g, "''")}' AND municipality = '${municipality.replace(/'/g, "''")}')`);
+    }
+
+    if (locationsToDelete.length === 0) {
+      throw new ValidationError('No valid locations provided');
+    }
+
+    const whereClause = locationsToDelete.join(' OR ');
+    const result = await pool.query(
+      `UPDATE user_locations
+       SET deleted_at = NOW(), deleted_by = $1
+       WHERE user_id = $2
+         AND (${whereClause})
+         AND deleted_at IS NULL
+       RETURNING id`,
+      [currentUser.sub, userId]
+    );
+
+    return c.json({
+      message: `Bulk deleted ${result.rowCount || 0} municipality assignments`,
+      deleted_count: result.rowCount || 0,
+    });
+  } catch (error: any) {
+    // Handle Zod validation errors
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while deleting municipality assignments: ${error.message}`)
+        .addDetail('originalError', error.message);
+    }
+
+    // Wrap unknown errors
+    console.error('Bulk delete municipalities error:', error);
+    throw new DatabaseError('Failed to delete municipality assignments')
+      .addDetail('originalError', error.message);
+  }
+});
+
 // POST /api/users/:id/municipalities/bulk - Bulk unassign municipalities (admin, area_manager, assistant_area_manager)
 users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
   try {
