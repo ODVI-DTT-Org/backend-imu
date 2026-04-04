@@ -495,9 +495,9 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
           id, client_id, user_id, touchpoint_number, type, date,
           reason, address, time_arrival, time_departure,
           odometer_arrival, odometer_departure, next_visit_date,
-          notes, photo_url, audio_url, latitude, longitude
+          notes, photo_url, audio_url, latitude, longitude, status
         ) VALUES (
-          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'Completed'
         ) RETURNING *`,
         [
           validated.client_id, user.sub, validated.touchpoint_number, validated.type, today,

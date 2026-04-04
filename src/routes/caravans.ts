@@ -754,12 +754,12 @@ caravans.post('/:id/municipalities/bulk/delete', authMiddleware, requirePermissi
     const whereClause = locationsToDelete.join(' OR ');
     const result = await pool.query(
       `UPDATE user_locations
-       SET deleted_at = NOW(), deleted_by = $1
-       WHERE user_id = $2
-       AND (${whereClause})
-       AND deleted_at IS NULL
+       SET deleted_at = NOW()
+       WHERE user_id = $1
+         AND (${whereClause})
+         AND deleted_at IS NULL
        RETURNING id`,
-      [currentUser.sub, userId]
+      [userId]
     );
 
     console.log('[Bulk Delete Municipalities] Result:', {
