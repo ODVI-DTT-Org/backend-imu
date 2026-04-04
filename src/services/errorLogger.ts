@@ -167,6 +167,8 @@ class ErrorLoggerService {
     error: AppError | Error,
     context: ErrorLogContext
   ): Promise<void> {
+    const startTime = Date.now();
+
     try {
       const sanitized = sanitizeError(error);
       const appError = error as any;
@@ -231,6 +233,13 @@ class ErrorLoggerService {
         logData.suggestions,
         logData.documentation_url,
       ]);
+
+      const duration = Date.now() - startTime;
+
+      // Log slow operations (>1s)
+      if (duration > 1000) {
+        console.warn(`[errorLogger] Slow error logging: ${duration}ms for error ${sanitized.code}`);
+      }
     } catch (err) {
       // Silently fail - we don't want logging errors to affect the application
       console.error('Failed to log error to database:', err);
@@ -252,6 +261,8 @@ class ErrorLoggerService {
     startDate?: Date;
     endDate?: Date;
   } = {}): Promise<any[]> {
+    const startTime = Date.now();
+
     try {
       const {
         limit = 50,
@@ -329,6 +340,12 @@ class ErrorLoggerService {
       params.push(limit, offset);
 
       const result = await pool.query(query, params);
+
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.warn(`[errorLogger] Slow getErrorLogs query: ${duration}ms`);
+      }
+
       return result.rows;
     } catch (err) {
       console.error('Failed to get error logs:', err);
@@ -421,6 +438,8 @@ class ErrorLoggerService {
     topPaths: Array<{ path: string; count: number }>;
     unresolvedCount: number;
   }> {
+    const startTime = Date.now();
+
     try {
       const statsQuery = `
         SELECT
@@ -447,6 +466,11 @@ class ErrorLoggerService {
         stats.errorsByCode[row.code] = (stats.errorsByCode[row.code] || 0) + parseInt(row.total_errors);
         stats.unresolvedCount += parseInt(row.unresolved_count);
       });
+
+      const duration = Date.now() - startTime;
+      if (duration > 1000) {
+        console.warn(`[errorLogger] Slow getErrorStats query: ${duration}ms`);
+      }
 
       return stats;
     } catch (err) {

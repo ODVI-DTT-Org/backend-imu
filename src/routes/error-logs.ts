@@ -9,11 +9,15 @@ import { pool } from '../db/index.js';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { errorLogger } from '../services/errorLogger.js';
+import { apiRateLimit } from '../middleware/rate-limit.js';
 
 const errorLogs = new Hono();
 
 // Apply authentication middleware to all routes
 errorLogs.use('*', authMiddleware);
+
+// Apply rate limiting to all error logs routes (100 requests per minute)
+errorLogs.use('*', apiRateLimit);
 
 // Require admin or manager role for error log access
 errorLogs.use('*', requireRole('admin', 'area_manager', 'assistant_area_manager'));

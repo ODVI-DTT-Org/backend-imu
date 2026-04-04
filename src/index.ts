@@ -33,6 +33,7 @@ import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
 import searchRoutes from './routes/search.js';
 import errorLogsRoutes from './routes/error-logs.js';
+import errorsRoutes from './routes/errors.js';
 import jobsRoutes from './routes/jobs.js';
 import './queues/workers.js'; // Start BullMQ workers
 
@@ -568,6 +569,7 @@ app.get('/', (c) => {
       touchpointReasons: '/api/touchpoint-reasons',
       touchpointsAnalytics: '/api/touchpoints/analytics',
       errorLogs: '/api/error-logs',
+      errors: '/api/errors',
       jobs: '/api/jobs',
     },
   });
@@ -597,6 +599,7 @@ app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/search', searchRoutes);
 app.route('/api/error-logs', errorLogsRoutes);
+app.route('/api/errors', errorsRoutes);
 app.route('/api/jobs', jobsRoutes);
 
 // 404 handler

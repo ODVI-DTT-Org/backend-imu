@@ -92,11 +92,14 @@ function mapRowToClient(row: Record<string, any>) {
     remarks: row.remarks,
     agency_id: row.agency_id,
     caravan_id: row.caravan_id,
+    // Address fields (from addresses table, mapped to client for easier access)
+    street: row.street,
     // PSGC fields
     region: row.psgc_region,
     province: row.psgc_province,
     municipality: row.psgc_municipality || row.municipality,
     barangay: row.psgc_barangay,
+    postal_code: row.postal_code,
     psgc_id: row.psgc_id,
     is_starred: row.is_starred,
     loan_released: row.loan_released || false,
@@ -794,7 +797,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       FROM clients c
     `);
 
-    // Get sample of clients without PSGC (up to 20)
+    // Get sample of clients without PSGC (up to 20) with debug info
     const unmatchedResult = await pool.query(`
       SELECT
         c.id,
@@ -810,6 +813,82 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       ORDER BY c.created_at DESC
       LIMIT 20
     `);
+
+    // Fetch PSGC data for debug information
+    const psgcResult = await pool.query(`
+      SELECT id, region, province, mun_city, barangay
+      FROM psgc
+      ORDER BY province, mun_city
+    `);
+
+    // Build lookup map for debug info
+    const psgcByProvince = new Map<string, any[]>();
+    for (const psgc of psgcResult.rows) {
+      const normalizedProvince = psgc.province.toLowerCase().trim();
+      if (!psgcByProvince.has(normalizedProvince)) {
+        psgcByProvince.set(normalizedProvince, []);
+      }
+      psgcByProvince.get(normalizedProvince)!.push(psgc);
+    }
+
+    // Helper function to normalize municipality names
+    function normalizeMunicipality(name: string): string {
+      return name
+        .replace(/ CITY$/i, '')
+        .replace(/^(CITY OF|CITY)\s*/i, '')
+        .trim()
+        .toLowerCase();
+    }
+
+    // Add debug info to unmatched clients
+    const unmatchedWithDebug = unmatchedResult.rows.map((client: any) => {
+      let debugInfo: any = {
+        normalized_province: null,
+        normalized_municipality: null,
+        available_psgc_count: 0,
+        psgc_options: [],
+        failure_reason: ''
+      };
+
+      if (client.province && client.municipality) {
+        const normalizedClientProvince = client.province.toLowerCase().trim();
+        const clientMunicipality = client.municipality.trim();
+        const normalizedClientMunicipality = normalizeMunicipality(clientMunicipality);
+
+        debugInfo.normalized_province = normalizedClientProvince;
+        debugInfo.normalized_municipality = normalizedClientMunicipality;
+
+        const provincePsgcs = psgcByProvince.get(normalizedClientProvince);
+
+        if (provincePsgcs && provincePsgcs.length > 0) {
+          debugInfo.available_psgc_count = provincePsgcs.length;
+          debugInfo.psgc_options = provincePsgcs.map(p => ({
+            id: p.id,
+            municipality: p.mun_city,
+            normalized: normalizeMunicipality(p.mun_city)
+          }));
+          debugInfo.failure_reason = 'No PSGC municipality matched for this province';
+        } else {
+          debugInfo.available_psgc_count = 0;
+          debugInfo.failure_reason = `No PSGC records found for province: "${client.province}"`;
+        }
+      } else {
+        debugInfo.failure_reason = !client.province ? 'Missing province data' : 'Missing municipality data';
+      }
+
+      return {
+        id: client.id,
+        client_name: `${client.first_name} ${client.last_name}`,
+        first_name: client.first_name,
+        last_name: client.last_name,
+        region: client.region,
+        province: client.province,
+        municipality: client.municipality,
+        barangay: client.barangay,
+        failure_reason: debugInfo.failure_reason,
+        debug: debugInfo
+      };
+    });
 
     // Get sample of recently matched clients (up to 10)
     const matchedResult = await pool.query(`
@@ -834,7 +913,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
 
     return c.json({
       stats: statsResult.rows[0],
-      unmatched: unmatchedResult.rows,
+      unmatched: unmatchedWithDebug,
       recently_matched: matchedResult.rows,
     });
   } catch (error) {

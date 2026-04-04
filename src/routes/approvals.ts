@@ -842,7 +842,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
       if (!existingNumbers.has(i)) {
         await client.query(
           `INSERT INTO touchpoints (id, client_id, user_id, touchpoint_number, type, date, reason, status, time_in, time_out)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), $5, $6, NOW(), NOW())`,
+           VALUES (gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, NOW(), NOW())`,
           [
             validated.client_id,
             user.sub,
