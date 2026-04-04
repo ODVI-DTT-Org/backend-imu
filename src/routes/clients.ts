@@ -843,13 +843,13 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
   }
 });
 
-// POST /api/clients/psgc/assign - Assign PSGC IDs to clients
+// POST /api/clients/psgc/assign - Assign PSGC IDs to clients (OPTIMIZED with chunking)
 clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   try {
     const body = await c.req.json();
     const { dryRun = false } = body;
 
-    // Get clients without PSGC ID but with province/municipality data
+    // Step 1: Get all clients without PSGC ID but with province/municipality data
     const clientsResult = await pool.query(`
       SELECT
         c.id,
@@ -866,116 +866,91 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
     `);
 
     const clientsToProcess = clientsResult.rows;
+
+    // Early exit if no clients to process
+    if (clientsToProcess.length === 0) {
+      return c.json({
+        success: true,
+        dry_run: dryRun,
+        summary: {
+          total_processed: 0,
+          matched_count: 0,
+          unmatched_count: 0,
+          success_rate: 0,
+        },
+        matched: [],
+        unmatched: [],
+      });
+    }
+
+    // Step 2: Fetch ALL PSGC data in a single query (chunking by loading all at once)
+    // This is efficient because PSGC table is indexed and relatively small (~1,600 records)
+    const psgcResult = await pool.query(`
+      SELECT id, region, province, mun_city, barangay
+      FROM psgc
+      ORDER BY province, mun_city
+    `);
+
+    // Step 3: Build a lookup map for fast in-memory matching
+    // Map: normalized province -> array of PSGC records
+    const psgcByProvince = new Map<string, any[]>();
+
+    for (const psgc of psgcResult.rows) {
+      const normalizedProvince = psgc.province.toLowerCase().trim();
+      if (!psgcByProvince.has(normalizedProvince)) {
+        psgcByProvince.set(normalizedProvince, []);
+      }
+      psgcByProvince.get(normalizedProvince)!.push(psgc);
+    }
+
+    // Step 4: Match all clients in memory (no database queries!)
     const matched: any[] = [];
     const unmatched: any[] = [];
+    const updates: any[] = []; // For batch update
+
+    // Helper function to normalize municipality names for matching
+    function normalizeMunicipality(name: string): string {
+      return name
+        .replace(/ CITY$/i, '')
+        .replace(/^(CITY OF|CITY)\s*/i, '')
+        .trim()
+        .toLowerCase();
+    }
 
     for (const client of clientsToProcess) {
-      // Progressive matching strategy
-      let psgcId = null;
-      let matchType = '';
+      let psgcId: string | null = null;
+      let matchedPsgc: any = null;
 
-      // Try 1: Advanced matching on province AND municipality
-      // This handles word order differences like "CEBU CITY" vs "City of Cebu"
       if (client.province && client.municipality) {
-        let exactMatch = null;
+        const normalizedClientProvince = client.province.toLowerCase().trim();
+        const clientMunicipality = client.municipality.trim();
+        const normalizedClientMunicipality = normalizeMunicipality(clientMunicipality);
 
-        // Strategy 1: Direct pattern match (PSGC municipality in client municipality)
-        exactMatch = await pool.query(`
-          SELECT id, region, province, mun_city, barangay
-          FROM psgc
-          WHERE province ILIKE '%' || $1 || '%'
-          AND mun_city ILIKE '%' || $2 || '%'
-          LIMIT 1
-        `, [client.province, client.municipality]);
+        // Get PSGC records for this province
+        const provincePsgcs = psgcByProvince.get(normalizedClientProvince);
 
-        // Strategy 2: Reverse pattern match (client municipality in PSGC municipality)
-        if (exactMatch.rows.length === 0) {
-          exactMatch = await pool.query(`
-            SELECT id, region, province, mun_city, barangay
-            FROM psgc
-            WHERE province ILIKE '%' || $1 || '%'
-            AND $2 ILIKE '%' || mun_city || '%'
-            LIMIT 1
-          `, [client.province, client.municipality]);
-        }
+        if (provincePsgcs && provincePsgcs.length > 0) {
+          // Strategy 1: Direct match (PSGC municipality in client municipality)
+          matchedPsgc = provincePsgcs.find(psgc =>
+            clientMunicipality.toLowerCase().includes(psgc.mun_city.toLowerCase()) ||
+            psgc.mun_city.toLowerCase().includes(clientMunicipality.toLowerCase())
+          );
 
-        // Strategy 3: Keyword match - extract main keyword from client municipality
-        // Remove "CITY" suffix from client municipality and try again
-        if (exactMatch.rows.length === 0) {
-          const clientMunicipalityKeyword = client.municipality.replace(/ CITY$/i, '').trim();
-          exactMatch = await pool.query(`
-            SELECT id, region, province, mun_city, barangay
-            FROM psgc
-            WHERE province ILIKE '%' || $1 || '%'
-            AND (
-              mun_city ILIKE '%' || $2 || '%'
-              OR mun_city ILIKE '%' || $3 || '%'
-            )
-            LIMIT 1
-          `, [client.province, client.municipality, clientMunicipalityKeyword]);
-        }
-
-        // Strategy 4: Keyword match - extract main keyword from PSGC municipality
-        if (exactMatch.rows.length === 0) {
-          // Get all PSGC entries for this province and check keyword match
-          const provinceMatches = await pool.query(`
-            SELECT id, region, province, mun_city, barangay
-            FROM psgc
-            WHERE province ILIKE '%' || $1 || '%'
-          `, [client.province]);
-
-          // Extract keyword from client municipality (remove "CITY", "OF", etc.)
-          const clientKeywords = client.municipality
-            .replace(/ CITY$/i, '')
-            .replace(/^(CITY OF|CITY)\s*/i, '')
-            .trim()
-            .toLowerCase();
-
-          // Find PSGC entry where keyword matches in municipality name
-          for (const psgcRow of provinceMatches.rows) {
-            const psgcKeywords = psgcRow.mun_city
-              .replace(/ CITY$/i, '')
-              .replace(/^(CITY OF|CITY)\s*/i, '')
-              .trim()
-              .toLowerCase();
-
-            if (psgcKeywords === clientKeywords ||
-                psgcRow.mun_city.toLowerCase().includes(clientKeywords) ||
-                clientKeywords.includes(psgcKeywords)) {
-              exactMatch = { rows: [psgcRow] };
-              break;
-            }
+          // Strategy 2: Keyword match (normalized comparison)
+          if (!matchedPsgc) {
+            const psgcKeywords = normalizeMunicipality(clientMunicipality);
+            matchedPsgc = provincePsgcs.find(psgc => {
+              const psgcMunicipalityNormalized = normalizeMunicipality(psgc.mun_city);
+              return psgcMunicipalityNormalized === psgcKeywords ||
+                psgcMunicipalityNormalized.includes(psgcKeywords) ||
+                psgcKeywords.includes(psgcMunicipalityNormalized);
+            });
           }
         }
 
-        if (exactMatch.rows.length > 0) {
-          psgcId = exactMatch.rows[0].id;
-          matchType = 'exact';
+        if (matchedPsgc) {
+          psgcId = matchedPsgc.id;
         }
-      }
-
-      // NOTE: No province fallback - we only match when BOTH province AND municipality match
-      // This ensures accuracy rather than false positive matches
-
-      if (psgcId && !dryRun) {
-        // Update client with PSGC ID
-        await pool.query(`
-          UPDATE clients
-          SET psgc_id = $1,
-              region = COALESCE($2, region),
-              province = COALESCE($3, province),
-              municipality = COALESCE($4, municipality),
-              barangay = COALESCE($5, barangay),
-              updated_at = NOW()
-          WHERE id = $6
-        `, [
-          psgcId,
-          client.region,
-          client.province,
-          client.municipality,
-          client.barangay,
-          client.id
-        ]);
       }
 
       if (psgcId) {
@@ -983,9 +958,19 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
           client_id: client.id,
           client_name: `${client.first_name} ${client.last_name}`,
           psgc_id: psgcId,
-          match_type: matchType,
+          match_type: 'exact',
           province: client.province,
           municipality: client.municipality,
+        });
+
+        // Collect for batch update
+        updates.push({
+          clientId: client.id,
+          psgcId: psgcId,
+          region: matchedPsgc.region,
+          province: matchedPsgc.province,
+          municipality: matchedPsgc.mun_city,
+          barangay: matchedPsgc.barangay,
         });
       } else {
         unmatched.push({
@@ -996,6 +981,29 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
           barangay: client.barangay,
         });
       }
+    }
+
+    // Step 5: Batch UPDATE all matched clients in a single query
+    if (!dryRun && updates.length > 0) {
+      // Use PostgreSQL's UPDATE with FROM clause for batch update
+      // Build the VALUES clause: ($1, $2), ($3, $4), ...
+      const valuesClause = updates.map((_, i) => `($${i * 6 + 1}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6})`).join(', ');
+
+      // Flatten the updates array for parameter binding
+      const params = updates.flatMap(u => [u.clientId, u.psgcId, u.region, u.province, u.municipality, u.barangay]);
+
+      await pool.query(`
+        UPDATE clients AS c
+        SET
+          psgc_id = v.psgc_id,
+          region = COALESCE(v.region, c.region),
+          province = COALESCE(v.province, c.province),
+          municipality = COALESCE(v.municipality, c.municipality),
+          barangay = COALESCE(v.barangay, c.barangay),
+          updated_at = NOW()
+        FROM (VALUES ${valuesClause}) AS v(client_id, psgc_id, region, province, municipality, barangay)
+        WHERE c.id = v.client_id
+      `, params);
     }
 
     return c.json({
@@ -1014,7 +1022,7 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
     });
   } catch (error) {
     console.error('Assign PSGC error:', error);
-    throw new Error();
+    throw new Error('Failed to assign PSGC IDs to clients');
   }
 });
 
