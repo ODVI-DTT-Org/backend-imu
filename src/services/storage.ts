@@ -91,21 +91,24 @@ class StorageService {
           if (result.connected) {
             console.log(`[StorageService] ✅ S3 connection verified: ${this.bucket}`);
           } else {
-            console.warn(`[StorageService] ⚠️  S3 connection failed, will fall back to local storage:`, result.details);
+            console.error(`[StorageService] ❌ S3 connection failed:`, result.details);
+            console.error(`[StorageService] ❌ Uploads will fail until S3 is configured correctly`);
           }
         }).catch(err => {
-          console.warn(`[StorageService] ⚠️  S3 health check error, will fall back to local storage:`, err.message);
+          console.error(`[StorageService] ❌ S3 health check error:`, err.message);
         });
       } else {
-        console.warn('[StorageService] ⚠️  S3 provider selected but AWS credentials not configured');
-        console.warn('[StorageService]    Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY');
-        console.warn('[StorageService]    Will fall back to local storage for uploads');
+        console.error('[StorageService] ❌ S3 provider selected but AWS credentials not configured');
+        console.error('[StorageService] ❌ Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY');
+        console.error('[StorageService] ❌ Uploads will fail until credentials are configured');
       }
     }
 
-    // Ensure local upload directory exists (needed for local or fallback)
-    this.ensureUploadDir();
-    console.log(`[StorageService] Local storage directory ready (for fallback or local mode)`);
+    // Ensure local upload directory exists
+    if (this.provider === 'local') {
+      this.ensureUploadDir();
+      console.log(`[StorageService] Local storage directory ready`);
+    }
   }
 
   private ensureUploadDir() {
@@ -190,13 +193,7 @@ class StorageService {
 
     switch (this.provider) {
       case 's3':
-        const s3Result = await this.uploadToS3(file, key, options.mimetype);
-        // If S3 fails, fall back to local storage
-        if (!s3Result.success) {
-          console.warn(`[StorageService] S3 upload failed, falling back to local storage:`, s3Result.error);
-          return this.uploadToLocal(file, key);
-        }
-        return s3Result;
+        return this.uploadToS3(file, key, options.mimetype);
       case 'r2':
         return this.uploadToR2(file, key, options.mimetype);
       case 'supabase':
