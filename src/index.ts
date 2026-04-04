@@ -35,6 +35,7 @@ import searchRoutes from './routes/search.js';
 import errorLogsRoutes from './routes/error-logs.js';
 import errorsRoutes from './routes/errors.js';
 import jobsRoutes from './routes/jobs.js';
+import powersyncRoutes from './routes/powersync.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
@@ -619,6 +620,7 @@ app.route('/api/search', searchRoutes);
 app.route('/api/error-logs', errorLogsRoutes);
 app.route('/api/errors', errorsRoutes);
 app.route('/api/jobs', jobsRoutes);
+app.route('/api/powersync', powersyncRoutes);
 
 // 404 handler
 app.notFound((c) => {

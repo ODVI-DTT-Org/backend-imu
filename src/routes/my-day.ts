@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
+import { storageService } from '../services/storage.js';
+import {
+  ValidationError,
+  NotFoundError,
+} from '../errors/index.js';
 
 const myDay = new Hono();
 
@@ -446,21 +451,116 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
   }
 });
 
-// POST /api/my-day/visits - Submit complete visit form
+// POST /api/my-day/visits - Submit complete visit form with file uploads (multipart/form-data)
 myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create'), async (c) => {
+  let uploadedPhotoUrl: string | undefined;
+  let uploadedPhotoKey: string | undefined;
+  let uploadedAudioUrl: string | undefined;
+  let uploadedAudioKey: string | undefined;
+
   try {
     const user = c.get('user');
-    const body = await c.req.json();
-    const validated = visitFormSchema.parse(body);
 
-    // Verify client exists (no ownership check - users can add any client)
+    // Parse multipart form data
+    const body = await c.req.parseBody();
+
+    // Extract form fields
+    const clientId = body['client_id'] as string;
+    const touchpointNumberStr = body['touchpoint_number'] as string;
+    const type = body['type'] as 'Visit' | 'Call';
+    const reason = body['reason'] as string;
+    const address = body['address'] as string | undefined;
+    const timeArrival = body['time_arrival'] as string | undefined;
+    const timeDeparture = body['time_departure'] as string | undefined;
+    const odometerArrival = body['odometer_arrival'] as string | undefined;
+    const odometerDeparture = body['odometer_departure'] as string | undefined;
+    const nextVisitDate = body['next_visit_date'] as string | undefined;
+    const notes = body['notes'] as string | undefined;
+    const latitudeStr = body['latitude'] as string | undefined;
+    const longitudeStr = body['longitude'] as string | undefined;
+
+    // Extract files
+    const photoFile = body['photo'] as File | undefined;
+    const audioFile = body['audio'] as File | undefined;
+
+    // Validate required fields
+    if (!clientId || !touchpointNumberStr || !type || !reason) {
+      throw new ValidationError('Missing required fields: client_id, touchpoint_number, type, reason');
+    }
+
+    const touchpointNumber = parseInt(touchpointNumberStr);
+    if (isNaN(touchpointNumber) || touchpointNumber < 1 || touchpointNumber > 7) {
+      throw new ValidationError('Invalid touchpoint_number. Must be between 1 and 7');
+    }
+
+    // Validate type enum
+    if (type !== 'Visit' && type !== 'Call') {
+      throw new ValidationError('Invalid type. Must be "Visit" or "Call"');
+    }
+
+    // Validate UUID
+    try {
+      if (!clientId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        throw new ValidationError('Invalid client_id format');
+      }
+    } catch {
+      throw new ValidationError('Invalid client_id format');
+    }
+
+    // Parse optional numeric fields
+    const latitude = latitudeStr ? parseFloat(latitudeStr) : undefined;
+    const longitude = longitudeStr ? parseFloat(longitudeStr) : undefined;
+
+    // Handle photo upload
+    if (photoFile && photoFile instanceof File) {
+      const photoBuffer = Buffer.from(await photoFile.arrayBuffer());
+
+      const photoResult = await storageService.upload({
+        file: photoBuffer,
+        filename: photoFile.name,
+        mimetype: photoFile.type,
+        folder: 'touchpoint_photo',
+        maxSize: 10 * 1024 * 1024, // 10MB
+        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+      });
+
+      if (!photoResult.success || !photoResult.url) {
+        throw new ValidationError(`Photo upload failed: ${photoResult.error || 'Unknown error'}`);
+      }
+
+      uploadedPhotoUrl = photoResult.url;
+      uploadedPhotoKey = photoResult.key;
+    }
+
+    // Handle audio upload
+    if (audioFile && audioFile instanceof File) {
+      const audioBuffer = Buffer.from(await audioFile.arrayBuffer());
+
+      const audioResult = await storageService.upload({
+        file: audioBuffer,
+        filename: audioFile.name,
+        mimetype: audioFile.type,
+        folder: 'touchpoint_audio',
+        maxSize: 25 * 1024 * 1024, // 25MB
+        allowedMimeTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/m4a', 'audio/webm'],
+      });
+
+      if (!audioResult.success || !audioResult.url) {
+        throw new ValidationError(`Audio upload failed: ${audioResult.error || 'Unknown error'}`);
+      }
+
+      uploadedAudioUrl = audioResult.url;
+      uploadedAudioKey = audioResult.key;
+    }
+
+    // Verify client exists
     const clientCheck = await pool.query(
       'SELECT * FROM clients WHERE id = $1',
-      [validated.client_id]
+      [clientId]
     );
 
     if (clientCheck.rows.length === 0) {
-      return c.json({ message: 'Client not found or not assigned to you' }, 404);
+      throw new NotFoundError('Client');
     }
 
     const today = getLocalDateString();
@@ -468,7 +568,7 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
     // Check for existing touchpoint today
     const existing = await pool.query(
       'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
-      [validated.client_id, user.sub, today]
+      [clientId, user.sub, today]
     );
 
     let result;
@@ -482,10 +582,10 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
           latitude = $13, longitude = $14, updated_at = NOW()
         WHERE id = $15 RETURNING *`,
         [
-          validated.touchpoint_number, validated.type, validated.reason, validated.address,
-          validated.time_arrival, validated.time_departure, validated.odometer_arrival, validated.odometer_departure,
-          validated.next_visit_date, validated.notes, validated.photo_url, validated.audio_url,
-          validated.latitude, validated.longitude, existing.rows[0].id
+          touchpointNumber, type, reason, address,
+          timeArrival, timeDeparture, odometerArrival, odometerDeparture,
+          nextVisitDate, notes, uploadedPhotoUrl, uploadedAudioUrl,
+          latitude, longitude, existing.rows[0].id
         ]
       );
     } else {
@@ -500,10 +600,49 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
           gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'Completed'
         ) RETURNING *`,
         [
-          validated.client_id, user.sub, validated.touchpoint_number, validated.type, today,
-          validated.reason, validated.address, validated.time_arrival, validated.time_departure,
-          validated.odometer_arrival, validated.odometer_departure, validated.next_visit_date,
-          validated.notes, validated.photo_url, validated.audio_url, validated.latitude, validated.longitude
+          clientId, user.sub, touchpointNumber, type, today,
+          reason, address, timeArrival, timeDeparture,
+          odometerArrival, odometerDeparture, nextVisitDate,
+          notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude
+        ]
+      );
+    }
+
+    const touchpoint = result.rows[0];
+
+    // Store file metadata in database
+    if (uploadedPhotoUrl && uploadedPhotoKey && photoFile) {
+      await pool.query(
+        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          uploadedPhotoKey.split('/').pop(),
+          photoFile.name,
+          photoFile.type,
+          photoFile.size,
+          uploadedPhotoUrl,
+          uploadedPhotoKey,
+          user.sub,
+          'touchpoint',
+          touchpoint.id,
+        ]
+      );
+    }
+
+    if (uploadedAudioUrl && uploadedAudioKey && audioFile) {
+      await pool.query(
+        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          uploadedAudioKey.split('/').pop(),
+          audioFile.name,
+          audioFile.type,
+          audioFile.size,
+          uploadedAudioUrl,
+          uploadedAudioKey,
+          user.sub,
+          'touchpoint',
+          touchpoint.id,
         ]
       );
     }
@@ -512,17 +651,46 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
     await pool.query(
       `UPDATE itineraries SET status = 'completed', updated_at = NOW()
        WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3 AND status != 'completed'`,
-      [validated.client_id, user.sub, today]
+      [clientId, user.sub, today]
     );
 
     return c.json({
       message: 'Visit submitted successfully',
-      touchpoint: result.rows[0],
+      touchpoint: {
+        ...touchpoint,
+        photo_url: uploadedPhotoUrl,
+        audio_url: uploadedAudioUrl,
+      },
     });
   } catch (error: any) {
+    // Clean up uploaded files if touchpoint creation failed
+    if (uploadedPhotoKey) {
+      try {
+        await storageService.delete(uploadedPhotoKey);
+      } catch (cleanupError) {
+        console.error('[Submit Visit] Failed to cleanup photo:', cleanupError);
+      }
+    }
+    if (uploadedAudioKey) {
+      try {
+        await storageService.delete(uploadedAudioKey);
+      } catch (cleanupError) {
+        console.error('[Submit Visit] Failed to cleanup audio:', cleanupError);
+      }
+    }
+
     if (error instanceof z.ZodError) {
       return c.json({ message: 'Invalid input', errors: error.errors }, 400);
     }
+
+    if (error.name === 'ValidationError') {
+      return c.json({ message: error.message }, 400);
+    }
+
+    if (error.name === 'NotFoundError') {
+      return c.json({ message: error.message }, 404);
+    }
+
     console.error('Submit visit error:', error);
     return c.json({ message: 'Internal server error' }, 500);
   }
