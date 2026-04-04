@@ -77,14 +77,26 @@ class StorageService {
     // Initialize S3 client if using S3
     if (this.provider === 's3') {
       if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+        const region = process.env.AWS_REGION || 'ap-southeast-1';
+        const accessKeyId = process.env.AWS_ACCESS_KEY_ID;
+        const accessKeyLast4 = accessKeyId.slice(-4);
+
         this.s3Client = new S3Client({
-          region: process.env.AWS_REGION || 'us-east-1',
+          region,
           credentials: {
-            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            accessKeyId,
             secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
           },
+          // Add more robust configuration
+          maxAttempts: 3,
+          requestHandler: {
+            requestTimeout: 30000, // 30 seconds
+            httpsAgent: undefined, // Use default agent
+          },
         });
-        console.log(`[StorageService] S3 client initialized: bucket=${this.bucket}, region=${process.env.AWS_REGION || 'us-east-1'}`);
+
+        console.log(`[StorageService] S3 client initialized: bucket=${this.bucket}, region=${region}`);
+        console.log(`[StorageService] Using access key: ****${accessKeyLast4}`);
 
         // Test S3 connection on startup
         this.checkS3Connection().then(result => {
@@ -464,7 +476,7 @@ class StorageService {
         connected: true,
         details: {
           bucket: this.bucket,
-          region: process.env.AWS_REGION || 'us-east-1',
+          region: process.env.AWS_REGION || 'ap-southeast-1',
           message: 'S3 connection successful'
         }
       };
@@ -472,14 +484,23 @@ class StorageService {
       // Provide detailed error information
       const details: any = {
         bucket: this.bucket,
-        region: process.env.AWS_REGION || 'us-east-1',
+        region: process.env.AWS_REGION || 'ap-southeast-1',
         error: error.name,
         message: error.message
       };
 
+      // Log full error for debugging
+      console.error('[StorageService] Full S3 error details:', {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        $metadata: error.$metadata,
+        toString: error.toString()
+      });
+
       // Add specific guidance for common errors
       if (error.name === 'NoSuchBucket') {
-        details.reason = `Bucket '${this.bucket}' does not exist in region ${process.env.AWS_REGION || 'us-east-1'}`;
+        details.reason = `Bucket '${this.bucket}' does not exist in region ${process.env.AWS_REGION || 'ap-southeast-1'}`;
         details.fix = `Create the bucket or update STORAGE_BUCKET environment variable`;
       } else if (error.name === 'InvalidAccessKeyId') {
         details.reason = 'AWS Access Key ID is invalid';
@@ -491,9 +512,13 @@ class StorageService {
         details.reason = 'IAM user lacks s3:ListBucket permission';
         details.fix = 'Grant s3:ListBucket and s3:PutObject permissions to IAM user';
       } else if (error.name === 'UnknownError') {
-        details.reason = 'Network error or bucket not accessible';
-        details.fix = 'Check bucket name, region, and network connectivity';
+        details.reason = 'Network error, bucket not accessible, or bucket in different region';
+        details.fix = `Verify bucket '${this.bucket}' exists in region ${process.env.AWS_REGION || 'ap-southeast-1'}`;
         details.fullError = error.toString();
+        // Try to get more error details
+        if (error.Details) {
+          details.additionalDetails = error.Details;
+        }
       }
 
       return { connected: false, details };
