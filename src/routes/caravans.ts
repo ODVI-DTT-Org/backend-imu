@@ -22,16 +22,16 @@ const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as con
 
 // Validation schemas
 const createCaravanSchema = z.object({
-  name: z.string().min(1),
-  email: z.string().email(),
-  phone: z.string().optional(),
+  name: z.string().min(1).max(255),
+  email: z.string().max(255),
+  phone: z.string().max(50).optional(),
   is_active: z.boolean().optional(),
 });
 
 const updateCaravanSchema = z.object({
-  name: z.string().min(1).optional(),
-  email: z.string().email().optional(),
-  phone: z.string().optional(),
+  name: z.string().min(1).max(255).optional(),
+  email: z.string().max(255).optional(),
+  phone: z.string().max(50).optional(),
   is_active: z.boolean().optional(),
 });
 

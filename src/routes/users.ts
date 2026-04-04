@@ -34,16 +34,24 @@ const passwordComplexityRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 
 // Validation schemas
 const createUserSchema = z.object({
-  email: z.string().email(),
+  email: z.string().email().max(255),
   password: z.string().regex(passwordComplexityRegex, 'Password must be at least 8 characters with 1 uppercase, 1 lowercase, and 1 number'),
-  first_name: z.string().min(1),
-  last_name: z.string().min(1),
+  first_name: z.string().min(1).max(255),
+  last_name: z.string().min(1).max(255),
   role: z.enum(VALID_ROLES).default('caravan'),
-  phone: z.string().optional(),
-  avatar_url: z.string().optional(),
+  phone: z.string().max(50).optional(),
+  avatar_url: z.string().max(500).optional(),
 });
 
-const updateUserSchema = createUserSchema.partial().omit({ password: true });
+// Separate update schema - email optional but doesn't validate empty strings as email
+const updateUserSchema = z.object({
+  email: z.string().max(255).optional(),
+  first_name: z.string().min(1).max(255).optional(),
+  last_name: z.string().min(1).max(255).optional(),
+  role: z.enum(VALID_ROLES).optional(),
+  phone: z.string().max(50).optional(),
+  avatar_url: z.string().max(500).optional(),
+});
 
 const changePasswordSchema = z.object({
   current_password: z.string().min(1),
