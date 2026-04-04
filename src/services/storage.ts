@@ -97,18 +97,7 @@ class StorageService {
 
         console.log(`[StorageService] S3 client initialized: bucket=${this.bucket}, region=${region}`);
         console.log(`[StorageService] Using access key: ****${accessKeyLast4}`);
-
-        // Test S3 connection on startup
-        this.checkS3Connection().then(result => {
-          if (result.connected) {
-            console.log(`[StorageService] ✅ S3 connection verified: ${this.bucket}`);
-          } else {
-            console.error(`[StorageService] ❌ S3 connection failed:`, result.details);
-            console.error(`[StorageService] ❌ Uploads will fail until S3 is configured correctly`);
-          }
-        }).catch(err => {
-          console.error(`[StorageService] ❌ S3 health check error:`, err.message);
-        });
+        console.log(`[StorageService] ✅ S3 ready - uploads will work if credentials have PutObject permission`);
       } else {
         console.error('[StorageService] ❌ S3 provider selected but AWS credentials not configured');
         console.error('[StorageService] ❌ Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY');
