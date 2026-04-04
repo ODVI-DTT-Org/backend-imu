@@ -130,33 +130,109 @@ export function logInitResult(result: InitResult): void {
 }
 
 /**
- * Log initialization summary
+ * Log initialization summary with grouped services by status
  */
-export function logInitSummary(summary: InitSummary): void {
+export function logInitSummary(summary: InitSummary, results: InitResult[]): void {
   const separator = '═'.repeat(70);
   const successRate = summary.total > 0
     ? Math.round((summary.success / summary.total) * 100)
     : 0;
 
-  console.log(separator);
-  console.log('║ Initialization Summary' + ' '.repeat(46) + '║');
-  console.log(separator);
-  console.log(`║ Total Services:     ${summary.total}${' '.repeat(63 - String(summary.total).length)}║`);
-  console.log(`║ ✅ Successful:      ${summary.success}${' '.repeat(63 - String(summary.success).length)}║`);
-  console.log(`║ ⚠️  Warnings:        ${summary.warning}${' '.repeat(63 - String(summary.warning).length)}║`);
-  console.log(`║ ❌ Errors:          ${summary.error}${' '.repeat(63 - String(summary.error).length)}║`);
-  console.log(`║ ⊘ Skipped:          ${summary.skipped}${' '.repeat(63 - String(summary.skipped).length)}║`);
-  console.log(`║ Success Rate:       ${successRate}%${' '.repeat(63 - String(successRate).length + 1)}║`);
-  console.log(`║ Total Duration:     ${formatDuration(summary.duration)}${' '.repeat(63 - formatDuration(summary.duration).length)}║`);
+  // Group services by status
+  const successful = results.filter(r => r.status === 'success');
+  const warnings = results.filter(r => r.status === 'warning');
+  const errors = results.filter(r => r.status === 'error');
+  const skipped = results.filter(r => r.status === 'skipped');
+
+  console.log('\n' + separator);
+  console.log('║' + ' '.repeat(68) + '║');
+  console.log('║' + centerText('INITIALIZATION RESULTS', 68) + '║');
+  console.log('║' + ' '.repeat(68) + '║');
   console.log(separator);
 
+  // Log successful services
+  if (successful.length > 0) {
+    console.log('║' + ' ✅ SUCCESSFUL SERVICES (' + successful.length + ')' + ' '.repeat(68 - 25 - String(successful.length).length) + '║');
+    console.log('║' + '─'.repeat(68) + '║');
+    successful.forEach(result => {
+      console.log('║ ' + result.service + ' - ' + result.message);
+      if (result.details && Object.keys(result.details).length > 0) {
+        const keyValues = Object.entries(result.details)
+          .filter(([key]) => !key.startsWith('⚠️')) // Exclude warning details from success section
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(' | ');
+        console.log('║   └─ ' + keyValues);
+      }
+    });
+    console.log('║' + ' '.repeat(68) + '║');
+  }
+
+  // Log warnings
+  if (warnings.length > 0) {
+    console.log('║' + ' ⚠️  WARNINGS (' + warnings.length + ')' + ' '.repeat(68 - 17 - String(warnings.length).length) + '║');
+    console.log('║' + '─'.repeat(68) + '║');
+    warnings.forEach(result => {
+      console.log('║ ' + result.service + ' - ' + result.message);
+      if (result.details && Object.keys(result.details).length > 0) {
+        const keyValues = Object.entries(result.details)
+          .map(([key, value]) => `${key}: ${value}`)
+          .join(' | ');
+        console.log('║   └─ ' + keyValues);
+      }
+    });
+    console.log('║' + ' '.repeat(68) + '║');
+  }
+
+  // Log errors
+  if (errors.length > 0) {
+    console.log('║' + ' ❌ ERRORS (' + errors.length + ')' + ' '.repeat(68 - 13 - String(errors.length).length) + '║');
+    console.log('║' + '─'.repeat(68) + '║');
+    errors.forEach(result => {
+      console.log('║ ' + result.service + ' - ' + result.message);
+      if (result.error) {
+        console.log('║   └─ Error: ' + result.error.message);
+      }
+    });
+    console.log('║' + ' '.repeat(68) + '║');
+  }
+
+  // Log skipped
+  if (skipped.length > 0) {
+    console.log('║' + ' ⊘ SKIPPED (' + skipped.length + ')' + ' '.repeat(68 - 15 - String(skipped.length).length) + '║');
+    console.log('║' + '─'.repeat(68) + '║');
+    skipped.forEach(result => {
+      console.log('║ ' + result.service + ' - ' + result.message);
+    });
+    console.log('║' + ' '.repeat(68) + '║');
+  }
+
+  // Summary line
+  console.log(separator);
+  console.log('║' + ' '.repeat(68) + '║');
+  console.log('║' + centerText(`Total: ${summary.success} successful | ${summary.warning} warnings | ${summary.error} errors | ${summary.skipped} skipped`, 68) + '║');
+  console.log('║' + ' '.repeat(68) + '║');
+  console.log('║' + centerText(`Duration: ${formatDuration(summary.duration)} | Success Rate: ${successRate}%`, 68) + '║');
+  console.log('║' + ' '.repeat(68) + '║');
+  console.log(separator);
+
+  // Final message
   if (summary.error > 0) {
-    console.log('\n⚠️  WARNING: Some services failed to initialize. Check logs above for details.\n');
+    console.log('\n⚠️  WARNING: Some services failed to initialize. Server may not function correctly.\n');
   } else if (summary.warning > 0) {
-    console.log('\n⚠️  WARNING: Some services initialized with warnings. Check logs above for details.\n');
+    console.log('\n⚠️  WARNING: Some services initialized with warnings. Check details above.\n');
   } else {
     console.log('\n✅ All services initialized successfully!\n');
   }
+}
+
+/**
+ * Helper function to center text within a box
+ */
+function centerText(text: string, width: number): string {
+  const padding = Math.max(0, width - text.length);
+  const leftPadding = Math.floor(padding / 2);
+  const rightPadding = padding - leftPadding;
+  return ' '.repeat(leftPadding) + text + ' '.repeat(rightPadding);
 }
 
 /**
@@ -754,7 +830,7 @@ export async function initializeBackend(): Promise<{ summary: InitSummary; resul
   };
 
   // Log summary
-  logInitSummary(summary);
+  logInitSummary(summary, results);
 
   // Log to file for persistence
   logger.info('backend/init', 'Backend initialization complete', {
