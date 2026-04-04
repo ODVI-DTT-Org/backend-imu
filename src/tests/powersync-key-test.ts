@@ -19,8 +19,9 @@ interface TestResult {
   details?: Record<string, any>;
 }
 
-const results: TestResult[] = async function runTests() {
+async function runTests(): Promise<TestResult[]> {
   console.log('🔐 PowerSync Key Verification Test\n');
+  const results: TestResult[] = [];
 
   // Test 1: Check environment variables
   console.log('Test 1: Checking environment variables...');
@@ -234,6 +235,7 @@ const results: TestResult[] = async function runTests() {
   }
 
   return results;
-}();
+}
 
-export { results };
+// Run the tests
+runTests().catch(console.error);
