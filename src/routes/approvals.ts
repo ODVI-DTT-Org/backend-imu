@@ -829,45 +829,13 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
 
     const clientData = clientCheck.rows[0];
 
-    // Step 1: Mark all 7 touchpoints as complete (create missing ones if needed)
-    const existingTouchpoints = await client.query(
-      'SELECT touchpoint_number FROM touchpoints WHERE client_id = $1',
-      [validated.client_id]
-    );
-
-    const existingNumbers = new Set(existingTouchpoints.rows.map(row => row.touchpoint_number));
-
-    // Create any missing touchpoints (1-7) as completed
-    for (let i = 1; i <= 7; i++) {
-      if (!existingNumbers.has(i)) {
-        await client.query(
-          `INSERT INTO touchpoints (id, client_id, user_id, touchpoint_number, type, date, reason, status, time_in, time_out)
-           VALUES (gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, NOW(), NOW())`,
-          [
-            validated.client_id,
-            user.sub,
-            i,
-            i === 1 || i === 4 || i === 7 ? 'Visit' : 'Call', // Visit for 1,4,7; Call for 2,3,5,6
-            'Loan released - auto-completed',
-            'Completed',
-          ]
-        );
-      } else {
-        // Update existing touchpoint to completed
-        await client.query(
-          'UPDATE touchpoints SET status = $1, updated_at = NOW() WHERE client_id = $2 AND touchpoint_number = $3',
-          ['Completed', validated.client_id, i]
-        );
-      }
-    }
-
-    // Step 2: Mark client as loan_released
+    // Step 1: Mark client as loan_released
     await client.query(
       'UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(), updated_at = NOW() WHERE id = $1',
       [validated.client_id]
     );
 
-    // Step 3: Create UDI approval for loan release
+    // Step 2: Create UDI approval for loan release
     const result = await client.query(
       `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, udi_number, status)
        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'pending')
@@ -886,7 +854,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
     await client.query('COMMIT'); // Commit transaction
 
     return c.json({
-      message: 'Loan release submitted for approval. All touchpoints marked as complete.',
+      message: 'Loan release submitted for approval.',
       approval: {
         id: result.rows[0].id,
         type: result.rows[0].type,
