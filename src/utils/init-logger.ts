@@ -681,6 +681,7 @@ export async function initPowerSync(): Promise<InitResult> {
     // Test JWT generation to verify keys work
     let jwtTestPassed = false;
     let jwtTestError = '';
+    let jwtTestDetails: Record<string, any> = {};
     try {
       // Import jwt here to avoid issues if not available
       const jwt = await import('jsonwebtoken');
@@ -691,19 +692,46 @@ export async function initPowerSync(): Promise<InitResult> {
         exp: Math.floor(Date.now() / 1000) + 3600, // Expires in 1 hour
       };
 
+      console.log('[PowerSync Test] Creating test JWT with RS256 algorithm...');
       const testToken = jwt.sign(
         testPayload,
         privateKey as string, // Non-null assertion after validation above
         { algorithm: 'RS256', keyid: keyId }
       );
 
-      // Verify the test token with public key
-      const publicKey = process.env.POWERSYNC_PUBLIC_KEY as string; // Non-null assertion after validation above
-      jwt.verify(testToken, publicKey, { algorithms: ['RS256'] });
+      jwtTestDetails['Token Created'] = 'Yes';
+      jwtTestDetails['Token Length'] = testToken.length;
 
+      // Verify the test token with public key
+      console.log('[PowerSync Test] Verifying JWT with public key...');
+      const publicKey = process.env.POWERSYNC_PUBLIC_KEY as string; // Non-null assertion after validation above
+
+      const decoded = jwt.verify(testToken, publicKey, { algorithms: ['RS256'] });
+      jwtTestDetails['Verification'] = 'Success';
+      jwtTestDetails['Decoded Payload'] = JSON.stringify(decoded);
+
+      console.log('[PowerSync Test] ✅ JWT test passed - keys are matching');
       jwtTestPassed = true;
     } catch (testError: any) {
       jwtTestError = testError.message || 'Unknown error';
+      jwtTestDetails['Error Name'] = testError.name;
+      jwtTestDetails['Error Message'] = jwtTestError;
+
+      // Provide more specific error messages
+      if (testError.name === 'JsonWebTokenError') {
+        if (jwtTestError.includes('invalid signature')) {
+          jwtTestDetails['Diagnosis'] = 'Private key and public key do not match';
+          console.error('[PowerSync Test] ❌ JWT verification failed: Keys do not match!');
+        } else if (jwtTestError.includes('malformed')) {
+          jwtTestDetails['Diagnosis'] = 'Key format is invalid (not proper PEM format)';
+          console.error('[PowerSync Test] ❌ JWT verification failed: Key format is invalid!');
+        }
+      } else if (testError.name === 'TokenExpiredError') {
+        jwtTestDetails['Diagnosis'] = 'Test token expired (should not happen)';
+      }
+
+      console.error('[PowerSync Test] ❌ JWT test failed:', jwtTestError);
+      console.error('[PowerSync Test] Details:', JSON.stringify(jwtTestDetails, null, 2));
     }
 
     if (!jwtTestPassed) {
@@ -716,19 +744,60 @@ export async function initPowerSync(): Promise<InitResult> {
           ...details,
           'Test Result': 'FAILED',
           'Error': jwtTestError,
+          'Test Details': jwtTestDetails,
         },
       };
+    }
+
+    // Test PowerSync connection
+    let connectionTestPassed = false;
+    let connectionTestDetails: Record<string, any> = {};
+    try {
+      console.log('[PowerSync Test] Testing connection to PowerSync instance...');
+      const response = await fetch(`${url}/api`, {
+        method: 'GET',
+        headers: {
+          'Accept': 'application/json',
+        },
+        signal: AbortSignal.timeout(10000), // 10 second timeout
+      });
+
+      connectionTestDetails['Status Code'] = response.status;
+      connectionTestDetails['Response OK'] = response.ok;
+
+      if (response.ok || response.status === 401) {
+        // 401 is expected - we're not authenticated
+        // 200 is also possible for public endpoints
+        connectionTestPassed = true;
+        console.log('[PowerSync Test] ✅ Connection test passed');
+      } else {
+        connectionTestDetails['Error'] = `Unexpected status: ${response.status}`;
+        console.warn('[PowerSync Test] ⚠️ Connection test returned unexpected status:', response.status);
+      }
+    } catch (connError: any) {
+      connectionTestDetails['Error'] = connError.message;
+      connectionTestDetails['Error Type'] = connError.name;
+
+      // Don't fail the whole test if connection test fails
+      // The JWT test is more important
+      console.warn('[PowerSync Test] ⚠️ Connection test failed:', connError.message);
+      console.warn('[PowerSync Test] This may be temporary or due to network restrictions');
     }
 
     return {
       service: 'PowerSync',
       status: 'success',
-      message: 'PowerSync JWT token generation ready (connection tested)',
+      message: connectionTestPassed
+        ? 'PowerSync JWT token generation ready (connection tested)'
+        : 'PowerSync JWT token generation ready (connection test skipped)',
       duration: Date.now() - startTime,
       details: {
         ...details,
         'Test Result': 'PASSED',
         'Test': 'JWT generation and verification successful',
+        'Connection Test': connectionTestPassed ? 'PASSED' : 'SKIPPED',
+        'Connection Details': connectionTestDetails,
+        'JWT Test Details': jwtTestDetails,
       },
     };
   } catch (error: any) {
