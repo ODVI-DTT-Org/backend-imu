@@ -1,15 +1,28 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
+import { rateLimit } from '../middleware/rate-limit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
 import {
   ValidationError,
   NotFoundError,
+  AppError,
+  ConflictError,
 } from '../errors/index.js';
 
 const myDay = new Hono();
+
+// Constants for file size limits (in bytes)
+const MAX_PHOTO_SIZE = parseInt(process.env.MAX_PHOTO_SIZE || '10485760'); // 10MB default
+const MAX_AUDIO_SIZE = parseInt(process.env.MAX_AUDIO_SIZE || '26214400'); // 25MB default
+const MAX_REQUEST_SIZE = parseInt(process.env.MAX_REQUEST_SIZE || '52428800'); // 50MB default
+
+// Valid touchpoint statuses
+const VALID_STATUSES = ['Interested', 'Undecided', 'Not Interested', 'Completed', 'Follow-up Needed'];
 
 // Validation schemas
 const visitFormSchema = z.object({
@@ -17,6 +30,7 @@ const visitFormSchema = z.object({
   touchpoint_number: z.number().int().min(1).max(7),
   type: z.enum(['Visit', 'Call']),
   reason: z.string(),
+  status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed', 'Follow-up Needed']).optional(),
   address: z.string().optional(),
   time_arrival: z.string().optional(),
   time_departure: z.string().optional(),
@@ -451,12 +465,53 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
   }
 });
 
+// Rate limiting for touchpoint submission (10 requests per 15 minutes per user)
+const touchpointRateLimit = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  maxRequests: 10,
+  message: 'Too many touchpoint submissions. Please try again later.',
+});
+
+// Helper function to calculate SHA-256 hash for file deduplication
+function calculateFileHash(buffer: Buffer): string {
+  return createHash('sha256').update(buffer).digest('hex');
+}
+
+// Helper function to delete file with retry mechanism
+async function deleteFileWithRetry(key: string, maxRetries = 3): Promise<boolean> {
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await storageService.delete(key);
+      if (result.success) {
+        console.log(`[File Cleanup] Successfully deleted file: ${key} (attempt ${attempt})`);
+        return true;
+      }
+    } catch (error) {
+      console.warn(`[File Cleanup] Attempt ${attempt} failed for ${key}:`, error);
+      if (attempt === maxRetries) {
+        console.error(`[File Cleanup] Failed to delete file after ${maxRetries} attempts: ${key}`);
+        // TODO: Add to dead letter queue for later cleanup
+        return false;
+      }
+      // Wait before retry (exponential backoff)
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, attempt - 1), 10000)));
+    }
+  }
+  return false;
+}
+
 // POST /api/my-day/visits - Submit complete visit form with file uploads (multipart/form-data)
-myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create'), async (c) => {
+myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('touchpoints', 'create'), async (c) => {
   let uploadedPhotoUrl: string | undefined;
   let uploadedPhotoKey: string | undefined;
   let uploadedAudioUrl: string | undefined;
   let uploadedAudioKey: string | undefined;
+  let uploadedPhotoHash: string | undefined;
+  let uploadedAudioHash: string | undefined;
+
+  // Generate request ID for tracing
+  const requestId = uuidv4();
+  c.header('X-Request-Id', requestId);
 
   try {
     const user = c.get('user');
@@ -469,6 +524,7 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
     const touchpointNumberStr = body['touchpoint_number'] as string;
     const type = body['type'] as 'Visit' | 'Call';
     const reason = body['reason'] as string;
+    const status = body['status'] as string | undefined; // ✅ FIXED: Extract status field
     const address = body['address'] as string | undefined;
     const timeArrival = body['time_arrival'] as string | undefined;
     const timeDeparture = body['time_departure'] as string | undefined;
@@ -485,17 +541,29 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
 
     // Validate required fields
     if (!clientId || !touchpointNumberStr || !type || !reason) {
-      throw new ValidationError('Missing required fields: client_id, touchpoint_number, type, reason');
+      throw new ValidationError('Missing required fields: client_id, touchpoint_number, type, reason')
+        .addDetail('requestId', requestId);
     }
 
     const touchpointNumber = parseInt(touchpointNumberStr);
     if (isNaN(touchpointNumber) || touchpointNumber < 1 || touchpointNumber > 7) {
-      throw new ValidationError('Invalid touchpoint_number. Must be between 1 and 7');
+      throw new ValidationError('Invalid touchpoint_number. Must be between 1 and 7')
+        .addDetail('providedValue', touchpointNumberStr)
+        .addDetail('requestId', requestId);
     }
 
     // Validate type enum
     if (type !== 'Visit' && type !== 'Call') {
-      throw new ValidationError('Invalid type. Must be "Visit" or "Call"');
+      throw new ValidationError('Invalid type. Must be "Visit" or "Call"')
+        .addDetail('providedValue', type)
+        .addDetail('requestId', requestId);
+    }
+
+    // Validate status if provided
+    if (status && !VALID_STATUSES.includes(status)) {
+      throw new ValidationError(`Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`)
+        .addDetail('providedValue', status)
+        .addDetail('requestId', requestId);
     }
 
     // Validate UUID
@@ -504,195 +572,293 @@ myDay.post('/visits', authMiddleware, requirePermission('touchpoints', 'create')
         throw new ValidationError('Invalid client_id format');
       }
     } catch {
-      throw new ValidationError('Invalid client_id format');
+      throw new ValidationError('Invalid client_id format')
+        .addDetail('providedValue', clientId)
+        .addDetail('requestId', requestId);
     }
 
     // Parse optional numeric fields
     const latitude = latitudeStr ? parseFloat(latitudeStr) : undefined;
     const longitude = longitudeStr ? parseFloat(longitudeStr) : undefined;
 
-    // Handle photo upload
+    // Handle photo upload with deduplication
     if (photoFile && photoFile instanceof File) {
       const photoBuffer = Buffer.from(await photoFile.arrayBuffer());
+      uploadedPhotoHash = calculateFileHash(photoBuffer);
 
-      const photoResult = await storageService.upload({
-        file: photoBuffer,
-        filename: photoFile.name,
-        mimetype: photoFile.type,
-        folder: 'touchpoint_photo',
-        maxSize: 10 * 1024 * 1024, // 10MB
-        allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
-      });
+      // Check for duplicate file (same content already uploaded)
+      const duplicateCheck = await pool.query(
+        'SELECT url, storage_key FROM files WHERE hash = $1 AND entity_type = $2 ORDER BY created_at DESC LIMIT 1',
+        [uploadedPhotoHash, 'touchpoint']
+      );
 
-      if (!photoResult.success || !photoResult.url) {
-        throw new ValidationError(`Photo upload failed: ${photoResult.error || 'Unknown error'}`);
+      if (duplicateCheck.rows.length > 0) {
+        // Use existing file instead of uploading again
+        uploadedPhotoUrl = duplicateCheck.rows[0].url;
+        uploadedPhotoKey = duplicateCheck.rows[0].storage_key;
+        console.log(`[File Deduplication] Reusing existing photo: ${uploadedPhotoUrl}`);
+      } else {
+        // Upload new file
+        const photoResult = await storageService.upload({
+          file: photoBuffer,
+          filename: photoFile.name,
+          mimetype: photoFile.type,
+          folder: 'touchpoint_photo',
+          maxSize: MAX_PHOTO_SIZE, // ✅ FIXED: Use constant
+          allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+        });
+
+        if (!photoResult.success || !photoResult.url) {
+          throw new AppError('PHOTO_UPLOAD_FAILED', `Photo upload failed: ${photoResult.error || 'Unknown error'}`, 400)
+            .addDetail('requestId', requestId)
+            .addDetail('filename', photoFile.name);
+        }
+
+        uploadedPhotoUrl = photoResult.url;
+        uploadedPhotoKey = photoResult.key;
       }
-
-      uploadedPhotoUrl = photoResult.url;
-      uploadedPhotoKey = photoResult.key;
     }
 
-    // Handle audio upload
+    // Handle audio upload with deduplication
     if (audioFile && audioFile instanceof File) {
       const audioBuffer = Buffer.from(await audioFile.arrayBuffer());
+      uploadedAudioHash = calculateFileHash(audioBuffer);
 
-      const audioResult = await storageService.upload({
-        file: audioBuffer,
-        filename: audioFile.name,
-        mimetype: audioFile.type,
-        folder: 'touchpoint_audio',
-        maxSize: 25 * 1024 * 1024, // 25MB
-        allowedMimeTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/m4a', 'audio/webm'],
+      // Check for duplicate file
+      const duplicateCheck = await pool.query(
+        'SELECT url, storage_key FROM files WHERE hash = $1 AND entity_type = $2 ORDER BY created_at DESC LIMIT 1',
+        [uploadedAudioHash, 'touchpoint']
+      );
+
+      if (duplicateCheck.rows.length > 0) {
+        // Use existing file
+        uploadedAudioUrl = duplicateCheck.rows[0].url;
+        uploadedAudioKey = duplicateCheck.rows[0].storage_key;
+        console.log(`[File Deduplication] Reusing existing audio: ${uploadedAudioUrl}`);
+      } else {
+        // Upload new file
+        const audioResult = await storageService.upload({
+          file: audioBuffer,
+          filename: audioFile.name,
+          mimetype: audioFile.type,
+          folder: 'touchpoint_audio',
+          maxSize: MAX_AUDIO_SIZE, // ✅ FIXED: Use constant
+          allowedMimeTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/m4a', 'audio/webm'],
+        });
+
+        if (!audioResult.success || !audioResult.url) {
+          throw new AppError('AUDIO_UPLOAD_FAILED', `Audio upload failed: ${audioResult.error || 'Unknown error'}`, 400)
+            .addDetail('requestId', requestId)
+            .addDetail('filename', audioFile.name);
+        }
+
+        uploadedAudioUrl = audioResult.url;
+        uploadedAudioKey = audioResult.key;
+      }
+    }
+
+    // ✅ FIXED: Wrap in database transaction for atomicity
+    await pool.query('BEGIN');
+
+    try {
+      // Verify client exists
+      const clientCheck = await pool.query(
+        'SELECT * FROM clients WHERE id = $1',
+        [clientId]
+      );
+
+      if (clientCheck.rows.length === 0) {
+        throw new NotFoundError('Client')
+          .addDetail('clientId', clientId)
+          .addDetail('requestId', requestId);
+      }
+
+      const today = getLocalDateString();
+
+      // Check for existing touchpoint today
+      const existing = await pool.query(
+        'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
+        [clientId, user.sub, today]
+      );
+
+      let result;
+      if (existing.rows.length > 0) {
+        // Update existing touchpoint
+        result = await pool.query(
+          `UPDATE touchpoints SET
+            touchpoint_number = $1, type = $2, reason = $3, address = $4,
+            time_arrival = $5, time_departure = $6, odometer_arrival = $7, odometer_departure = $8,
+            next_visit_date = $9, notes = $10, photo_url = $11, audio_url = $12,
+            latitude = $13, longitude = $14, status = $15, updated_at = NOW()
+          WHERE id = $16 RETURNING *`,
+          [
+            touchpointNumber, type, reason, address,
+            timeArrival, timeDeparture, odometerArrival, odometerDeparture,
+            nextVisitDate, notes, uploadedPhotoUrl, uploadedAudioUrl,
+            latitude, longitude, status || 'Completed', // ✅ FIXED: Use status or default to 'Completed'
+            existing.rows[0].id
+          ]
+        );
+      } else {
+        // Create new touchpoint
+        result = await pool.query(
+          `INSERT INTO touchpoints (
+            id, client_id, user_id, touchpoint_number, type, date,
+            reason, address, time_arrival, time_departure,
+            odometer_arrival, odometer_departure, next_visit_date,
+            notes, photo_url, audio_url, latitude, longitude, status
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+          ) RETURNING *`,
+          [
+            clientId, user.sub, touchpointNumber, type, today,
+            reason, address, timeArrival, timeDeparture,
+            odometerArrival, odometerDeparture, nextVisitDate,
+            notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed' // ✅ FIXED: Use status
+          ]
+        );
+      }
+
+      const touchpoint = result.rows[0];
+
+      // Store file metadata in database (only for newly uploaded files, not duplicates)
+      if (uploadedPhotoUrl && uploadedPhotoKey && photoFile) {
+        // Check if this is a new upload (not a duplicate)
+        const existingFile = await pool.query(
+          'SELECT id FROM files WHERE storage_key = $1',
+          [uploadedPhotoKey]
+        );
+
+        if (existingFile.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, hash, uploaded_by, entity_type, entity_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              uploadedPhotoKey.split('/').pop(),
+              photoFile.name,
+              photoFile.type,
+              photoFile.size,
+              uploadedPhotoUrl,
+              uploadedPhotoKey,
+              uploadedPhotoHash,
+              user.sub,
+              'touchpoint',
+              touchpoint.id,
+            ]
+          );
+        }
+      }
+
+      if (uploadedAudioUrl && uploadedAudioKey && audioFile) {
+        // Check if this is a new upload
+        const existingFile = await pool.query(
+          'SELECT id FROM files WHERE storage_key = $1',
+          [uploadedAudioKey]
+        );
+
+        if (existingFile.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, hash, uploaded_by, entity_type, entity_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              uploadedAudioKey.split('/').pop(),
+              audioFile.name,
+              audioFile.type,
+              audioFile.size,
+              uploadedAudioUrl,
+              uploadedAudioKey,
+              uploadedAudioHash,
+              user.sub,
+              'touchpoint',
+              touchpoint.id,
+            ]
+          );
+        }
+      }
+
+      // Mark related itinerary as completed
+      await pool.query(
+        `UPDATE itineraries SET status = 'completed', updated_at = NOW()
+         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3 AND status != 'completed'`,
+        [clientId, user.sub, today]
+      );
+
+      // Commit transaction
+      await pool.query('COMMIT');
+
+      return c.json({
+        message: 'Visit submitted successfully',
+        touchpoint: {
+          ...touchpoint,
+          photo_url: uploadedPhotoUrl,
+          audio_url: uploadedAudioUrl,
+        },
       });
 
-      if (!audioResult.success || !audioResult.url) {
-        throw new ValidationError(`Audio upload failed: ${audioResult.error || 'Unknown error'}`);
-      }
-
-      uploadedAudioUrl = audioResult.url;
-      uploadedAudioKey = audioResult.key;
+    } catch (transactionError) {
+      // Rollback on any error
+      await pool.query('ROLLBACK');
+      throw transactionError;
     }
 
-    // Verify client exists
-    const clientCheck = await pool.query(
-      'SELECT * FROM clients WHERE id = $1',
-      [clientId]
-    );
-
-    if (clientCheck.rows.length === 0) {
-      throw new NotFoundError('Client');
-    }
-
-    const today = getLocalDateString();
-
-    // Check for existing touchpoint today
-    const existing = await pool.query(
-      'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
-      [clientId, user.sub, today]
-    );
-
-    let result;
-    if (existing.rows.length > 0) {
-      // Update existing touchpoint
-      result = await pool.query(
-        `UPDATE touchpoints SET
-          touchpoint_number = $1, type = $2, reason = $3, address = $4,
-          time_arrival = $5, time_departure = $6, odometer_arrival = $7, odometer_departure = $8,
-          next_visit_date = $9, notes = $10, photo_url = $11, audio_url = $12,
-          latitude = $13, longitude = $14, updated_at = NOW()
-        WHERE id = $15 RETURNING *`,
-        [
-          touchpointNumber, type, reason, address,
-          timeArrival, timeDeparture, odometerArrival, odometerDeparture,
-          nextVisitDate, notes, uploadedPhotoUrl, uploadedAudioUrl,
-          latitude, longitude, existing.rows[0].id
-        ]
-      );
-    } else {
-      // Create new touchpoint
-      result = await pool.query(
-        `INSERT INTO touchpoints (
-          id, client_id, user_id, touchpoint_number, type, date,
-          reason, address, time_arrival, time_departure,
-          odometer_arrival, odometer_departure, next_visit_date,
-          notes, photo_url, audio_url, latitude, longitude, status
-        ) VALUES (
-          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'Completed'
-        ) RETURNING *`,
-        [
-          clientId, user.sub, touchpointNumber, type, today,
-          reason, address, timeArrival, timeDeparture,
-          odometerArrival, odometerDeparture, nextVisitDate,
-          notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude
-        ]
-      );
-    }
-
-    const touchpoint = result.rows[0];
-
-    // Store file metadata in database
-    if (uploadedPhotoUrl && uploadedPhotoKey && photoFile) {
-      await pool.query(
-        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          uploadedPhotoKey.split('/').pop(),
-          photoFile.name,
-          photoFile.type,
-          photoFile.size,
-          uploadedPhotoUrl,
-          uploadedPhotoKey,
-          user.sub,
-          'touchpoint',
-          touchpoint.id,
-        ]
-      );
-    }
-
-    if (uploadedAudioUrl && uploadedAudioKey && audioFile) {
-      await pool.query(
-        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [
-          uploadedAudioKey.split('/').pop(),
-          audioFile.name,
-          audioFile.type,
-          audioFile.size,
-          uploadedAudioUrl,
-          uploadedAudioKey,
-          user.sub,
-          'touchpoint',
-          touchpoint.id,
-        ]
-      );
-    }
-
-    // Mark related itinerary as completed
-    await pool.query(
-      `UPDATE itineraries SET status = 'completed', updated_at = NOW()
-       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3 AND status != 'completed'`,
-      [clientId, user.sub, today]
-    );
-
-    return c.json({
-      message: 'Visit submitted successfully',
-      touchpoint: {
-        ...touchpoint,
-        photo_url: uploadedPhotoUrl,
-        audio_url: uploadedAudioUrl,
-      },
-    });
   } catch (error: any) {
-    // Clean up uploaded files if touchpoint creation failed
+    // ✅ FIXED: Clean up uploaded files if touchpoint creation failed with retry mechanism
+    const cleanupPromises: Promise<boolean>[] = [];
+
     if (uploadedPhotoKey) {
-      try {
-        await storageService.delete(uploadedPhotoKey);
-      } catch (cleanupError) {
-        console.error('[Submit Visit] Failed to cleanup photo:', cleanupError);
-      }
+      cleanupPromises.push(deleteFileWithRetry(uploadedPhotoKey));
     }
     if (uploadedAudioKey) {
-      try {
-        await storageService.delete(uploadedAudioKey);
-      } catch (cleanupError) {
-        console.error('[Submit Visit] Failed to cleanup audio:', cleanupError);
-      }
+      cleanupPromises.push(deleteFileWithRetry(uploadedAudioKey));
+    }
+
+    // Run cleanup in parallel but don't wait for it
+    Promise.all(cleanupPromises).catch((cleanupErrors) => {
+      console.error('[Submit Visit] File cleanup errors:', cleanupErrors);
+    });
+
+    if (error instanceof AppError) {
+      return c.json({
+        success: false,
+        message: error.message,
+        code: error.code,
+        requestId: error.details.requestId || 'unknown',
+        suggestions: error.suggestions,
+      }, error.statusCode as any);
     }
 
     if (error instanceof z.ZodError) {
-      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      return c.json({
+        success: false,
+        message: 'Invalid input',
+        code: 'VALIDATION_ERROR',
+        requestId,
+        errors: error.errors,
+      }, 400);
     }
 
-    if (error.name === 'ValidationError') {
-      return c.json({ message: error.message }, 400);
+    if (error.name === 'NotFoundError' || error instanceof NotFoundError) {
+      return c.json({
+        success: false,
+        message: error.message || 'Resource not found',
+        code: 'NOT_FOUND',
+        requestId,
+      }, 404);
     }
 
-    if (error.name === 'NotFoundError') {
-      return c.json({ message: error.message }, 404);
-    }
+    console.error('[Submit Visit] Error:', {
+      message: error.message,
+      code: error.code || 'INTERNAL_ERROR',
+      requestId,
+      stack: error.stack,
+    });
 
-    console.error('Submit visit error:', error);
-    return c.json({ message: 'Internal server error' }, 500);
+    return c.json({
+      success: false,
+      message: 'An error occurred while submitting your touchpoint. Please try again.',
+      code: 'INTERNAL_ERROR',
+      requestId,
+    }, 500);
   }
 });
 
