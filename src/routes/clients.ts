@@ -450,6 +450,10 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
     const user = c.get('user');
     const id = c.req.param('id');
     const body = await c.req.json();
+
+    // Debug: Log received body
+    console.log('[PUT /api/clients/:id] Received body:', JSON.stringify(body, null, 2));
+
     const validated = updateClientSchema.parse(body);
 
     // Check if client exists
@@ -543,6 +547,7 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
   } catch (error) {
     await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
+      console.error('[PUT /api/clients/:id] Zod validation errors:', JSON.stringify(error.errors, null, 2));
       const validationError = new ValidationError('Validation failed');
       error.errors.forEach((err: any) => {
         validationError.addFieldError(err.path[0] || 'unknown', err.message);

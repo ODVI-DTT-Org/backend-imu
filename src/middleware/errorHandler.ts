@@ -59,6 +59,7 @@ export const errorHandler = async (c: Context, next: Next) => {
     const statusCode = (error as any).statusCode || 500;
     const errorCode = (error as any).code || 'INTERNAL_SERVER_ERROR';
     const suggestions = (error as any).suggestions || [];
+    const fieldErrors = (error as any).errors || [];
 
     c.header('Content-Type', 'application/json');
     const response = c.newResponse(JSON.stringify({
@@ -67,6 +68,7 @@ export const errorHandler = async (c: Context, next: Next) => {
       statusCode,
       code: errorCode,
       requestId,
+      ...(fieldErrors.length > 0 && { errors: fieldErrors }),
       ...(suggestions.length > 0 && { suggestions }),
     }), statusCode);
 
