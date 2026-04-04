@@ -6,6 +6,7 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
+import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 type StorageProvider = 'local' | 's3' | 'r2' | 'supabase';
 
@@ -64,15 +65,47 @@ class StorageService {
   private provider: StorageProvider;
   private bucket: string;
   private baseUrl: string;
+  private s3Client: S3Client | null = null;
 
   constructor() {
     this.provider = (process.env.STORAGE_PROVIDER as StorageProvider) || 'local';
     this.bucket = process.env.STORAGE_BUCKET || 'imu-uploads';
     this.baseUrl = process.env.STORAGE_BASE_URL || 'http://localhost:3000/uploads';
 
+    console.log(`[StorageService] Provider: ${this.provider}, Bucket: ${this.bucket}`);
+
+    // Initialize S3 client if using S3
+    if (this.provider === 's3') {
+      if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
+        this.s3Client = new S3Client({
+          region: process.env.AWS_REGION || 'us-east-1',
+          credentials: {
+            accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+            secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+          },
+        });
+        console.log(`[StorageService] S3 client initialized: bucket=${this.bucket}, region=${process.env.AWS_REGION || 'us-east-1'}`);
+
+        // Test S3 connection on startup
+        this.checkS3Connection().then(result => {
+          if (result.connected) {
+            console.log(`[StorageService] ✅ S3 connection verified: ${this.bucket}`);
+          } else {
+            console.error(`[StorageService] ❌ S3 connection failed:`, result.details);
+          }
+        }).catch(err => {
+          console.error(`[StorageService] ❌ S3 health check error:`, err.message);
+        });
+      } else {
+        console.error('[StorageService] ❌ S3 provider selected but AWS credentials not configured');
+        console.error('[StorageService]    Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY');
+      }
+    }
+
     // Ensure local upload directory exists
     if (this.provider === 'local') {
       this.ensureUploadDir();
+      console.log(`[StorageService] Local storage directory ready`);
     }
   }
 
@@ -196,31 +229,52 @@ class StorageService {
 
   private async uploadToS3(file: Buffer | Blob, key: string, mimetype: string): Promise<UploadResult> {
     try {
-      const buffer = Buffer.isBuffer(file) ? file : Buffer.from(await (file as Blob).arrayBuffer());
+      if (!this.s3Client) {
+        return {
+          success: false,
+          error: 'S3 client not initialized. Ensure AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are set.'
+        };
+      }
 
-      // AWS S3 API call
-      const response = await fetch(`https://${this.bucket}.s3.${process.env.AWS_REGION || 'ap-southeast-1'}.amazonaws.com/${key}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': mimetype,
-          'Content-Length': buffer.length.toString(),
-          // Note: In production, you'd use AWS SDK with proper signing
-          // This is a simplified version - use @aws-sdk/client-s3 for production
-        },
-        body: new Uint8Array(buffer),
+      const buffer = Buffer.isBuffer(file) ? file : Buffer.from(await (file as Blob).arrayBuffer());
+      const region = process.env.AWS_REGION || 'us-east-1';
+
+      // Upload to S3 using AWS SDK with proper signing
+      const command = new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: buffer,
+        ContentType: mimetype,
       });
 
-      if (!response.ok) {
-        return { success: false, error: 'Failed to upload to S3' };
-      }
+      await this.s3Client.send(command);
+
+      // Return the S3 object URL
+      const url = `https://${this.bucket}.s3.${region}.amazonaws.com/${key}`;
 
       return {
         success: true,
-        url: `https://${this.bucket}.s3.${process.env.AWS_REGION || 'ap-southeast-1'}.amazonaws.com/${key}`,
+        url,
         key,
       };
     } catch (error: any) {
-      return { success: false, error: error.message };
+      console.error('S3 upload error:', error);
+
+      // Provide specific error messages for common issues
+      if (error.name === 'InvalidAccessKeyId') {
+        return { success: false, error: 'Invalid AWS Access Key ID. Check AWS_ACCESS_KEY_ID.' };
+      }
+      if (error.name === 'SignatureDoesNotMatch') {
+        return { success: false, error: 'AWS Secret Access Key is incorrect. Check AWS_SECRET_ACCESS_KEY.' };
+      }
+      if (error.name === 'NoSuchBucket') {
+        return { success: false, error: `S3 bucket '${this.bucket}' does not exist or you don't have access.` };
+      }
+      if (error.name === 'AccessDenied') {
+        return { success: false, error: 'Access denied. Check IAM permissions for S3.' };
+      }
+
+      return { success: false, error: error.message || 'Failed to upload to S3' };
     }
   }
 
@@ -314,8 +368,22 @@ class StorageService {
   }
 
   private async deleteFromS3(key: string): Promise<DeleteResult> {
-    // Implement S3 delete
-    return { success: true };
+    try {
+      if (!this.s3Client) {
+        return { success: false, error: 'S3 client not initialized' };
+      }
+
+      const command = new DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+      });
+
+      await this.s3Client.send(command);
+
+      return { success: true };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
   }
 
   private async deleteFromR2(key: string): Promise<DeleteResult> {
@@ -350,6 +418,48 @@ class StorageService {
     // In production, generate presigned URLs for direct client uploads
     // For now, return a placeholder
     return `${this.baseUrl}/upload-signed?filename=${encodeURIComponent(filename)}&expires=${Date.now() + expiresIn * 1000}`;
+  }
+
+  // Check S3 connection health
+  async checkS3Connection(): Promise<{ connected: boolean; details?: any }> {
+    if (this.provider !== 's3') {
+      return { connected: false, details: { message: 'S3 not configured as storage provider' } };
+    }
+
+    if (!this.s3Client) {
+      return {
+        connected: false,
+        details: {
+          message: 'S3 client not initialized',
+          reason: 'AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY not set'
+        }
+      };
+    }
+
+    try {
+      const { HeadBucketCommand } = await import('@aws-sdk/client-s3');
+      const command = new HeadBucketCommand({ Bucket: this.bucket });
+      await this.s3Client.send(command);
+
+      return {
+        connected: true,
+        details: {
+          bucket: this.bucket,
+          region: process.env.AWS_REGION || 'us-east-1',
+          message: 'S3 connection successful'
+        }
+      };
+    } catch (error: any) {
+      return {
+        connected: false,
+        details: {
+          bucket: this.bucket,
+          region: process.env.AWS_REGION || 'us-east-1',
+          error: error.name,
+          message: error.message
+        }
+      };
+    }
   }
 }
 

@@ -252,7 +252,8 @@ upload.post('/file', authMiddleware, requirePermission('clients', 'update'), asy
     });
 
     if (!uploadResult.success) {
-      throw new ValidationError(uploadResult.error || 'Failed to upload file');
+      console.error('Storage upload failed:', uploadResult.error);
+      throw new ValidationError(`Storage upload failed: ${uploadResult.error || 'Unknown error'}`);
     }
 
     // Store file metadata in database

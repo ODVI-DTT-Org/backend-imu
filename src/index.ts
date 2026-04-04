@@ -92,6 +92,8 @@ app.use('*', cors({
 // Health check endpoint
 app.get('/api/health', async (c) => {
   let dbStatus = 'unknown';
+  let s3Status = 'unknown';
+  let s3Details = {};
 
   try {
     const client = await pool.connect();
@@ -102,10 +104,26 @@ app.get('/api/health', async (c) => {
     dbStatus = 'disconnected';
   }
 
+  // Check S3 connection
+  try {
+    const { storageService } = await import('./services/storage.js');
+    const s3Health = await storageService.checkS3Connection();
+    s3Status = s3Health.connected ? 'connected' : 'disconnected';
+    s3Details = s3Health.details || {};
+  } catch (error: any) {
+    s3Status = 'error';
+    s3Details = { error: error.message };
+  }
+
   return c.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     database: dbStatus,
+    storage: {
+      provider: process.env.STORAGE_PROVIDER || 'local',
+      s3: s3Status,
+      ...s3Details,
+    },
     version: '1.0.0',
   });
 });
