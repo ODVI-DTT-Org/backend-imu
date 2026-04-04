@@ -40,7 +40,7 @@ const createClientSchema = z.object({
   loan_released_at: z.string().optional(),
 });
 
-const updateClientSchema = createClientSchema.partial();
+const updateClientSchema = createClientSchema.partial().passthrough();
 
 // Schema for partial updates (PATCH) - allows updating individual fields
 const patchClientSchema = z.object({
