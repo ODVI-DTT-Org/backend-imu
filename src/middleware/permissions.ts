@@ -103,7 +103,7 @@ async function checkRolePermission(
 
   // Tele role
   if (userRole === 'tele') {
-    if (resource === 'clients' && action === 'read') return true;
+    if (resource === 'clients' && ['read', 'update'].includes(action)) return true;
     if (resource === 'touchpoints' && action === 'create' && constraint === 'call') return true;
     if (resource === 'touchpoints' && ['read', 'update'].includes(action)) return true;
     if (['itineraries', 'targets'].includes(resource) && action === 'read') return true;
@@ -662,6 +662,7 @@ export function buildPermissionsForRole(userRole: string): string[] {
     ],
     tele: [
       'clients.read',
+      'clients.update',
       'touchpoints.read',
       'touchpoints.create:call',
       'itineraries.read',
