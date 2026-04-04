@@ -160,6 +160,14 @@ export function logInitSummary(summary: InitSummary): void {
 }
 
 /**
+ * Check if running in production or QA environment
+ */
+function isProductionOrQA(): boolean {
+  const env = process.env.NODE_ENV?.toLowerCase();
+  return env === 'production' || env === 'prod' || env === 'qa';
+}
+
+/**
  * Initialize and log database connection
  */
 export async function initDatabase(): Promise<InitResult> {
@@ -197,10 +205,18 @@ export async function initDatabase(): Promise<InitResult> {
     const isSSL = process.env.DATABASE_URL?.includes('sslmode=require') ||
                   process.env.DATABASE_URL?.includes('ssl=true');
 
+    // Check if using localhost in production/qa
+    const isLocalhost = serverAddr === '127.0.0.1' || serverAddr === '::1' || serverAddr === 'localhost';
+    const isProdOrQA = isProductionOrQA();
+    const status = (isProdOrQA && isLocalhost) ? 'warning' : 'success';
+    const message = (isProdOrQA && isLocalhost)
+      ? `Connected to ${databaseName} as ${user} (WARNING: Using localhost in ${process.env.NODE_ENV} environment)`
+      : `Connected to ${databaseName} as ${user}`;
+
     return {
       service: 'PostgreSQL Database',
-      status: 'success',
-      message: `Connected to ${databaseName} as ${user}`,
+      status,
+      message,
       duration,
       details: {
         'PostgreSQL Version': pgVersion,
@@ -211,6 +227,9 @@ export async function initDatabase(): Promise<InitResult> {
         'Max Connections': maxClients,
         'Idle Timeout': `${idleTimeout}ms`,
         'Connection Timeout': `${connectionTimeout}ms`,
+        ...(isProdOrQA && isLocalhost ? {
+          '⚠️ WARNING': 'Using localhost database in production/qa is not recommended',
+        } : {}),
       },
     };
   } catch (error: any) {
@@ -259,14 +278,31 @@ export async function initRedis(): Promise<InitResult> {
     // Queue names in the system
     const queueNames = ['bulk-operations', 'reports', 'location-assignments', 'sync-operations'];
 
+    // Check if using localhost in production/qa
+    const isLocalhost = !redisUrl && (
+      redisHost === 'localhost' ||
+      redisHost === '127.0.0.1' ||
+      redisHost === '::1' ||
+      redisUrl?.includes('localhost') ||
+      redisUrl?.includes('127.0.0.1')
+    );
+    const isProdOrQA = isProductionOrQA();
+    const status = (isProdOrQA && isLocalhost) ? 'warning' : 'success';
+    const message = (isProdOrQA && isLocalhost)
+      ? `Connected with ${queueNames.length} queues configured (WARNING: Using localhost in ${process.env.NODE_ENV})`
+      : `Connected with ${queueNames.length} queues configured`;
+
     return {
       service: 'Redis / BullMQ',
-      status: 'success',
-      message: `Connected with ${queueNames.length} queues configured`,
+      status,
+      message,
       duration,
       details: {
         'Connection': sanitizeConnectionString(redisUrl) || `${redisHost}:${redisPort}/${redisDb}`,
         'Queues': queueNames.join(', '),
+        ...(isProdOrQA && isLocalhost ? {
+          '⚠️ WARNING': 'Using localhost Redis in production/qa is not recommended',
+        } : {}),
       },
     };
   } catch (error: any) {
@@ -368,6 +404,21 @@ export async function initStorage(): Promise<InitResult> {
         ...details,
         'Storage Path': './uploads (local filesystem)',
       };
+
+      // Check if using local storage in production/qa
+      const isProdOrQA = isProductionOrQA();
+      if (isProdOrQA) {
+        return {
+          service: 'Storage Service (LOCAL)',
+          status: 'warning',
+          message: `Storage service ready (WARNING: Using local filesystem in ${process.env.NODE_ENV})`,
+          duration: Date.now() - startTime,
+          details: {
+            ...details,
+            '⚠️ WARNING': 'Local filesystem storage is not recommended for production/qa. Use S3, R2, or Supabase Storage.',
+          },
+        };
+      }
     }
 
     return {
@@ -440,11 +491,41 @@ export async function initEmailService(): Promise<InitResult> {
         ...details,
         'Note': 'Emails will be logged to console (development mode)',
       };
+
+      // Check if using console email in production/qa
+      const isProdOrQA = isProductionOrQA();
+      if (isProdOrQA) {
+        return {
+          service: 'Email Service (CONSOLE)',
+          status: 'warning',
+          message: `Email service ready (WARNING: Using console output in ${process.env.NODE_ENV})`,
+          duration: Date.now() - startTime,
+          details: {
+            ...details,
+            '⚠️ WARNING': 'Console email provider is not recommended for production/qa. Use Resend or SendGrid.',
+          },
+        };
+      }
     } else if (provider === 'mock') {
       details = {
         ...details,
         'Note': 'Email service is mocked (no emails sent)',
       };
+
+      // Check if using mock email in production/qa
+      const isProdOrQA = isProductionOrQA();
+      if (isProdOrQA) {
+        return {
+          service: 'Email Service (MOCK)',
+          status: 'warning',
+          message: `Email service ready (WARNING: Using mock provider in ${process.env.NODE_ENV})`,
+          duration: Date.now() - startTime,
+          details: {
+            ...details,
+            '⚠️ WARNING': 'Mock email provider will not send any emails. Use Resend or SendGrid for production/qa.',
+          },
+        };
+      }
     }
 
     return {
