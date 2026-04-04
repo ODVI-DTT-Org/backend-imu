@@ -846,6 +846,194 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
   }
 });
 
+// POST /api/users/:id/municipalities/bulk/create - Bulk create municipalities assignments (admin, area_manager, assistant_area_manager)
+users.post('/:id/municipalities/bulk/create', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+  try {
+    const userId = c.req.param('id');
+    const body = await c.req.json();
+
+    const schema = z.object({
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
+    });
+    const validated = schema.parse(body);
+
+    console.log('[Bulk Create Municipalities] Request:', {
+      userId,
+      locations: validated.locations,
+      count: validated.locations.length
+    });
+
+    // Verify user exists
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new NotFoundError('User');
+    }
+
+    // Check if user_locations table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'user_locations'
+      )
+    `);
+
+    if (!tableCheck.rows[0].exists) {
+      throw new Error('Municipality assignments feature not available. Please run database migrations.');
+    }
+
+    // Bulk insert into user_locations
+    let createdCount = 0;
+    for (const assignment of validated.locations) {
+      const { province, municipality } = assignment;
+
+      // Check if assignment already exists (not deleted)
+      const existing = await pool.query(
+        `SELECT id FROM user_locations
+         WHERE user_id = $1
+           AND province = $2
+           AND municipality = $3
+           AND deleted_at IS NULL
+         LIMIT 1`,
+        [userId, province, municipality]
+      );
+
+      // Only insert if doesn't exist
+      if (existing.rows.length === 0) {
+        const result = await pool.query(
+          `INSERT INTO user_locations (user_id, province, municipality, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT (user_id, province, municipality) DO UPDATE SET
+             deleted_at = NULL,
+             updated_at = NOW()
+           RETURNING id`,
+          [userId, province, municipality]
+        );
+        createdCount += result.rowCount || 0;
+      }
+    }
+
+    return c.json({
+      message: `Bulk created ${createdCount} municipality assignments`,
+      created_count: createdCount,
+    });
+  } catch (error: any) {
+    // Handle Zod validation errors
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while creating municipality assignments: ${error.message}`)
+        .addDetail('originalError', error.message);
+    }
+
+    // Wrap unknown errors
+    console.error('Bulk create municipalities error:', error);
+    throw new DatabaseError('Failed to create municipality assignments')
+      .addDetail('originalError', error.message);
+  }
+});
+
+// POST /api/users/:id/municipalities/bulk/update - Bulk update municipalities assignments (admin, area_manager, assistant_area_manager)
+users.post('/:id/municipalities/bulk/update', authMiddleware, requirePermission('locations', 'assign'), async (c) => {
+  try {
+    const userId = c.req.param('id');
+    const body = await c.req.json();
+
+    const schema = z.object({
+      locations: z.array(z.object({
+        province: z.string().min(1),
+        municipality: z.string().min(1),
+      })).min(1),
+    });
+    const validated = schema.parse(body);
+
+    console.log('[Bulk Update Municipalities] Request:', {
+      userId,
+      locations: validated.locations,
+      count: validated.locations.length
+    });
+
+    // Verify user exists
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (userCheck.rows.length === 0) {
+      throw new NotFoundError('User');
+    }
+
+    // Check if user_locations table exists
+    const tableCheck = await pool.query(`
+      SELECT EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'user_locations'
+      )
+    `);
+
+    if (!tableCheck.rows[0].exists) {
+      throw new Error('Municipality assignments feature not available. Please run database migrations.');
+    }
+
+    // Bulk upsert into user_locations
+    let updatedCount = 0;
+    for (const assignment of validated.locations) {
+      const { province, municipality } = assignment;
+
+      const result = await pool.query(
+        `INSERT INTO user_locations (user_id, province, municipality, created_at, updated_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         ON CONFLICT (user_id, province, municipality) DO UPDATE SET
+           deleted_at = NULL,
+           updated_at = NOW()
+         RETURNING id`,
+        [userId, province, municipality]
+      );
+      updatedCount += result.rowCount || 0;
+    }
+
+    return c.json({
+      message: `Bulk updated ${updatedCount} municipality assignments`,
+      updated_count: updatedCount,
+    });
+  } catch (error: any) {
+    // Handle Zod validation errors
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+
+    // Re-throw AppError instances directly (they already have proper status codes)
+    if (error instanceof AppError) {
+      throw error;
+    }
+
+    // Wrap database errors in DatabaseError
+    if (error.code === '23503' || error.code === '23505' || error.code?.startsWith('23')) {
+      throw new DatabaseError(`Database error while updating municipality assignments: ${error.message}`)
+        .addDetail('originalError', error.message);
+    }
+
+    // Wrap unknown errors
+    console.error('Bulk update municipalities error:', error);
+    throw new DatabaseError('Failed to update municipality assignments')
+      .addDetail('originalError', error.message);
+  }
+});
+
 // POST /api/users/:id/municipalities/bulk - Bulk unassign municipalities (admin, area_manager, assistant_area_manager)
 users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER_ROLES), async (c) => {
   try {
