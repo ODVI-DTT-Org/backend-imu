@@ -80,17 +80,71 @@ export class QueueManager {
 
   /**
    * Get Redis connection options
+   * Supports both REDIS_URL and individual parameters
    */
   getConnectionOptions() {
+    // If REDIS_URL is provided and is not the default, use it directly
+    // BullMQ supports connection strings natively
+    const redisUrl = process.env.REDIS_URL;
+    const defaultUrl = 'redis://localhost:6379/0';
+
+    if (redisUrl && redisUrl !== defaultUrl) {
+      // Parse the URL to check for TLS
+      const isTls = redisUrl.startsWith('rediss://');
+
+      if (isTls) {
+        // For TLS connections, parse the URL and add TLS configuration
+        const parsed = this.parseRedisUrl(redisUrl.replace('rediss://', 'redis://'));
+        return {
+          connection: {
+            ...parsed,
+            tls: {} as any, // Enable TLS
+          },
+        };
+      } else {
+        // For non-TLS URLs, parse and provide as connection object
+        return {
+          connection: {
+            ...this.parseRedisUrl(redisUrl),
+          },
+        };
+      }
+    }
+
+    // Fall back to individual parameters
     return {
       connection: {
         host: process.env.REDIS_HOST || 'localhost',
         port: parseInt(process.env.REDIS_PORT || '6379'),
         db: parseInt(process.env.REDIS_DB || '0'),
         password: process.env.REDIS_PASSWORD || undefined,
-        maxRetriesPerRequest: 3,
       },
     };
+  }
+
+  /**
+   * Parse Redis URL into connection options
+   */
+  private parseRedisUrl(url: string) {
+    try {
+      const parsed = new URL(url);
+      const db = parsed.pathname?.substring(1) || '0';
+
+      return {
+        host: parsed.hostname,
+        port: parseInt(parsed.port || '6379'),
+        db: parseInt(db),
+        password: parsed.password || undefined,
+      };
+    } catch (error) {
+      logger.error('QueueManager', error as Error, 'Failed to parse REDIS_URL, using defaults');
+      return {
+        host: 'localhost',
+        port: 6379,
+        db: 0,
+        password: undefined,
+      };
+    }
   }
 
   /**
