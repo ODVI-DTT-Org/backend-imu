@@ -9,6 +9,7 @@ import { logger, simpleRequestLogger } from './utils/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
 import './middleware/database-logger.js'; // Initialize database query logging
+import { initializeBackend, isInitializationSuccessful } from './utils/init-logger.js';
 
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
@@ -673,10 +674,21 @@ app.onError((err, c) => {
 // Start server
 const port = parseInt(process.env.PORT || '3000');
 
+// Run initialization checks
+const { summary: initSummary, results: initResults } = await initializeBackend();
+
+// Check if critical services initialized successfully
+if (!isInitializationSuccessful(initSummary, initResults)) {
+  logger.error('Startup', 'Critical services failed to initialize. Server may not function correctly.');
+  // In production, you might want to exit here
+  if (process.env.NODE_ENV === 'production') {
+    logger.error('Startup', 'Exiting due to initialization failures.');
+    process.exit(1);
+  }
+}
+
 logger.info('Startup', 'Starting IMU Backend API...');
 logger.info('Startup', `Server running on http://localhost:${port}`);
-logger.info('Startup', `JWT Secret: ${process.env.JWT_SECRET ? 'configured' : 'NOT SET'}`);
-logger.info('Startup', `Database: ${process.env.DATABASE_URL ? 'configured' : 'NOT SET'}`);
 
 serve({
   fetch: app.fetch,
