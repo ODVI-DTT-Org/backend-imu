@@ -995,14 +995,14 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       await pool.query(`
         UPDATE clients AS c
         SET
-          psgc_id = v.psgc_id,
+          psgc_id = v.psgc_id::uuid,
           region = COALESCE(v.region, c.region),
           province = COALESCE(v.province, c.province),
           municipality = COALESCE(v.municipality, c.municipality),
           barangay = COALESCE(v.barangay, c.barangay),
           updated_at = NOW()
         FROM (VALUES ${valuesClause}) AS v(client_id, psgc_id, region, province, municipality, barangay)
-        WHERE c.id = v.client_id
+        WHERE c.id = v.client_id::uuid
       `, params);
     }
 
