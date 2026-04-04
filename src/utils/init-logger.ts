@@ -602,12 +602,58 @@ export async function initPowerSync(): Promise<InitResult> {
       };
     }
 
+    // Test JWT generation to verify keys work
+    let jwtTestPassed = false;
+    let jwtTestError = '';
+    try {
+      // Import jwt here to avoid issues if not available
+      const jwt = await import('jsonwebtoken');
+
+      // Create a test JWT token (same as PowerSync endpoint)
+      const testPayload = {
+        user_id: '00000000-0000-0000-0000-000000000000', // Test user ID
+        exp: Math.floor(Date.now() / 1000) + 3600, // Expires in 1 hour
+      };
+
+      const testToken = jwt.sign(
+        testPayload,
+        privateKey as string, // Non-null assertion after validation above
+        { algorithm: 'RS256', keyid: keyId }
+      );
+
+      // Verify the test token with public key
+      const publicKey = process.env.POWERSYNC_PUBLIC_KEY as string; // Non-null assertion after validation above
+      jwt.verify(testToken, publicKey, { algorithms: ['RS256'] });
+
+      jwtTestPassed = true;
+    } catch (testError: any) {
+      jwtTestError = testError.message || 'Unknown error';
+    }
+
+    if (!jwtTestPassed) {
+      return {
+        service: 'PowerSync',
+        status: 'error',
+        message: 'PowerSync JWT test failed - keys may be invalid or mismatched',
+        duration: Date.now() - startTime,
+        details: {
+          ...details,
+          'Test Result': 'FAILED',
+          'Error': jwtTestError,
+        },
+      };
+    }
+
     return {
       service: 'PowerSync',
       status: 'success',
-      message: 'PowerSync JWT token generation ready',
+      message: 'PowerSync JWT token generation ready (connection tested)',
       duration: Date.now() - startTime,
-      details,
+      details: {
+        ...details,
+        'Test Result': 'PASSED',
+        'Test': 'JWT generation and verification successful',
+      },
     };
   } catch (error: any) {
     return {
