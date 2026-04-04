@@ -335,7 +335,7 @@ export async function processJobs(processors: JobProcessor[]): Promise<void> {
  * Start job processor (runs in background with setInterval)
  */
 export function startJobProcessor(processors: JobProcessor[], intervalMs: number = 5000): NodeJS.Timeout {
-  logger.info('background-job', `Starting job processor (interval: ${intervalMs}ms)`);
+  // Removed verbose startup log - now handled by init-logger
 
   return setInterval(async () => {
     await processJobs(processors);

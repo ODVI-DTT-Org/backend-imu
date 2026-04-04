@@ -72,7 +72,7 @@ class StorageService {
     this.bucket = process.env.STORAGE_BUCKET || 'imu-uploads';
     this.baseUrl = process.env.STORAGE_BASE_URL || 'http://localhost:3000/uploads';
 
-    console.log(`[StorageService] Provider: ${this.provider}, Bucket: ${this.bucket}`);
+    // Removed verbose startup logs - now handled by init-logger
 
     // Initialize S3 client if using S3
     if (this.provider === 's3') {
@@ -95,9 +95,7 @@ class StorageService {
           },
         });
 
-        console.log(`[StorageService] S3 client initialized: bucket=${this.bucket}, region=${region}`);
-        console.log(`[StorageService] Using access key: ****${accessKeyLast4}`);
-        console.log(`[StorageService] ✅ S3 ready - uploads will work if credentials have PutObject permission`);
+        // Removed verbose startup logs - now handled by init-logger
       } else {
         console.error('[StorageService] ❌ S3 provider selected but AWS credentials not configured');
         console.error('[StorageService] ❌ Required: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY');
@@ -108,7 +106,7 @@ class StorageService {
     // Ensure local upload directory exists
     if (this.provider === 'local') {
       this.ensureUploadDir();
-      console.log(`[StorageService] Local storage directory ready`);
+      // Removed verbose startup log - now handled by init-logger
     }
   }
 

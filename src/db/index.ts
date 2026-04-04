@@ -28,13 +28,13 @@ if (databaseUrl?.includes('ondigitalocean.com')) {
       ca: dbCaCert.trim().replace(/\\n/g, '\n'),
       rejectUnauthorized: false, // Required for self-signed certificates in the chain
     };
-    console.log('✅ Database: Using CA certificate from DB_CA_CERT with rejectUnauthorized: false (uselibpqcompat=true)');
+    // Removed verbose startup log - now handled by init-logger
   } else {
     // Fallback: no CA certificate, just disable verification
     sslConfig = {
       rejectUnauthorized: false,
     };
-    console.log('⚠️ Database: No DB_CA_CERT found, using rejectUnauthorized: false only (uselibpqcompat=true)');
+    // Removed verbose startup log - now handled by init-logger
   }
 }
 
@@ -53,10 +53,10 @@ pool.on('error', (err) => {
   console.error('Unexpected error on idle database client:', err);
 });
 
-// Test connection on module load
+// Test connection on module load - removed verbose log, now handled by init-logger
 pool.connect()
   .then(client => {
-    console.log('✅ Database pool connected successfully');
+    // Connection successful, init-logger will handle the logging
     client.release();
   })
   .catch(err => {

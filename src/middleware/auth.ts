@@ -10,7 +10,7 @@ let publicKey: string;
 if (publicKeyEnv && publicKeyEnv.trim().length > 0) {
   // Handle escaped newlines in environment variable
   publicKey = publicKeyEnv.trim().replace(/\\n/g, '\n');
-  console.log('✅ Auth middleware: PowerSync public key loaded from environment variable');
+  // Removed verbose startup log - now handled by init-logger
 } else {
   console.error('❌ Auth middleware: POWERSYNC_PUBLIC_KEY environment variable not set');
   throw new Error('POWERSYNC_PUBLIC_KEY environment variable is required');

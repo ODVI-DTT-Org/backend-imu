@@ -57,7 +57,7 @@ export class QueueManager {
       this.redisUrl = `redis://${host}:${port}/${db}`;
     }
 
-    logger.info('QueueManager', `QueueManager initialized with Redis: ${this.maskRedisUrl(this.redisUrl)}`);
+    // Removed verbose startup log - now handled by init-logger
   }
 
   /**

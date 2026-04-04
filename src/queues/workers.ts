@@ -21,8 +21,9 @@ export async function startWorkers() {
   try {
     const queueManager = getQueueManager();
 
+    // Removed verbose startup logs - now handled by init-logger
+
     // Register bulk delete processor
-    logger.info('Workers', 'Starting bulk delete processor...');
     await bulkDeleteProcessor.start();
     const deleteWorker = bulkDeleteProcessor.getWorker();
     if (deleteWorker) {
@@ -30,7 +31,6 @@ export async function startWorkers() {
     }
 
     // Register bulk approvals processor
-    logger.info('Workers', 'Starting bulk approvals processor...');
     await bulkApprovalsProcessor.start();
     const approvalsWorker = bulkApprovalsProcessor.getWorker();
     if (approvalsWorker) {
@@ -38,7 +38,6 @@ export async function startWorkers() {
     }
 
     // Register reports processor
-    logger.info('Workers', 'Starting reports processor...');
     await reportsProcessor.start();
     const reportsWorker = reportsProcessor.getWorker();
     if (reportsWorker) {
@@ -46,7 +45,6 @@ export async function startWorkers() {
     }
 
     // Register CSV exports processor
-    logger.info('Workers', 'Starting CSV exports processor...');
     await csvExportsProcessor.start();
     const csvExportsWorker = csvExportsProcessor.getWorker();
     if (csvExportsWorker) {
@@ -54,7 +52,6 @@ export async function startWorkers() {
     }
 
     // Register location assignments processor
-    logger.info('Workers', 'Starting location assignments processor...');
     await locationAssignmentsProcessor.start();
     const locationAssignmentsWorker = locationAssignmentsProcessor.getWorker();
     if (locationAssignmentsWorker) {
@@ -62,14 +59,13 @@ export async function startWorkers() {
     }
 
     // Register sync operations processor
-    logger.info('Workers', 'Starting sync operations processor...');
     await syncOperationsProcessor.start();
     const syncOperationsWorker = syncOperationsProcessor.getWorker();
     if (syncOperationsWorker) {
       queueManager.registerWorker('sync-operations', syncOperationsWorker);
     }
 
-    logger.info('Workers', 'All workers started successfully');
+    // Removed verbose startup logs - now handled by init-logger
   } catch (error) {
     logger.error('Workers', 'Failed to start workers', error);
     throw error;

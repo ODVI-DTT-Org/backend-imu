@@ -141,7 +141,7 @@ export abstract class BaseProcessor<T = any, R = any> {
       logger.error('QueueProcessor', error, 'Worker error');
     });
 
-    logger.info('QueueProcessor', `Worker started for queue: ${this.queueName} (concurrency: ${options.concurrency})`);
+    // Removed verbose startup log - now handled by init-logger
 
     return this.worker;
   }

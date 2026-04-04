@@ -255,4 +255,4 @@ export function isDatabaseLoggingEnabled(): boolean {
   return process.env.DB_LOGGING !== 'false';
 }
 
-console.log('🔍 Database query logger initialized (DB_LOGGING=' + (DB_LOGGING_ENABLED ? 'enabled' : 'disabled') + ')');
+// Removed verbose startup log - now handled by init-logger

@@ -38,7 +38,7 @@ const publicKey = (publicKeyInput || privateKeyInput).trim().replace(/\\n/g, '\n
 const signingKey = privateKey as string;
 const verificationKey = publicKey as string;
 
-logger.info('auth', 'PowerSync keys loaded from environment');
+// Removed verbose startup log - now handled by init-logger
 
 const { sign, verify } = jwt;
 const { hash, compare } = bcryptjs;
