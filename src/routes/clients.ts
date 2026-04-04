@@ -995,7 +995,7 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       await pool.query(`
         UPDATE clients AS c
         SET
-          psgc_id = v.psgc_id,
+          psgc_id = v.psgc_id::integer,
           region = COALESCE(v.region, c.region),
           province = COALESCE(v.province, c.province),
           municipality = COALESCE(v.municipality, c.municipality),
