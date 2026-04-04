@@ -11,6 +11,10 @@
  */
 
 import jwt from 'jsonwebtoken';
+import { config } from 'dotenv';
+
+// Load environment variables from .env file
+config();
 
 interface TestResult {
   name: string;
