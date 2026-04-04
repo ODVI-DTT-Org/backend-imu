@@ -221,7 +221,10 @@ clients.get('/', authMiddleware, async (c) => {
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
         COALESCE(tp.completed_count, 0) as completed_touchpoints,
-        tp.last_touchpoint_type
+        tp.last_touchpoint_type,
+        tp.last_touchpoint_user_id,
+        lt.first_name as last_touchpoint_first_name,
+        lt.last_name as last_touchpoint_last_name
        FROM clients c
        LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id
@@ -229,12 +232,14 @@ clients.get('/', authMiddleware, async (c) => {
        LEFT JOIN (
          SELECT t.client_id,
            COUNT(DISTINCT t.touchpoint_number)::int as completed_count,
-           (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type
+           (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
+           (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id
          FROM touchpoints t
          GROUP BY t.client_id
        ) tp ON tp.client_id = c.id
+       LEFT JOIN users lt ON lt.id = tp.last_touchpoint_user_id
        ${whereClause}
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.last_touchpoint_type
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
        ORDER BY c.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
@@ -287,6 +292,7 @@ clients.get('/', authMiddleware, async (c) => {
           expected_role: expectedRole,
           is_complete: completedCount >= 7 || loanReleased,
           last_touchpoint_type: row.last_touchpoint_type,
+          last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
           loan_released_at: row.loan_released_at,
         },

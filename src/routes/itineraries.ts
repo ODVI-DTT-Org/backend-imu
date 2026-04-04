@@ -135,9 +135,11 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
       `SELECT i.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
               c.municipality as client_municipality,
+              u.first_name as user_first_name, u.last_name as user_last_name,
               cb.first_name as created_by_first_name, cb.last_name as created_by_last_name
        FROM itineraries i
        LEFT JOIN clients c ON c.id = i.client_id
+       LEFT JOIN users u ON u.id = i.user_id
        LEFT JOIN users cb ON cb.id = i.created_by
        ${whereClause}
        ORDER BY i.scheduled_date DESC, i.scheduled_time DESC
@@ -154,6 +156,11 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
           last_name: row.client_last_name,
           municipality: row.client_municipality,
         },
+        user_id: row.user_id ? {
+          id: row.user_id,
+          first_name: row.user_first_name,
+          last_name: row.user_last_name,
+        } : undefined,
         created_by: row.created_by ? {
           id: row.created_by,
           name: `${row.created_by_first_name} ${row.created_by_last_name}`,
