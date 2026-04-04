@@ -835,6 +835,22 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
       [validated.client_id]
     );
 
+    // Step 1.5: Create touchpoint #7 as Completed when loan is released
+    await client.query(
+      `INSERT INTO touchpoints (id, client_id, user_id, touchpoint_number, type, date, reason, status, time_in, time_out)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, NOW(), NOW())
+       ON CONFLICT (client_id, touchpoint_number)
+       DO UPDATE SET status = $6, type = $4, reason = $5, updated_at = NOW()`,
+      [
+        validated.client_id,
+        user.sub, // user_id
+        7, // touchpoint_number - final touchpoint
+        'Visit', // type - touchpoint #7 is a Visit
+        'Loan released', // reason
+        'Completed', // status - loan is released
+      ]
+    );
+
     // Step 2: Create UDI approval for loan release
     const result = await client.query(
       `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, udi_number, status)
@@ -854,7 +870,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
     await client.query('COMMIT'); // Commit transaction
 
     return c.json({
-      message: 'Loan release submitted for approval.',
+      message: 'Loan release submitted for approval. Touchpoint #7 marked as completed.',
       approval: {
         id: result.rows[0].id,
         type: result.rows[0].type,
