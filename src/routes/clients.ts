@@ -920,21 +920,45 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
     for (const client of clientsToProcess) {
       let psgcId: string | null = null;
       let matchedPsgc: any = null;
+      let matchReason = '';
+
+      // Detailed debug info for unmatched clients
+      let debugInfo: any = {
+        normalized_province: null,
+        normalized_municipality: null,
+        available_psgc_count: 0,
+        psgc_options: [],
+        failure_reason: ''
+      };
 
       if (client.province && client.municipality) {
         const normalizedClientProvince = client.province.toLowerCase().trim();
         const clientMunicipality = client.municipality.trim();
         const normalizedClientMunicipality = normalizeMunicipality(clientMunicipality);
 
+        debugInfo.normalized_province = normalizedClientProvince;
+        debugInfo.normalized_municipality = normalizedClientMunicipality;
+
         // Get PSGC records for this province
         const provincePsgcs = psgcByProvince.get(normalizedClientProvince);
 
         if (provincePsgcs && provincePsgcs.length > 0) {
+          debugInfo.available_psgc_count = provincePsgcs.length;
+          debugInfo.psgc_options = provincePsgcs.map(p => ({
+            id: p.id,
+            municipality: p.mun_city,
+            normalized: normalizeMunicipality(p.mun_city)
+          }));
+
           // Strategy 1: Direct match (PSGC municipality in client municipality)
           matchedPsgc = provincePsgcs.find(psgc =>
             clientMunicipality.toLowerCase().includes(psgc.mun_city.toLowerCase()) ||
             psgc.mun_city.toLowerCase().includes(clientMunicipality.toLowerCase())
           );
+
+          if (matchedPsgc) {
+            matchReason = 'direct_match';
+          }
 
           // Strategy 2: Keyword match (normalized comparison)
           if (!matchedPsgc) {
@@ -945,12 +969,25 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
                 psgcMunicipalityNormalized.includes(psgcKeywords) ||
                 psgcKeywords.includes(psgcMunicipalityNormalized);
             });
+
+            if (matchedPsgc) {
+              matchReason = 'keyword_match';
+            }
           }
+
+          if (!matchedPsgc) {
+            debugInfo.failure_reason = 'No PSGC municipality matched for this province';
+          }
+        } else {
+          debugInfo.available_psgc_count = 0;
+          debugInfo.failure_reason = `No PSGC records found for province: "${client.province}"`;
         }
 
         if (matchedPsgc) {
           psgcId = matchedPsgc.id;
         }
+      } else {
+        debugInfo.failure_reason = !client.province ? 'Missing province data' : 'Missing municipality data';
       }
 
       if (psgcId) {
@@ -958,7 +995,7 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
           client_id: client.id,
           client_name: `${client.first_name} ${client.last_name}`,
           psgc_id: psgcId,
-          match_type: 'exact',
+          match_type: matchReason,
           province: client.province,
           municipality: client.municipality,
         });
@@ -979,6 +1016,8 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
           province: client.province,
           municipality: client.municipality,
           barangay: client.barangay,
+          failure_reason: debugInfo.failure_reason,
+          debug: debugInfo
         });
       }
     }
