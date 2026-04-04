@@ -235,6 +235,7 @@ class StorageService {
   private async uploadToS3(file: Buffer | Blob, key: string, mimetype: string): Promise<UploadResult> {
     try {
       if (!this.s3Client) {
+        console.error('[StorageService] S3 upload failed: S3 client not initialized');
         return {
           success: false,
           error: 'S3 client not initialized. Ensure AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are set.'
@@ -243,6 +244,8 @@ class StorageService {
 
       const buffer = Buffer.isBuffer(file) ? file : Buffer.from(await (file as Blob).arrayBuffer());
       const region = process.env.AWS_REGION || 'us-east-1';
+
+      console.log(`[StorageService] Uploading to S3: bucket=${this.bucket}, key=${key}, size=${buffer.length} bytes`);
 
       // Upload to S3 using AWS SDK with proper signing
       const command = new PutObjectCommand({
@@ -254,8 +257,8 @@ class StorageService {
 
       await this.s3Client.send(command);
 
-      // Return the S3 object URL
       const url = `https://${this.bucket}.s3.${region}.amazonaws.com/${key}`;
+      console.log(`[StorageService] ✅ S3 upload successful: ${url}`);
 
       return {
         success: true,
@@ -263,7 +266,14 @@ class StorageService {
         key,
       };
     } catch (error: any) {
-      console.error('S3 upload error:', error);
+      console.error('[StorageService] S3 upload error:', {
+        name: error.name,
+        message: error.message,
+        bucket: this.bucket,
+        region: process.env.AWS_REGION || 'us-east-1',
+        key: key,
+        fullError: error.toString()
+      });
 
       // Provide specific error messages for common issues
       if (error.name === 'InvalidAccessKeyId') {
@@ -273,10 +283,17 @@ class StorageService {
         return { success: false, error: 'AWS Secret Access Key is incorrect. Check AWS_SECRET_ACCESS_KEY.' };
       }
       if (error.name === 'NoSuchBucket') {
-        return { success: false, error: `S3 bucket '${this.bucket}' does not exist or you don't have access.` };
+        return { success: false, error: `S3 bucket '${this.bucket}' does not exist in region ${process.env.AWS_REGION || 'us-east-1'}.` };
       }
       if (error.name === 'AccessDenied') {
-        return { success: false, error: 'Access denied. Check IAM permissions for S3.' };
+        return { success: false, error: 'Access denied. Check IAM permissions for s3:PutObject on bucket ${this.bucket}.' };
+      }
+      if (error.name === 'UnknownError') {
+        // Network error or bucket not in specified region
+        return {
+          success: false,
+          error: `S3 connection failed. Check that bucket '${this.bucket}' exists in region ${process.env.AWS_REGION || 'us-east-1'}.`
+        };
       }
 
       return { success: false, error: error.message || 'Failed to upload to S3' };
@@ -455,15 +472,34 @@ class StorageService {
         }
       };
     } catch (error: any) {
-      return {
-        connected: false,
-        details: {
-          bucket: this.bucket,
-          region: process.env.AWS_REGION || 'us-east-1',
-          error: error.name,
-          message: error.message
-        }
+      // Provide detailed error information
+      const details: any = {
+        bucket: this.bucket,
+        region: process.env.AWS_REGION || 'us-east-1',
+        error: error.name,
+        message: error.message
       };
+
+      // Add specific guidance for common errors
+      if (error.name === 'NoSuchBucket') {
+        details.reason = `Bucket '${this.bucket}' does not exist in region ${process.env.AWS_REGION || 'us-east-1'}`;
+        details.fix = `Create the bucket or update STORAGE_BUCKET environment variable`;
+      } else if (error.name === 'InvalidAccessKeyId') {
+        details.reason = 'AWS Access Key ID is invalid';
+        details.fix = 'Check AWS_ACCESS_KEY_ID environment variable';
+      } else if (error.name === 'SignatureDoesNotMatch') {
+        details.reason = 'AWS Secret Access Key is incorrect';
+        details.fix = 'Check AWS_SECRET_ACCESS_KEY environment variable';
+      } else if (error.name === 'AccessDenied') {
+        details.reason = 'IAM user lacks s3:ListBucket permission';
+        details.fix = 'Grant s3:ListBucket and s3:PutObject permissions to IAM user';
+      } else if (error.name === 'UnknownError') {
+        details.reason = 'Network error or bucket not accessible';
+        details.fix = 'Check bucket name, region, and network connectivity';
+        details.fullError = error.toString();
+      }
+
+      return { connected: false, details };
     }
   }
 }
