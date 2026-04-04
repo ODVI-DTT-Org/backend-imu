@@ -468,6 +468,10 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
           remarks: 'remarks',
           agency_id: 'agency_id',
           caravan_id: 'caravan_id',
+          region: 'region',
+          province: 'province',
+          municipality: 'municipality',
+          barangay: 'barangay',
           is_starred: 'is_starred',
         };
 

@@ -62,6 +62,7 @@ const FILE_CATEGORIES: Record<string, {
 
 // PowerSync upload endpoint
 // Receives CRUD operations from the mobile app and applies them to PostgreSQL
+// For client edits by caravan/tele users, routes to approval system (similar to loan release flow)
 upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (c) => {
   const user = c.get('user');
 
@@ -79,6 +80,7 @@ upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (
       await client.query('BEGIN');
 
       const results = [];
+      const approvalRequests = []; // Track approval requests created
 
       for (const op of operations) {
         const { table, op: operation, id, data } = op;
@@ -89,6 +91,42 @@ upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (
           throw new Error(`Invalid table: ${table}`);
         }
 
+        // APPROVAL WORKFLOW: For client edits by caravan/tele users, create approval request
+        const isClientEdit = table === 'clients' && (operation === 'PUT' || operation === 'PATCH');
+        const needsApproval = isClientEdit && (user.role === 'caravan' || user.role === 'tele');
+
+        if (needsApproval) {
+          // Check if client exists
+          const existingClient = await client.query('SELECT id FROM clients WHERE id = $1', [id]);
+          if (existingClient.rows.length === 0) {
+            results.push({ id, operation, success: false, error: 'Client not found', approval_required: true });
+            continue;
+          }
+
+          // Store changes as JSON in notes field (same pattern as PUT /api/clients/:id)
+          const changes = JSON.stringify(data);
+
+          // Create approval request with type='client' (same pattern as web API)
+          const approvalResult = await client.query(
+            `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+             VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending')
+             RETURNING id`,
+            ['client', id, user.sub, user.role, 'Client Edit Request', changes]
+          );
+
+          results.push({
+            id,
+            operation,
+            success: true,
+            approval_required: true,
+            approval_id: approvalResult.rows[0].id,
+            message: 'Client edit submitted for approval'
+          });
+          approvalRequests.push(approvalResult.rows[0].id);
+          continue; // Skip direct database update
+        }
+
+        // Standard flow: Apply operation directly to database
         let result;
 
         if (operation === 'PUT') {
@@ -144,6 +182,8 @@ upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (
         success: true,
         processed: results.length,
         results,
+        approval_requests_created: approvalRequests.length,
+        approval_request_ids: approvalRequests,
       });
     } catch (error) {
       await client.query('ROLLBACK');
