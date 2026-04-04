@@ -835,9 +835,13 @@ export async function initJWT(): Promise<InitResult> {
     const secretLength = secret.length;
     const isStrong = secretLength >= 32;
 
+    // Read actual token expiry from environment
+    const accessExpiryHours = process.env.JWT_EXPIRY_HOURS || '168'; // Default 7 days
+    const accessExpiryDays = parseInt(accessExpiryHours) / 24;
+
     const details: Record<string, any> = {
       'Algorithm': 'RS256',
-      'Token Expiry': '15 minutes (access), 30 days (refresh)',
+      'Token Expiry': `${accessExpiryDays} days (access), 30 days (refresh)`,
       'Secret Length': `${secretLength} characters`,
       'Secret Strength': isStrong ? 'strong' : 'weak (min 32 chars recommended)',
     };
