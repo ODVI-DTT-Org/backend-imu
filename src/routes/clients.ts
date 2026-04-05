@@ -367,7 +367,7 @@ clients.get('/', authMiddleware, async (c) => {
         // Add group score calculation to CTE
         // CRITICAL: loan_released clients should NEVER be callable (group 1)
         // They should always be in group 2 (completed) regardless of touchpoint count
-        withGroupScoreCTE = `${touchpointInfoCTE}, touchpoint_with_score AS (
+        withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
           SELECT *,
             CASE
               -- Group 1 (callable): User can create next touchpoint AND loan NOT released
