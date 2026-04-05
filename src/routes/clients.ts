@@ -336,8 +336,10 @@ clients.get('/', authMiddleware, async (c) => {
         FROM user_locations
         WHERE user_id = '${user.sub}' AND deleted_at IS NULL
       ), ${touchpointInfoCTE}`;
+      console.log('[clients] CTE with area filter:', withGroupScoreCTE.substring(0, 200) + '...');
     } else {
       withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
+      console.log('[clients] CTE without area filter:', withGroupScoreCTE.substring(0, 200) + '...');
     }
     let groupScoreFilter = '';
 
