@@ -87,34 +87,25 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
       return c.json({ message: 'Client not found or not assigned to you' }, 404);
     }
 
-    const today = getLocalDateString();
-    console.log('[ADD-CLIENT] Date calculation:', {
-      now: new Date().toISOString(),
-      nowLocal: new Date().toString(),
-      calculatedToday: today,
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      utcOffset: new Date().getTimezoneOffset()
-    });
-
-    // Check if already in today's itinerary
+    // Check if already in today's itinerary using CURRENT_DATE (respects database timezone Asia/Manila)
     const existing = await pool.query(
-      'SELECT * FROM itineraries WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3',
-      [validated.client_id, user.sub, today]
+      `SELECT * FROM itineraries
+       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CURRENT_DATE`,
+      [validated.client_id, user.sub]
     );
 
     if (existing.rows.length > 0) {
       return c.json({ message: 'Client already in today\'s itinerary' }, 400);
     }
 
-    // Add to itinerary
+    // Add to itinerary using CURRENT_DATE (respects database timezone Asia/Manila)
     const result = await pool.query(
       `INSERT INTO itineraries (id, client_id, user_id, scheduled_date, scheduled_time, priority, notes, status, created_by)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending', $7)
+       VALUES (gen_random_uuid(), $1, $2, CURRENT_DATE, $3, $4, $5, 'pending', $6)
        RETURNING *`,
       [
         validated.client_id,
         user.sub,
-        today,
         validated.scheduled_time || null,
         validated.priority || 5,
         validated.notes || null,
@@ -140,13 +131,12 @@ myDay.delete('/remove-client/:id', authMiddleware, requirePermission('clients', 
   try {
     const user = c.get('user');
     const clientId = c.req.param('id');
-    const today = getLocalDateString();
 
     const result = await pool.query(
       `DELETE FROM itineraries
-       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3
+       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CURRENT_DATE
        RETURNING *`,
-      [clientId, user.sub, today]
+      [clientId, user.sub]
     );
 
     if (result.rows.length === 0) {
@@ -167,11 +157,10 @@ myDay.get('/status/:clientId', authMiddleware, requirePermission('clients', 'rea
   try {
     const user = c.get('user');
     const clientId = c.req.param('clientId');
-    const today = getLocalDateString();
 
     const result = await pool.query(
-      'SELECT * FROM itineraries WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3',
-      [clientId, user.sub, today]
+      'SELECT * FROM itineraries WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CURRENT_DATE',
+      [clientId, user.sub]
     );
 
     return c.json({
@@ -363,12 +352,12 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
 
     const now = new Date();
     const timeIn = now.toTimeString().slice(0, 8);
-    const today = getLocalDateString(now);
 
-    // Check for existing touchpoint today
+    // Check for existing touchpoint today using CURRENT_DATE (respects database timezone Asia/Manila)
     const existing = await pool.query(
-      'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
-      [clientId, user.sub, today]
+      `SELECT * FROM touchpoints
+       WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+      [clientId, user.sub]
     );
 
     let result;
@@ -380,7 +369,7 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
         [timeIn, validated.latitude, validated.longitude, existing.rows[0].id]
       );
     } else {
-      // Create new touchpoint with time-in
+      // Create new touchpoint with time-in using CURRENT_DATE
       const tpResult = await pool.query(
         'SELECT COUNT(*) + 1 as next FROM touchpoints WHERE client_id = $1',
         [clientId]
@@ -389,8 +378,8 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
 
       result = await pool.query(
         `INSERT INTO touchpoints (id, client_id, user_id, touchpoint_number, type, date, time_arrival, latitude, longitude)
-         VALUES (gen_random_uuid(), $1, $2, $3, 'Visit', $4, $5, $6, $7) RETURNING *`,
-        [clientId, user.sub, nextNumber, today, timeIn, validated.latitude, validated.longitude]
+         VALUES (gen_random_uuid(), $1, $2, $3, 'Visit', CURRENT_DATE, $4, $5, $6) RETURNING *`,
+        [clientId, user.sub, nextNumber, timeIn, validated.latitude, validated.longitude]
       );
     }
 
@@ -428,12 +417,12 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
 
     const now = new Date();
     const timeOut = now.toTimeString().slice(0, 8);
-    const today = getLocalDateString(now);
 
-    // Check for existing touchpoint today
+    // Check for existing touchpoint today using CURRENT_DATE (respects database timezone Asia/Manila)
     const existing = await pool.query(
-      'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
-      [clientId, user.sub, today]
+      `SELECT * FROM touchpoints
+       WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+      [clientId, user.sub]
     );
 
     if (existing.rows.length === 0) {
@@ -675,12 +664,11 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
           .addDetail('requestId', requestId);
       }
 
-      const today = getLocalDateString();
-
-      // Check for existing touchpoint today
+      // Check for existing touchpoint today using CURRENT_DATE (respects database timezone Asia/Manila)
       const existing = await pool.query(
-        'SELECT * FROM touchpoints WHERE client_id = $1 AND user_id = $2 AND date = $3',
-        [clientId, user.sub, today]
+        `SELECT * FROM touchpoints
+         WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+        [clientId, user.sub]
       );
 
       let result;
@@ -702,7 +690,7 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
           ]
         );
       } else {
-        // Create new touchpoint
+        // Create new touchpoint using CURRENT_DATE
         result = await pool.query(
           `INSERT INTO touchpoints (
             id, client_id, user_id, touchpoint_number, type, date,
@@ -710,10 +698,10 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
             odometer_arrival, odometer_departure, next_visit_date,
             notes, photo_url, audio_url, latitude, longitude, status
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+            gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
           ) RETURNING *`,
           [
-            clientId, user.sub, touchpointNumber, type, today,
+            clientId, user.sub, touchpointNumber, type,
             reason, address, timeArrival, timeDeparture,
             odometerArrival, odometerDeparture, nextVisitDate,
             notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed'
@@ -778,11 +766,11 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         }
       }
 
-      // Mark related itinerary as completed
+      // Mark related itinerary as completed using CURRENT_DATE
       await pool.query(
         `UPDATE itineraries SET status = 'completed', updated_at = NOW()
-         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3 AND status != 'completed'`,
-        [clientId, user.sub, today]
+         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CURRENT_DATE AND status != 'completed'`,
+        [clientId, user.sub]
       );
 
       // Commit transaction
@@ -870,43 +858,45 @@ myDay.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), asyn
     const user = c.get('user');
     const period = c.req.query('period') || 'week';
 
-    const today = new Date();
-    let startDate: string;
-
+    // Use PostgreSQL date functions (respects database timezone Asia/Manila)
+    let startDateQuery: string;
     switch (period) {
       case 'day':
-        startDate = getLocalDateString(today);
+        startDateQuery = 'CURRENT_DATE';
         break;
       case 'month':
-        startDate = getLocalDateString(new Date(today.getFullYear(), today.getMonth(), 1));
+        startDateQuery = 'DATE_TRUNC(\'month\', CURRENT_DATE)::DATE';
         break;
       case 'week':
       default:
-        const dayOfWeek = today.getDay();
-        const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-        startDate = getLocalDateString(new Date(today.setDate(diff)));
+        // Start of week (Monday) using PostgreSQL
+        startDateQuery = '(CURRENT_DATE - EXTRACT(DOW FROM CURRENT_DATE)::INTEGER + 1)::DATE';
     }
 
     const touchpointsResult = await pool.query(
       `SELECT COUNT(*) as total,
               COUNT(*) FILTER (WHERE type = 'Visit') as visits,
               COUNT(*) FILTER (WHERE type = 'Call') as calls
-       FROM touchpoints WHERE user_id = $1 AND date >= $2`,
-      [user.sub, startDate]
+       FROM touchpoints WHERE user_id = $1 AND date >= ${startDateQuery}`,
+      [user.sub]
     );
 
     const clientsResult = await pool.query(
       `SELECT COUNT(DISTINCT client_id) as unique_clients
-       FROM touchpoints WHERE user_id = $1 AND date >= $2`,
-      [user.sub, startDate]
+       FROM touchpoints WHERE user_id = $1 AND date >= ${startDateQuery}`,
+      [user.sub]
     );
 
     const itinerariesResult = await pool.query(
       `SELECT COUNT(*) as total,
               COUNT(*) FILTER (WHERE status = 'completed') as completed
-       FROM itineraries WHERE user_id = $1 AND scheduled_date >= $2`,
-      [user.sub, startDate]
+       FROM itineraries WHERE user_id = $1 AND scheduled_date >= ${startDateQuery}`,
+      [user.sub]
     );
+
+    // Get the actual start date for the response
+    const startDateResult = await pool.query(`SELECT ${startDateQuery} as start_date`);
+    const startDate = startDateResult.rows[0].start_date;
 
     const tp = touchpointsResult.rows[0];
     const clients = clientsResult.rows[0];

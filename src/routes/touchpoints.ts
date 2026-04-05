@@ -186,6 +186,7 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     const clientId = c.req.query('client_id');
     const userId = c.req.query('user_id');
     const type = c.req.query('type');
+    const scope = c.req.query('scope'); // 'all' or 'own'
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
     const status = c.req.query('status');
@@ -198,10 +199,24 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     const params: any[] = [];
     let paramIndex = 1;
 
-    // Role-based filtering
-    // When type='all', tele users can see ALL touchpoints (not just theirs)
-    // This is needed to calculate which Call touchpoints are available for each client
-    if (user.role === 'caravan' || (user.role === 'tele' && type !== 'all')) {
+    // Scope-based filtering (respects explicit scope parameter)
+    // scope='all': show ALL touchpoints (no user_id filter for any role)
+    // scope='own': show only user's own touchpoints
+    // scope not provided: show based on role and type (role-based defaults)
+    if (scope === 'all') {
+      // Explicitly requested ALL touchpoints - no user_id filter
+      // This applies to all roles: admin, manager, caravan, tele
+    } else if (scope === 'own') {
+      // Explicitly requested own touchpoints
+      conditions.push(`t.user_id = $${paramIndex}`);
+      params.push(user.sub);
+      paramIndex++;
+    } else if (user.role === 'admin' || user.role === 'area_manager' || user.role === 'assistant_area_manager') {
+      // Admin/Manager: can see all touchpoints by default (no filtering)
+      // Don't add user_id condition
+    } else if (user.role === 'caravan' || (user.role === 'tele' && type !== 'all')) {
+      // Caravan: always see own touchpoints by default
+      // Tele: see own touchpoints unless type='all'
       conditions.push(`t.user_id = $${paramIndex}`);
       params.push(user.sub);
       paramIndex++;
