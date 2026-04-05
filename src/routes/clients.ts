@@ -131,6 +131,8 @@ clients.get('/', authMiddleware, async (c) => {
     const municipality = c.req.query('municipality');
     const province = c.req.query('province');
     const productType = c.req.query('product_type');
+    const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
+    const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -198,6 +200,71 @@ clients.get('/', authMiddleware, async (c) => {
       paramIndex++;
     }
 
+    // Touchpoint status filter
+    // Group scores: 1=callable, 2=completed, 3=has_progress, 4=no_progress
+    if (touchpointStatus) {
+      const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
+
+      // Calculate next touchpoint type based on completed count
+      const nextTouchpointTypeCase = TOUCHPOINT_SEQUENCE.map((type, index) =>
+        `WHEN tp.completed_count = ${index} THEN '${type}'`
+      ).join(' ');
+
+      // Determine if current user can create the next touchpoint
+      let canCreateCondition = '';
+      if (user.role === 'tele') {
+        // Tele: Can only create Call types (2, 3, 5, 6)
+        canCreateCondition = `CASE WHEN next_touchpoint_type = 'Call' THEN true ELSE false END`;
+      } else if (user.role === 'caravan') {
+        // Caravan: Can only create Visit types (1, 4, 7)
+        canCreateCondition = `CASE WHEN next_touchpoint_type = 'Visit' THEN true ELSE false END`;
+      } else {
+        // Admin/Manager: Can create any touchpoint
+        canCreateCondition = 'CASE WHEN next_touchpoint_type IS NOT NULL THEN true ELSE false END';
+      }
+
+      // Calculate group score
+      const groupScoreCase = `
+        CASE
+          WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
+          WHEN tp.completed_count > 0 THEN 3
+          ELSE 4
+        END
+      `;
+
+      // Map touchpoint_status to group score
+      const statusToScoreMap: Record<string, number> = {
+        'callable': 1,
+        'completed': 2,
+        'has_progress': 3,
+        'no_progress': 4
+      };
+
+      const targetScore = statusToScoreMap[touchpointStatus];
+      if (targetScore !== undefined) {
+        conditions.push(`(
+          SELECT
+            CASE
+              WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
+              WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
+              WHEN tp.completed_count > 0 THEN 3
+              ELSE 4
+            END
+          FROM (
+            SELECT
+              t.client_id,
+              COUNT(DISTINCT t.touchpoint_number)::int as completed_count
+            FROM touchpoints t
+            WHERE t.client_id = c.id
+            GROUP BY t.client_id
+          ) tp
+        ) = $${paramIndex}`);
+        params.push(targetScore);
+        paramIndex++;
+      }
+    }
+
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
     // Get total count
@@ -206,6 +273,40 @@ clients.get('/', authMiddleware, async (c) => {
       params
     );
     const totalItems = parseInt(countResult.rows[0].count);
+
+    // Determine sort order
+    let orderByClause = 'ORDER BY c.created_at DESC';
+    if (sortBy === 'touchpoint_status') {
+      // Calculate group score for sorting
+      // Group scores: 1=callable, 2=completed, 3=has_progress, 4=no_progress
+      const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
+
+      // Calculate next touchpoint type based on completed count
+      const nextTouchpointTypeCase = TOUCHPOINT_SEQUENCE.map((type, index) =>
+        `WHEN tp.completed_count = ${index} THEN '${type}'`
+      ).join(' ');
+
+      // Determine if current user can create the next touchpoint
+      let canCreateCondition = '';
+      if (user.role === 'tele') {
+        canCreateCondition = `next_touchpoint_type = 'Call'`;
+      } else if (user.role === 'caravan') {
+        canCreateCondition = `next_touchpoint_type = 'Visit'`;
+      } else {
+        canCreateCondition = `next_touchpoint_type IS NOT NULL`;
+      }
+
+      // Sort by group score, then by completed count (more progress first)
+      orderByClause = `ORDER BY
+        CASE
+          WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
+          WHEN tp.completed_count > 0 THEN 3
+          ELSE 4
+        END ASC,
+        tp.completed_count DESC,
+        c.created_at DESC`;
+    }
 
     // Get paginated results with touchpoint status
     const result = await pool.query(
@@ -221,6 +322,7 @@ clients.get('/', authMiddleware, async (c) => {
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
         COALESCE(tp.completed_count, 0) as completed_touchpoints,
+        tp.next_touchpoint_type,
         tp.last_touchpoint_type,
         tp.last_touchpoint_user_id,
         lt.first_name as last_touchpoint_first_name,
@@ -233,14 +335,19 @@ clients.get('/', authMiddleware, async (c) => {
          SELECT t.client_id,
            COUNT(DISTINCT t.touchpoint_number)::int as completed_count,
            (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
-           (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id
+           (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
+           CASE ${['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'].map((type, index) =>
+             `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index} THEN '${type}'`
+           ).join(' ')}
+           ELSE NULL
+           END as next_touchpoint_type
          FROM touchpoints t
          GROUP BY t.client_id
        ) tp ON tp.client_id = c.id
        LEFT JOIN users lt ON lt.id = tp.last_touchpoint_user_id
        ${whereClause}
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
-       ORDER BY c.created_at DESC
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.next_touchpoint_type, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
+       ${orderByClause}
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
     );
