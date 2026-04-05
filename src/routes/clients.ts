@@ -181,7 +181,8 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     if (municipality) {
-      conditions.push(`c.municipality_id = $${paramIndex}`);
+      // Filter by municipality name (clients table has municipality column)
+      conditions.push(`c.municipality = $${paramIndex}`);
       params.push(municipality);
       paramIndex++;
     }
@@ -195,9 +196,8 @@ clients.get('/', authMiddleware, async (c) => {
     if (caravanId) {
       // caravan_id filter is deprecated - municipality is now used for location assignments
       // This filter is kept for backwards compatibility but will not return results
-      conditions.push(`c.municipality = $${paramIndex}`);
-      params.push(caravanId);
-      paramIndex++;
+      // Use province/municipality filtering instead
+      debugPrint('[clients] Deprecated caravan_id filter used, ignoring');
     }
 
     // Touchpoint status filter
@@ -214,13 +214,13 @@ clients.get('/', authMiddleware, async (c) => {
       let canCreateCondition = '';
       if (user.role === 'tele') {
         // Tele: Can only create Call types (2, 3, 5, 6)
-        canCreateCondition = `CASE WHEN next_touchpoint_type = 'Call' THEN true ELSE false END`;
+        canCreateCondition = `CASE WHEN tp.next_touchpoint_type = 'Call' THEN true ELSE false END`;
       } else if (user.role === 'caravan') {
         // Caravan: Can only create Visit types (1, 4, 7)
-        canCreateCondition = `CASE WHEN next_touchpoint_type = 'Visit' THEN true ELSE false END`;
+        canCreateCondition = `CASE WHEN tp.next_touchpoint_type = 'Visit' THEN true ELSE false END`;
       } else {
         // Admin/Manager: Can create any touchpoint
-        canCreateCondition = 'CASE WHEN next_touchpoint_type IS NOT NULL THEN true ELSE false END';
+        canCreateCondition = 'CASE WHEN tp.next_touchpoint_type IS NOT NULL THEN true ELSE false END';
       }
 
       // Calculate group score
