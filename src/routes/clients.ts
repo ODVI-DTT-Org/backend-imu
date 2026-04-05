@@ -901,7 +901,20 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       };
     });
 
-    // Get sample of recently matched clients (up to 10)
+    // Get pagination parameters
+    const page = parseInt(c.req.query('page') || '1');
+    const perPage = parseInt(c.req.query('perPage') || '10');
+    const offset = (page - 1) * perPage;
+
+    // Get total count of matched clients
+    const matchedCountResult = await pool.query(`
+      SELECT COUNT(*) as total
+      FROM clients c
+      INNER JOIN psgc psg ON psg.id = c.psgc_id
+    `);
+    const matchedTotal = parseInt(matchedCountResult.rows[0].total);
+
+    // Get paginated recently matched clients
     const matchedResult = await pool.query(`
       SELECT
         c.id,
@@ -919,13 +932,19 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       FROM clients c
       INNER JOIN psgc psg ON psg.id = c.psgc_id
       ORDER BY c.updated_at DESC
-      LIMIT 10
-    `);
+      LIMIT $1 OFFSET $2
+    `, [perPage, offset]);
 
     return c.json({
       stats: statsResult.rows[0],
       unmatched: unmatchedWithDebug,
       recently_matched: matchedResult.rows,
+      recently_matched_pagination: {
+        page,
+        perPage,
+        total: matchedTotal,
+        totalPages: Math.ceil(matchedTotal / perPage)
+      }
     });
   } catch (error) {
     console.error('Get PSGC status error:', error);
