@@ -609,11 +609,29 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     // === End Touchpoint Sequence Validation ===
 
+    // Helper function to convert time string (HH:MM) to timestamp by combining with date
+    const timeToTimestamp = (timeStr: string | null | undefined, dateStr: string): string | null => {
+      if (!timeStr) return null;
+
+      // If timeStr already looks like a full timestamp (ISO format), return as-is
+      if (timeStr.includes('T') || timeStr.includes('-')) {
+        return timeStr;
+      }
+
+      // Otherwise, combine date (YYYY-MM-DD) with time (HH:MM) to create timestamp
+      // Format: YYYY-MM-DDTHH:MM:SS
+      return `${dateStr}T${timeStr}:00`;
+    };
+
+    // Convert time_in and time_out to proper timestamps
+    const time_in = timeToTimestamp(validated.time_in, validated.date);
+    const time_out = timeToTimestamp(validated.time_out, validated.date);
+
     // Validate Time Out is after Time In (if both provided)
-    if (validated.time_in && validated.time_out) {
-      const timeIn = new Date(validated.time_in);
-      const timeOut = new Date(validated.time_out);
-      if (timeOut <= timeIn) {
+    if (time_in && time_out) {
+      const timeInDate = new Date(time_in);
+      const timeOutDate = new Date(time_out);
+      if (timeOutDate <= timeInDate) {
         throw new ValidationError('Time Out must be after Time In');
       }
     }
@@ -640,8 +658,8 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         validated.odometer_arrival, validated.odometer_departure, validated.reason, validated.status,
         validated.next_visit_date, validated.notes, validated.photo_url, validated.audio_url,
         validated.latitude, validated.longitude,
-        validated.time_in, validated.time_in_gps_lat, validated.time_in_gps_lng, validated.time_in_gps_address,
-        validated.time_out, validated.time_out_gps_lat, validated.time_out_gps_lng, validated.time_out_gps_address
+        time_in, validated.time_in_gps_lat, validated.time_in_gps_lng, validated.time_in_gps_address,
+        time_out, validated.time_out_gps_lat, validated.time_out_gps_lng, validated.time_out_gps_address
       ]
     );
 
@@ -685,11 +703,38 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       }
     }
 
+    // Helper function to convert time string (HH:MM) to timestamp by combining with date
+    const timeToTimestamp = (timeStr: string | null | undefined, dateStr: string): string | null => {
+      if (!timeStr) return null;
+
+      // If timeStr already looks like a full timestamp (ISO format), return as-is
+      if (timeStr.includes('T') || timeStr.includes('-')) {
+        return timeStr;
+      }
+
+      // Otherwise, combine date (YYYY-MM-DD) with time (HH:MM) to create timestamp
+      // Format: YYYY-MM-DDTHH:MM:SS
+      return `${dateStr}T${timeStr}:00`;
+    };
+
+    // Get the date to use for time conversion (either from update or existing)
+    const dateForTime = validated.date || existingTouchpoint.date;
+
+    // Convert time_in and time_out to proper timestamps if provided
+    const time_in = validated.time_in !== undefined
+      ? timeToTimestamp(validated.time_in, dateForTime)
+      : existingTouchpoint.time_in;
+    const time_out = validated.time_out !== undefined
+      ? timeToTimestamp(validated.time_out, dateForTime)
+      : existingTouchpoint.time_out;
+
     // Validate Time Out is after Time In (if both provided)
-    const timeIn = validated.time_in ? new Date(validated.time_in) : (existingTouchpoint.time_in ? new Date(existingTouchpoint.time_in) : null);
-    const timeOut = validated.time_out ? new Date(validated.time_out) : (existingTouchpoint.time_out ? new Date(existingTouchpoint.time_out) : null);
-    if (timeIn && timeOut && timeOut <= timeIn) {
-      return c.json({ message: 'Time Out must be after Time In' }, 400);
+    if (time_in && time_out) {
+      const timeInDate = new Date(time_in);
+      const timeOutDate = new Date(time_out);
+      if (timeOutDate <= timeInDate) {
+        return c.json({ message: 'Time Out must be after Time In' }, 400);
+      }
     }
 
     // Build the updates object
@@ -716,7 +761,7 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       audio_url: 'audio_url',
       latitude: 'latitude',
       longitude: 'longitude',
-      // Time In/Out fields
+      // Time In/Out fields - use converted values
       time_in: 'time_in',
       time_in_gps_lat: 'time_in_gps_lat',
       time_in_gps_lng: 'time_in_gps_lng',
@@ -727,10 +772,19 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       time_out_gps_address: 'time_out_gps_address',
     };
 
+    // Override time_in and time_out values with converted timestamps
+    const updateData: any = { ...validated };
+    if (validated.time_in !== undefined) {
+      updateData.time_in = time_in;
+    }
+    if (validated.time_out !== undefined) {
+      updateData.time_out = time_out;
+    }
+
     for (const [key, dbField] of Object.entries(fieldMappings)) {
-      if (key in validated) {
+      if (key in updateData) {
         updates.push(`${dbField} = $${valueIndex}`);
-        values.push((validated as any)[key]);
+        values.push(updateData[key]);
         valueIndex++;
       }
     }
