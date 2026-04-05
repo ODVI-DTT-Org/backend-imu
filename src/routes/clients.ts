@@ -197,7 +197,7 @@ clients.get('/', authMiddleware, async (c) => {
       // caravan_id filter is deprecated - municipality is now used for location assignments
       // This filter is kept for backwards compatibility but will not return results
       // Use province/municipality filtering instead
-      debugPrint('[clients] Deprecated caravan_id filter used, ignoring');
+      // Silently ignore the deprecated filter
     }
 
     // Touchpoint status filter
