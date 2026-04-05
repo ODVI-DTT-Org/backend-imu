@@ -1,0 +1,19 @@
+spec:
+  name: imu-backend
+  services:
+    - name: web
+      source_dir: /
+      github:
+        repo: ODVI-DTT-Org/backend-imu
+        branch: main
+        deploy_on_push: true
+      run_command: pnpm run start
+      build_command: pnpm run build
+      environment_slug: node-js
+      instance_size_slug: basic-xxs
+      instance_count: 1
+      env_vars:
+        - key: NODE_VERSION
+          value: "22"
+        - key: NPM_CONFIG_PRODUCTION
+          value: "false"
