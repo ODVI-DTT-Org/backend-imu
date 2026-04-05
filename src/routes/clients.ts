@@ -254,26 +254,38 @@ clients.get('/', authMiddleware, async (c) => {
 
       const targetScore = statusToScoreMap[touchpointStatus];
       if (targetScore !== undefined) {
-        conditions.push(`(
-          SELECT
-            CASE
-              WHEN (${subqueryCanCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
-              WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
-              WHEN tp.completed_count > 0 THEN 3
-              ELSE 4
-            END
-          FROM (
-            SELECT
-              t.client_id,
-              COUNT(DISTINCT t.touchpoint_number)::int as completed_count,
-              CASE ${nextTouchpointTypeCase}
-                ELSE NULL
-              END as next_touchpoint_type
+        // Calculate next touchpoint type inline for EXISTS subquery
+        const cc = 'COUNT(DISTINCT t.touchpoint_number)';
+        const nextTypeCase = TOUCHPOINT_SEQUENCE.map((type, index) =>
+          `WHEN ${cc} = ${index} THEN '${type}'`
+        ).join(' ');
+
+        // Determine if current user can create the next touchpoint (inline calculation)
+        let canCreateInline = '';
+        if (user.role === 'tele') {
+          canCreateInline = `CASE ${nextTypeCase} ELSE NULL END = 'Call'`;
+        } else if (user.role === 'caravan') {
+          canCreateInline = `CASE ${nextTypeCase} ELSE NULL END = 'Visit'`;
+        } else {
+          canCreateInline = `CASE ${nextTypeCase} ELSE NULL END IS NOT NULL`;
+        }
+
+        // Use EXISTS pattern for touchpoint status filtering
+        const existsCondition = `
+          EXISTS (
+            SELECT 1
             FROM touchpoints t
             WHERE t.client_id = c.id
-            GROUP BY t.client_id, completed_count
-          ) tp
-        ) = $${paramIndex}`);
+            GROUP BY t.client_id
+            HAVING CASE
+              WHEN (${canCreateInline}) AND ${cc} < 7 AND NOT c.loan_released THEN 1
+              WHEN ${cc} >= 7 OR c.loan_released THEN 2
+              WHEN ${cc} > 0 THEN 3
+              ELSE 4
+            END = $${paramIndex}
+          )
+        `;
+        conditions.push(existsCondition);
         params.push(targetScore);
         paramIndex++;
       }
@@ -499,10 +511,11 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
 
     return c.json({
       ...mapRowToClient(client),
+      // Put touchpoints at root level for mobile Client.fromJson() compatibility
+      touchpoints: client.touchpoints,
       expand: {
         addresses: client.addresses,
         phone_numbers: client.phone_numbers,
-        touchpoints: client.touchpoints,
       },
       touchpoint_status: {
         completed_touchpoints: completedTouchpoints,

@@ -188,7 +188,9 @@ myDay.get('/status/:clientId', authMiddleware, requirePermission('clients', 'rea
 myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), async (c) => {
   try {
     const user = c.get('user');
-    const today = getLocalDateString();
+    // Accept optional date parameter, default to today
+    const requestedDate = c.req.query('date');
+    const targetDate = requestedDate || getLocalDateString();
 
     // Allow admin/staff to specify user_id, field agents use their own id
     let caravanId = c.req.query('user_id');
@@ -196,7 +198,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       caravanId = user.sub;
     }
 
-    // Get today's itineraries with client info
+    // Get itineraries for the target date with client info
     const itinerariesResult = await pool.query(
       `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.client_type,
               a.name as agency_name
@@ -205,10 +207,10 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
        LEFT JOIN agencies a ON a.id = c.agency_id
        WHERE i.user_id = $1 AND i.scheduled_date = $2
        ORDER BY i.scheduled_time ASC NULLS LAST, i.priority DESC`,
-      [caravanId, today]
+      [caravanId, targetDate]
     );
 
-    // Get today's completed touchpoints
+    // Get completed touchpoints for the target date
     const touchpointsResult = await pool.query(
       `SELECT t.id, t.client_id, t.touchpoint_number, t.type, t.reason, t.time_arrival, t.time_departure,
               c.first_name, c.last_name, c.client_type
@@ -216,7 +218,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
        JOIN clients c ON c.id = t.client_id
        WHERE t.user_id = $1 AND t.date = $2
        ORDER BY t.created_at DESC`,
-      [user.sub, today]
+      [user.sub, targetDate]
     );
 
     const tasks = itinerariesResult.rows.map(row => ({
@@ -258,7 +260,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     const inProgressTasks = tasks.filter(t => t.status === 'in_progress').length;
 
     return c.json({
-      date: today,
+      date: targetDate,
       summary: {
         total: totalTasks,
         completed: completedTasks,
