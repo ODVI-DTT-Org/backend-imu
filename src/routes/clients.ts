@@ -314,7 +314,7 @@ clients.get('/', authMiddleware, async (c) => {
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
         t.client_id,
-        COUNT(DISTINCT t.touchpoint_number)::int as completed_count,
+        CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
         (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
         (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
         CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
@@ -1382,14 +1382,14 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       await pool.query(`
         UPDATE clients AS c
         SET
-          psgc_id = v.psgc_id::integer,
+          psgc_id = CAST(v.psgc_id AS INTEGER),
           region = COALESCE(v.region, c.region),
           province = COALESCE(v.province, c.province),
           municipality = COALESCE(v.municipality, c.municipality),
           barangay = COALESCE(v.barangay, c.barangay),
           updated_at = NOW()
         FROM (VALUES ${valuesClause}) AS v(client_id, psgc_id, region, province, municipality, barangay)
-        WHERE c.id = v.client_id::uuid
+        WHERE c.id = CAST(v.client_id AS UUID)
       `, params);
     }
 

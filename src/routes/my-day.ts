@@ -111,11 +111,15 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
     // Use provided scheduled_date or CURRENT_DATE for today
     // Note: CURRENT_DATE now respects database timezone (Asia/Manila) due to connection string setting
 
+    // Debug logging
+    console.log('[Add to My Day] Received scheduled_date:', validated.scheduled_date);
+    console.log('[Add to My Day] Client ID:', validated.client_id);
+
     // Check for existing itinerary on the target date if custom date is provided
     if (validated.scheduled_date) {
       const customDateCheck = await pool.query(
         `SELECT * FROM itineraries
-         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CAST($3 AS DATE)`,
+         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3::date`,
         [validated.client_id, user.sub, validated.scheduled_date]
       );
 
@@ -126,7 +130,7 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
 
     // For INSERT: use $7 for scheduled_date to avoid collision with other parameters
     const targetDate = validated.scheduled_date
-      ? `CAST($7 AS DATE)`
+      ? `$7::date`  // Cast parameter to date type (timezone-independent)
       : 'CURRENT_DATE';
 
     // Add to itinerary using target date (either custom date or CURRENT_DATE for today)
@@ -151,6 +155,10 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
        RETURNING *`,
       insertParams
     );
+
+    console.log('[Add to My Day] Inserted scheduled_date:', result.rows[0].scheduled_date);
+    console.log('[Add to My Day] targetDate expression:', targetDate);
+    console.log('[Add to My Day] insertParams:', insertParams);
 
     return c.json({
       message: 'Client added to My Day',
@@ -959,6 +967,383 @@ myDay.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), asyn
   } catch (error) {
     console.error('Get stats error:', error);
     return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
+// POST /api/my-day/complete-visit - Unified endpoint for complete visit workflow
+// Creates/updates touchpoint, ensures itinerary exists, marks as completed
+myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermission('touchpoints', 'create'), async (c) => {
+  let uploadedPhotoUrl: string | undefined;
+  let uploadedPhotoKey: string | undefined;
+  let uploadedAudioUrl: string | undefined;
+  let uploadedAudioKey: string | undefined;
+  let uploadedPhotoHash: string | undefined;
+  let uploadedAudioHash: string | undefined;
+
+  // Generate request ID for tracing
+  const requestId = uuidv4();
+  c.header('X-Request-Id', requestId);
+
+  try {
+    const user = c.get('user');
+
+    // Parse multipart form data
+    const body = await c.req.parseBody();
+
+    // Extract form fields
+    const clientId = body['client_id'] as string;
+    const touchpointNumberStr = body['touchpoint_number'] as string;
+    const type = body['type'] as 'Visit' | 'Call';
+    const reason = body['reason'] as string;
+    const status = body['status'] as string | undefined;
+    const address = body['address'] as string | undefined;
+    const timeArrival = body['time_arrival'] as string | undefined;
+    const timeDeparture = body['time_departure'] as string | undefined;
+    const odometerArrival = body['odometer_arrival'] as string | undefined;
+    const odometerDeparture = body['odometer_departure'] as string | undefined;
+    const nextVisitDate = body['next_visit_date'] as string | undefined;
+    const notes = body['notes'] as string | undefined;
+    const latitudeStr = body['latitude'] as string | undefined;
+    const longitudeStr = body['longitude'] as string | undefined;
+    const scheduledTime = body['scheduled_time'] as string | undefined;
+
+    // Extract files
+    const photoFile = body['photo'] as File | undefined;
+    const audioFile = body['audio'] as File | undefined;
+
+    // Validate required fields
+    if (!clientId || !touchpointNumberStr || !type || !reason) {
+      throw new ValidationError('Missing required fields: client_id, touchpoint_number, type, reason')
+        .addDetail('requestId', requestId);
+    }
+
+    const touchpointNumber = parseInt(touchpointNumberStr);
+    if (isNaN(touchpointNumber) || touchpointNumber < 1 || touchpointNumber > 7) {
+      throw new ValidationError('Invalid touchpoint_number. Must be between 1 and 7')
+        .addDetail('providedValue', touchpointNumberStr)
+        .addDetail('requestId', requestId);
+    }
+
+    // Validate type enum
+    if (type !== 'Visit' && type !== 'Call') {
+      throw new ValidationError('Invalid type. Must be "Visit" or "Call"')
+        .addDetail('providedValue', type)
+        .addDetail('requestId', requestId);
+    }
+
+    // Validate status if provided
+    if (status && !VALID_STATUSES.includes(status)) {
+      throw new ValidationError(`Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`)
+        .addDetail('providedValue', status)
+        .addDetail('requestId', requestId);
+    }
+
+    // Validate UUID
+    try {
+      if (!clientId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i)) {
+        throw new ValidationError('Invalid client_id format');
+      }
+    } catch {
+      throw new ValidationError('Invalid client_id format')
+        .addDetail('providedValue', clientId)
+        .addDetail('requestId', requestId);
+    }
+
+    // Parse optional numeric fields
+    const latitude = latitudeStr ? parseFloat(latitudeStr) : undefined;
+    const longitude = longitudeStr ? parseFloat(longitudeStr) : undefined;
+
+    // Handle photo upload with deduplication
+    if (photoFile && photoFile instanceof File) {
+      const photoBuffer = Buffer.from(await photoFile.arrayBuffer());
+      uploadedPhotoHash = calculateFileHash(photoBuffer);
+
+      // Check for duplicate file
+      const duplicateCheck = await pool.query(
+        'SELECT url, storage_key FROM files WHERE hash = $1 AND entity_type = $2 ORDER BY created_at DESC LIMIT 1',
+        [uploadedPhotoHash, 'touchpoint']
+      );
+
+      if (duplicateCheck.rows.length > 0) {
+        uploadedPhotoUrl = duplicateCheck.rows[0].url;
+        uploadedPhotoKey = duplicateCheck.rows[0].storage_key;
+        console.log(`[File Deduplication] Reusing existing photo: ${uploadedPhotoUrl}`);
+      } else {
+        const photoResult = await storageService.upload({
+          file: photoBuffer,
+          filename: photoFile.name,
+          mimetype: photoFile.type,
+          folder: 'touchpoint_photo',
+          maxSize: MAX_PHOTO_SIZE,
+          allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+        });
+
+        if (!photoResult.success || !photoResult.url) {
+          throw new AppError('PHOTO_UPLOAD_FAILED', `Photo upload failed: ${photoResult.error || 'Unknown error'}`, 400)
+            .addDetail('requestId', requestId)
+            .addDetail('filename', photoFile.name);
+        }
+
+        uploadedPhotoUrl = photoResult.url;
+        uploadedPhotoKey = photoResult.key;
+      }
+    }
+
+    // Handle audio upload with deduplication
+    if (audioFile && audioFile instanceof File) {
+      const audioBuffer = Buffer.from(await audioFile.arrayBuffer());
+      uploadedAudioHash = calculateFileHash(audioBuffer);
+
+      const duplicateCheck = await pool.query(
+        'SELECT url, storage_key FROM files WHERE hash = $1 AND entity_type = $2 ORDER BY created_at DESC LIMIT 1',
+        [uploadedAudioHash, 'touchpoint']
+      );
+
+      if (duplicateCheck.rows.length > 0) {
+        uploadedAudioUrl = duplicateCheck.rows[0].url;
+        uploadedAudioKey = duplicateCheck.rows[0].storage_key;
+        console.log(`[File Deduplication] Reusing existing audio: ${uploadedAudioUrl}`);
+      } else {
+        const audioResult = await storageService.upload({
+          file: audioBuffer,
+          filename: audioFile.name,
+          mimetype: audioFile.type,
+          folder: 'touchpoint_audio',
+          maxSize: MAX_AUDIO_SIZE,
+          allowedMimeTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/ogg', 'audio/m4a', 'audio/webm'],
+        });
+
+        if (!audioResult.success || !audioResult.url) {
+          throw new AppError('AUDIO_UPLOAD_FAILED', `Audio upload failed: ${audioResult.error || 'Unknown error'}`, 400)
+            .addDetail('requestId', requestId)
+            .addDetail('filename', audioFile.name);
+        }
+
+        uploadedAudioUrl = audioResult.url;
+        uploadedAudioKey = audioResult.key;
+      }
+    }
+
+    // Wrap in database transaction for atomicity
+    await pool.query('BEGIN');
+
+    try {
+      // Step 1: Verify client exists
+      const clientCheck = await pool.query(
+        'SELECT * FROM clients WHERE id = $1',
+        [clientId]
+      );
+
+      if (clientCheck.rows.length === 0) {
+        throw new NotFoundError('Client')
+          .addDetail('clientId', clientId)
+          .addDetail('requestId', requestId);
+      }
+
+      // Step 2: Check for existing touchpoint today using CURRENT_DATE
+      const existing = await pool.query(
+        `SELECT * FROM touchpoints
+         WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+        [clientId, user.sub]
+      );
+
+      let result;
+      if (existing.rows.length > 0) {
+        // Update existing touchpoint
+        result = await pool.query(
+          `UPDATE touchpoints SET
+            touchpoint_number = $1, type = $2, reason = $3, address = $4,
+            time_arrival = $5, time_departure = $6, odometer_arrival = $7, odometer_departure = $8,
+            next_visit_date = $9, notes = $10, photo_url = $11, audio_url = $12,
+            latitude = $13, longitude = $14, status = $15, updated_at = NOW()
+          WHERE id = $16 RETURNING *`,
+          [
+            touchpointNumber, type, reason, address,
+            timeArrival, timeDeparture, odometerArrival, odometerDeparture,
+            nextVisitDate, notes, uploadedPhotoUrl, uploadedAudioUrl,
+            latitude, longitude, status || 'Completed',
+            existing.rows[0].id
+          ]
+        );
+      } else {
+        // Create new touchpoint using CURRENT_DATE
+        result = await pool.query(
+          `INSERT INTO touchpoints (
+            id, client_id, user_id, touchpoint_number, type, date,
+            reason, address, time_arrival, time_departure,
+            odometer_arrival, odometer_departure, next_visit_date,
+            notes, photo_url, audio_url, latitude, longitude, status
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+          ) RETURNING *`,
+          [
+            clientId, user.sub, touchpointNumber, type,
+            reason, address, timeArrival, timeDeparture,
+            odometerArrival, odometerDeparture, nextVisitDate,
+            notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed'
+          ]
+        );
+      }
+
+      const touchpoint = result.rows[0];
+
+      // Step 3: Find or create today's itinerary for this client
+      let itineraryResult = await pool.query(
+        `SELECT * FROM itineraries
+         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CURRENT_DATE`,
+        [clientId, user.sub]
+      );
+
+      let itinerary;
+      if (itineraryResult.rows.length === 0) {
+        // Create new itinerary
+        const createResult = await pool.query(
+          `INSERT INTO itineraries (id, client_id, user_id, scheduled_date, scheduled_time, status, priority, created_by)
+           VALUES (gen_random_uuid(), $1, $2, CURRENT_DATE, $3, 'completed', 5, $4)
+           RETURNING *`,
+          [clientId, user.sub, scheduledTime || null, user.sub]
+        );
+        itinerary = createResult.rows[0];
+      } else {
+        // Update existing itinerary to completed
+        const updateResult = await pool.query(
+          `UPDATE itineraries SET status = 'completed', updated_at = NOW()
+           WHERE id = $1 AND status != 'completed'
+           RETURNING *`,
+          [itineraryResult.rows[0].id]
+        );
+        itinerary = updateResult.rows[0];
+      }
+
+      // Step 4: Store file metadata (only for newly uploaded files)
+      if (uploadedPhotoUrl && uploadedPhotoKey && photoFile) {
+        const existingFile = await pool.query(
+          'SELECT id FROM files WHERE storage_key = $1',
+          [uploadedPhotoKey]
+        );
+
+        if (existingFile.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, hash, uploaded_by, entity_type, entity_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              uploadedPhotoKey.split('/').pop(),
+              photoFile.name,
+              photoFile.type,
+              photoFile.size,
+              uploadedPhotoUrl,
+              uploadedPhotoKey,
+              uploadedPhotoHash,
+              user.sub,
+              'touchpoint',
+              touchpoint.id,
+            ]
+          );
+        }
+      }
+
+      if (uploadedAudioUrl && uploadedAudioKey && audioFile) {
+        const existingFile = await pool.query(
+          'SELECT id FROM files WHERE storage_key = $1',
+          [uploadedAudioKey]
+        );
+
+        if (existingFile.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, hash, uploaded_by, entity_type, entity_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [
+              uploadedAudioKey.split('/').pop(),
+              audioFile.name,
+              audioFile.type,
+              audioFile.size,
+              uploadedAudioUrl,
+              uploadedAudioKey,
+              uploadedAudioHash,
+              user.sub,
+              'touchpoint',
+              touchpoint.id,
+            ]
+          );
+        }
+      }
+
+      // Commit transaction
+      await pool.query('COMMIT');
+
+      return c.json({
+        success: true,
+        message: 'Visit completed successfully',
+        touchpoint: {
+          ...touchpoint,
+          photo_url: uploadedPhotoUrl,
+          audio_url: uploadedAudioUrl,
+        },
+        itinerary: {
+          id: itinerary.id,
+          client_id: itinerary.client_id,
+          user_id: itinerary.user_id,
+          scheduled_date: itinerary.scheduled_date,
+          scheduled_time: itinerary.scheduled_time,
+          status: itinerary.status,
+          priority: itinerary.priority,
+          notes: itinerary.notes,
+        },
+      });
+
+    } catch (transactionError) {
+      await pool.query('ROLLBACK');
+      throw transactionError;
+    }
+
+  } catch (error: any) {
+    // Clean up uploaded files if failed
+    const cleanupPromises: Promise<boolean>[] = [];
+
+    if (uploadedPhotoKey) {
+      cleanupPromises.push(deleteFileWithRetry(uploadedPhotoKey));
+    }
+    if (uploadedAudioKey) {
+      cleanupPromises.push(deleteFileWithRetry(uploadedAudioKey));
+    }
+
+    Promise.all(cleanupPromises).catch((cleanupErrors) => {
+      console.error('[Complete Visit] File cleanup errors:', cleanupErrors);
+    });
+
+    if (error instanceof AppError) {
+      return c.json({
+        success: false,
+        message: error.message,
+        code: error.code,
+        requestId: error.details.requestId || 'unknown',
+        suggestions: error.suggestions,
+      }, error.statusCode as any);
+    }
+
+    if (error instanceof z.ZodError) {
+      return c.json({
+        success: false,
+        message: 'Invalid input',
+        code: 'VALIDATION_ERROR',
+        requestId,
+        errors: error.errors,
+      }, 400);
+    }
+
+    console.error('[Complete Visit] Error:', {
+      message: error.message,
+      code: error.code || 'INTERNAL_ERROR',
+      requestId,
+      stack: error.stack,
+    });
+
+    return c.json({
+      success: false,
+      message: 'An error occurred while completing your visit. Please try again.',
+      code: 'INTERNAL_ERROR',
+      requestId,
+    }, 500);
   }
 });
 
