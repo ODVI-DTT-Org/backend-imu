@@ -10,7 +10,151 @@
 |-------|-------|
 | **Last Updated** | 2026-04-05 |
 | **Active Issues** | 0 |
-| **Resolved This Month** | 37 |
+| **Resolved This Month** | 40 |
+
+---
+
+### 2026-04-05 - Tele Calls "Assigned" Tab Shows All Clients with Disabled Call Button ✅ IMPLEMENTED
+
+**Severity:** MINOR - UX improvement (frontend, affects Tele Calls page)
+
+**Symptoms:**
+Tele Calls "Assigned" tab was only showing callable clients, making it difficult to see all assigned clients
+
+**Error Messages:** None - UX improvement, not a bug
+
+**Root Cause:**
+The "Assigned" tab was filtering to only show `touchpoint_status='callable'` clients, hiding clients that couldn't be called yet
+
+**Solution:**
+Removed `touchpoint_status` filter from "Assigned" tab so ALL assigned clients are shown. The existing "Create Call" button logic (based on `can_create_touchpoint`) already handles disabling the button for non-callable clients.
+
+**Code Changes:**
+```diff
+--- a/src/views/tele/TeleCallsView.vue
++++ b/src/views/tele/TeleCallsView.vue
+@@ -231,8 +231,8 @@ function handleTabChange(tab: 'assigned' | 'all') {
+   activeTab.value = tab
+-  fetchAssignedClients({ touchpoint_status: tab === 'assigned' ? 'callable' : undefined })
++  fetchAssignedClients({ touchpoint_status: undefined })
+ }
+```
+
+**Button Logic (Already Working):**
+```typescript
+// Line 593-610: "Call" column logic
+if (!touchpointStatus?.can_create_touchpoint) {
+  return h('span', { class: 'text-neutral-400 text-sm' }, 'Wait for Visit')
+}
+return h(Button, {
+  variant: 'primary',
+  size: 'sm',
+  onClick: () => handleCreateCall(client),
+  title: `Create Call TP${touchpointStatus.next_touchpoint_number}`
+}, () => [
+  h(PhoneIcon, { class: 'w-4 h-4 mr-1' }),
+  h('span', `Call TP${touchpointStatus.next_touchpoint_number}`)
+])
+```
+
+**Behavior:**
+- **Assigned Tab:** Shows all assigned clients (no filtering)
+- **All Clients Tab:** Shows all clients in the system
+- **Call Button:** Enabled when `can_create_touchpoint=true` (Tele's turn: TP2, TP3, TP5, TP6)
+- **Call Button:** Disabled when `can_create_touchpoint=false` (shows "Wait for Visit" for TP1, TP4, TP7)
+
+**Related Files:**
+- Frontend: `imu-web-vue/src/views/tele/TeleCallsView.vue:231-234` (handleTabChange)
+- Frontend: `imu-web-vue/src/views/tele/TeleCallsView.vue:593-610` (Call button logic)
+
+**Impact:**
+- ✅ Tele users can now see all their assigned clients in one place
+- ✅ Better visibility into client status and progress
+- ✅ Call button automatically disabled for non-callable clients
+- ✅ Consistent UX between "Assigned" and "All Clients" tabs
+
+**Reported By:** User request
+**Implemented By:** Development Team
+
+---
+
+### 2026-04-05 - Area Filtering SQL Syntax Error - Duplicate WHERE Clauses ✅ FIXED
+
+**Severity:** MEDIUM - SQL query syntax error (backend, affects clients endpoint)
+
+**Symptoms:**
+GET /api/clients returning 500 error with syntax error when Caravan/Tele users have area assignments and touchpoint_status filter is applied
+
+**Error Messages:**
+```
+[ Database Error (user_locations) ]: syntax error at or near "WHERE"
+Fetch clients error: error: syntax error at or near "WHERE"
+Error code: 42601 (syntax_error)
+Position: 2288
+```
+
+**Root Cause:**
+When `areaFilterWhereClause` adds a `WHERE` clause (because `baseWhereClause` is empty), but then `groupScoreFilter` also checks only `baseWhereClause` (which is still empty), it adds another `WHERE` clause. This results in two `WHERE` clauses in the query, which is invalid SQL.
+
+**Example Scenario:**
+- Caravan user with area assignments
+- No search/filter (empty `baseWhereClause`)
+- `touchpointStatus='callable'` provided
+
+**Invalid SQL Generated:**
+```sql
+SELECT COUNT(DISTINCT c.id) as count
+FROM clients c
+LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id
+ WHERE (c.province IN (SELECT province FROM user_areas) ...)  -- areaFilterWhereClause
+ WHERE tws.group_score = $1                                   -- groupScoreFilter (DUPLICATE!)
+```
+
+**Solution:**
+Changed line 388 in clients.ts to check both `baseWhereClause` AND `areaFilterWhereClause` when deciding between WHERE and AND for `groupScoreFilter`
+
+**Code Changes:**
+```diff
+--- a/backend/src/routes/clients.ts
++++ b/backend/src/routes/clients.ts
+@@ -386,8 +386,9 @@
+-        // Use WHERE or AND depending on whether baseWhereClause exists
+-        const whereOrAnd = baseWhereClause ? 'AND' : 'WHERE';
++        // Use WHERE or AND depending on whether any WHERE clause exists (baseWhereClause or areaFilterWhereClause)
++        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
++        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+         groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+```
+
+**Related Files:**
+- Backend: `backend/src/routes/clients.ts:386-389`
+
+**Impact:**
+- ✅ Caravan/Tele users with area assignments can now use touchpoint_status filter
+- ✅ No more duplicate WHERE clauses in SQL queries
+- ✅ Proper SQL syntax with AND after area filter WHERE clause
+
+**Prevention:**
+When building SQL queries with multiple optional filter clauses, track whether a WHERE clause has already been added before deciding between WHERE and AND for subsequent filters
+
+**Status:** ✅ FIXED - Both fixes applied (line 307 for areaFilterWhereClause, line 388 for groupScoreFilter)
+```
+
+**Related Files:**
+- Backend: `backend/src/routes/clients.ts:307`
+
+**Impact:**
+- ✅ Clients endpoint now works correctly for area filtering
+- ✅ Caravan/Tele users properly filtered by assigned municipalities
+- ✅ Admin/Manager users see all clients without area restrictions
+
+**Prevention:**
+- When determining WHERE vs AND in SQL clause construction, check the actual WHERE clause string, not the conditions array
+- Use `baseWhereClause !== ''` to check if WHERE clause exists
+- Use `baseWhereClause !== ''` to determine whether to add AND or WHERE for additional filters
+
+**Reported By:** Backend logs showing SQL syntax error
+**Fixed By:** Development Team
 
 ---
 
