@@ -304,7 +304,7 @@ clients.get('/', authMiddleware, async (c) => {
     if (shouldFilterByArea) {
       // For Caravan/Tele: Filter by assigned provinces/municipalities
       // Using the new province and municipality columns directly
-      const whereOrAnd = baseWhereConditions.length > 0 ? 'AND' : 'WHERE';
+      const whereOrAnd = baseWhereClause !== '' ? 'AND' : 'WHERE';
       areaFilterWhereClause = ` ${whereOrAnd} (
         c.province IN (SELECT province FROM user_areas)
         AND c.municipality IN (SELECT municipality FROM user_areas)
@@ -336,7 +336,8 @@ clients.get('/', authMiddleware, async (c) => {
         FROM user_locations
         WHERE user_id = '${user.sub}' AND deleted_at IS NULL
       ), ${touchpointInfoCTE}`;
-      console.log('[clients] CTE with area filter:', withGroupScoreCTE.substring(0, 200) + '...');
+      console.log('[clients] CTE with area filter:', withGroupScoreCTE.substring(0, 300) + '...');
+      console.log('[clients] user.sub:', user.sub);
     } else {
       withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
       console.log('[clients] CTE without area filter:', withGroupScoreCTE.substring(0, 200) + '...');
@@ -383,8 +384,9 @@ clients.get('/', authMiddleware, async (c) => {
         )`;
 
         // Filter by group score in WHERE clause
-        // Use WHERE or AND depending on whether baseWhereClause exists
-        const whereOrAnd = baseWhereClause ? 'AND' : 'WHERE';
+        // Use WHERE or AND depending on whether any WHERE clause exists (baseWhereClause or areaFilterWhereClause)
+        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
         groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
         baseParams.push(targetScore);
         baseParamIndex++;
@@ -563,7 +565,8 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
        LEFT JOIN phone_numbers p ON p.client_id = c.id
        LEFT JOIN touchpoints t ON t.client_id = c.id
        WHERE c.id = $1
-       GROUP BY c.id`,
+       GROUP BY c.id
+      `,
       [id]
     );
 
