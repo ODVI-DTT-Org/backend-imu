@@ -77,14 +77,23 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
     const body = await c.req.json();
     const validated = addToMyDaySchema.parse(body);
 
-    // Verify client exists (no ownership check - users can add any client)
+    // Verify client exists and check if loan is released
+    // RULE: loan_released clients cannot be added to itinerary/My Day (they're "done")
     const clientCheck = await pool.query(
-      'SELECT * FROM clients WHERE id = $1',
+      'SELECT *, loan_released::int as loan_released_bool FROM clients WHERE id = $1',
       [validated.client_id]
     );
 
     if (clientCheck.rows.length === 0) {
-      return c.json({ message: 'Client not found or not assigned to you' }, 404);
+      return c.json({ message: 'Client not found' }, 404);
+    }
+
+    const client = clientCheck.rows[0];
+    if (client.loan_released || client.loan_released_bool) {
+      return c.json({
+        success: false,
+        message: 'Cannot add client to itinerary: Loan has already been released'
+      }, 400);
     }
 
     // Check if already in today's itinerary using CURRENT_DATE (respects database timezone Asia/Manila)

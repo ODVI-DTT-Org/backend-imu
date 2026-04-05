@@ -534,6 +534,29 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       }, 403);
     }
 
+    // === Loan Released Validation ===
+    // RULE: Cannot create touchpoints for clients with released loans (they're "done")
+    const clientCheck = await pool.query(
+      `SELECT id, loan_released::int as loan_released_bool FROM clients WHERE id = $1`,
+      [validated.client_id]
+    );
+    if (clientCheck.rows.length === 0) {
+      return c.json({
+        message: 'Client not found',
+        errorCode: 'CLIENT_NOT_FOUND'
+      }, 404);
+    }
+
+    const client = clientCheck.rows[0];
+    if (client.loan_released || client.loan_released_bool) {
+      return c.json({
+        message: 'Cannot create touchpoint: Loan has already been released for this client',
+        errorCode: 'LOAN_ALREADY_RELEASED',
+        clientId: validated.client_id,
+        loanReleasedAt: null // TODO: Add loan_released_at to response if needed
+      }, 400);
+    }
+
     // === Touchpoint Sequence Validation ===
 
     // 1. Validate that the touchpoint type matches the sequence pattern

@@ -213,97 +213,6 @@ clients.get('/', authMiddleware, async (c) => {
       // Silently ignore the deprecated filter
     }
 
-    // Touchpoint status filter
-    // Group scores: 1=callable, 2=completed, 3=has_progress, 4=no_progress
-    if (touchpointStatus) {
-      const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-
-      // Calculate next touchpoint type based on completed count
-      // Note: In subquery context, reference completed_count directly (no tp. prefix)
-      const nextTouchpointTypeCase = TOUCHPOINT_SEQUENCE.map((type, index) =>
-        `WHEN completed_count = ${index} THEN '${type}'`
-      ).join(' ');
-
-      // Determine if current user can create the next touchpoint
-      // Note: For WHERE clause subquery, check if next_touchpoint_type IS NOT NULL
-      // (different from main query where we check the specific value)
-      let canCreateCondition = '';
-      if (user.role === 'tele') {
-        // Tele: Can only create Call types (2, 3, 5, 6)
-        canCreateCondition = `CASE WHEN tp.next_touchpoint_type = 'Call' THEN true ELSE false END`;
-      } else if (user.role === 'caravan') {
-        // Caravan: Can only create Visit types (1, 4, 7)
-        canCreateCondition = `CASE WHEN tp.next_touchpoint_type = 'Visit' THEN true ELSE false END`;
-      } else {
-        // Admin/Manager: Can create any touchpoint
-        canCreateCondition = 'CASE WHEN tp.next_touchpoint_type IS NOT NULL THEN true ELSE false END';
-      }
-
-      // For WHERE clause subquery: create a simpler condition that doesn't reference tp.next_touchpoint_type
-      // The subquery will check if next_touchpoint_type IS NOT NULL
-      const subqueryCanCreateCondition = user.role === 'tele'
-        ? `next_touchpoint_type = 'Call'`
-        : user.role === 'caravan'
-        ? `next_touchpoint_type = 'Visit'`
-        : `next_touchpoint_type IS NOT NULL`;
-
-      // Calculate group score
-      const groupScoreCase = `
-        CASE
-          WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
-          WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
-          WHEN tp.completed_count > 0 THEN 3
-          ELSE 4
-        END
-      `;
-
-      // Map touchpoint_status to group score
-      const statusToScoreMap: Record<string, number> = {
-        'callable': 1,
-        'completed': 2,
-        'has_progress': 3,
-        'no_progress': 4
-      };
-
-      const targetScore = statusToScoreMap[touchpointStatus];
-      if (targetScore !== undefined) {
-        // Calculate next touchpoint type inline for EXISTS subquery
-        const cc = 'COUNT(DISTINCT t.touchpoint_number)';
-        const nextTypeCase = TOUCHPOINT_SEQUENCE.map((type, index) =>
-          `WHEN ${cc} = ${index} THEN '${type}'`
-        ).join(' ');
-
-        // Determine if current user can create the next touchpoint (inline calculation)
-        let canCreateInline = '';
-        if (user.role === 'tele') {
-          canCreateInline = `CASE ${nextTypeCase} ELSE NULL END = 'Call'`;
-        } else if (user.role === 'caravan') {
-          canCreateInline = `CASE ${nextTypeCase} ELSE NULL END = 'Visit'`;
-        } else {
-          canCreateInline = `CASE ${nextTypeCase} ELSE NULL END IS NOT NULL`;
-        }
-
-        // Use EXISTS pattern for touchpoint status filtering
-        const existsCondition = `
-          EXISTS (
-            SELECT 1
-            FROM touchpoints t
-            WHERE t.client_id = c.id
-            GROUP BY t.client_id
-            HAVING CASE
-              WHEN (${canCreateInline}) AND ${cc} < 7 AND NOT c.loan_released THEN 1
-              WHEN ${cc} >= 7 OR c.loan_released THEN 2
-              WHEN ${cc} > 0 THEN 3
-              ELSE 4
-            END = $${paramIndex}
-          )
-        `;
-        conditions.push(existsCondition);
-        params.push(targetScore);
-        paramIndex++;
-      }
-    }
-
     // Determine sort order BEFORE building CTE (needed in both CTE and final query)
     let orderByClause = 'ORDER BY c.created_at DESC';
     let groupScoreCase = '';
@@ -395,7 +304,7 @@ clients.get('/', authMiddleware, async (c) => {
     const baseWhereClause = baseWhereConditions.length > 0 ? `WHERE ${baseWhereConditions.join(' AND ')}` : '';
 
     // Build CTE-based query for proper filter-then-paginate behavior
-    // CTE 1: Calculate touchpoint info for ALL clients
+    // CTE 1: Calculate touchpoint info for ALL clients (without client filters)
     const touchpointInfoCTE = `WITH touchpoint_info AS (
       SELECT
         t.client_id,
@@ -403,14 +312,13 @@ clients.get('/', authMiddleware, async (c) => {
         (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
         (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
         CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
-          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index} THEN '${type}'`
+          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
         ).join(' ')}
           ELSE NULL
         END as next_touchpoint_type,
         c.loan_released
       FROM touchpoints t
       JOIN clients c ON c.id = t.client_id
-      ${baseWhereClause}
       GROUP BY t.client_id, c.loan_released
     )`;
 
@@ -440,19 +348,27 @@ clients.get('/', authMiddleware, async (c) => {
       const targetScore = statusToScoreMap[touchpointStatus];
       if (targetScore !== undefined) {
         // Add group score calculation to CTE
+        // CRITICAL: loan_released clients should NEVER be callable (group 1)
+        // They should always be in group 2 (completed) regardless of touchpoint count
         withGroupScoreCTE = `${touchpointInfoCTE}, touchpoint_with_score AS (
           SELECT *,
             CASE
+              -- Group 1 (callable): User can create next touchpoint AND loan NOT released
               WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
+              -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
               WHEN completed_count >= 7 OR loan_released THEN 2
+              -- Group 3 (has_progress): 1-6 touchpoints but user cannot create next
               WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+              -- Group 4 (no_progress): 0 touchpoints
               ELSE 4
             END as group_score
           FROM touchpoint_info
         )`;
 
         // Filter by group score in WHERE clause
-        groupScoreFilter = `AND tws.group_score = ${baseParamIndex}`;
+        // Use WHERE or AND depending on whether baseWhereClause exists
+        const whereOrAnd = baseWhereClause ? 'AND' : 'WHERE';
+        groupScoreFilter = `${whereOrAnd} tws.group_score = ${baseParamIndex}`;
         baseParams.push(targetScore);
         baseParamIndex++;
       }
@@ -473,6 +389,12 @@ clients.get('/', authMiddleware, async (c) => {
 
     // Get paginated results using CTEs
     // The CTEs filter ALL clients first, then we paginate
+    // When touchpointStatus is provided, use tws (touchpoint_with_score) instead of tp (touchpoint_info)
+    const touchpointInfoAlias = touchpointStatus ? 'tws' : 'tp';
+    const touchpointInfoJoin = touchpointStatus
+      ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id'
+      : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
+
     const mainQuery = `
       ${withGroupScoreCTE}
       SELECT c.*,
@@ -486,22 +408,21 @@ clients.get('/', authMiddleware, async (c) => {
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        COALESCE(tp.completed_count, 0) as completed_touchpoints,
-        tp.next_touchpoint_type,
-        tp.last_touchpoint_type,
-        tp.last_touchpoint_user_id,
+        COALESCE(${touchpointInfoAlias}.completed_count, 0) as completed_touchpoints,
+        ${touchpointInfoAlias}.next_touchpoint_type,
+        ${touchpointInfoAlias}.last_touchpoint_type,
+        ${touchpointInfoAlias}.last_touchpoint_user_id,
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name
       FROM clients c
       LEFT JOIN psgc psg ON psg.id = c.psgc_id
       LEFT JOIN addresses a ON a.client_id = c.id
       LEFT JOIN phone_numbers p ON p.client_id = c.id
-      LEFT JOIN touchpoint_info tp ON tp.client_id = c.id
-      LEFT JOIN users lt ON lt.id = tp.last_touchpoint_user_id
-      ${touchpointStatus ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id' : ''}
+      ${touchpointInfoJoin}
+      LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
       ${baseWhereClause}
       ${groupScoreFilter}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.next_touchpoint_type, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, lt.first_name, lt.last_name
       ${orderByClause}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
@@ -550,7 +471,7 @@ clients.get('/', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: completedCount >= 7 || loanReleased,
+          is_complete: completedCount >= 7, // Only complete when 7/7 touchpoints done
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
@@ -596,8 +517,8 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
             'reason', t.reason,
             'status', t.status,
             'date', to_char(t.date, 'YYYY-MM-DD'),
-            'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS')::text,
-            'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS')::text,
+            'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS'),
+            'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS'),
             'time_arrival', t.time_arrival,
             'time_departure', t.time_departure,
             'odometer_arrival', t.odometer_arrival,
@@ -614,8 +535,8 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
             'time_out_gps_lat', t.time_out_gps_lat,
             'time_out_gps_lng', t.time_out_gps_lng,
             'time_out_gps_address', t.time_out_gps_address,
-            'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::text,
-            'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::text
+            'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
+            'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z')
           ) FILTER (WHERE t.id IS NOT NULL), '[]'
         ) as touchpoints
        FROM clients c

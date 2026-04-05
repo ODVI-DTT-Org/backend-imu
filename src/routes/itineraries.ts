@@ -255,13 +255,22 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
       throw new ValidationError('Scheduled date cannot be in the past');
     }
 
-    // Validate that client exists and user has access to client's municipality
+    // Validate that client exists, check loan_released status, and user has access to client's municipality
+    // RULE: loan_released clients cannot be added to itinerary (they're "done")
     const clientCheck = await pool.query(
-      `SELECT id, municipality FROM clients WHERE id = $1`,
+      `SELECT id, municipality, loan_released::int as loan_released_bool FROM clients WHERE id = $1`,
       [validated.client_id]
     );
     if (clientCheck.rows.length === 0) {
       throw new NotFoundError('Client');
+    }
+
+    const client = clientCheck.rows[0];
+    if (client.loan_released || client.loan_released_bool) {
+      return c.json({
+        success: false,
+        message: 'Cannot add client to itinerary: Loan has already been released'
+      }, 400);
     }
 
     // Check if itinerary already exists for this client, user, and date
