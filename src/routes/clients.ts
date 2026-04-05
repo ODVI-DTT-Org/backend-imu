@@ -12,6 +12,9 @@ import {
 
 const clients = new Hono();
 
+// Pagination limits
+const MAX_PER_PAGE = 100;
+
 // Validation schemas
 const createClientSchema = z.object({
   first_name: z.string().min(1).max(255),
@@ -122,7 +125,13 @@ clients.get('/', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
     const page = parseInt(c.req.query('page') || '1');
-    const perPage = parseInt(c.req.query('perPage') || '20');
+    let perPage = parseInt(c.req.query('perPage') || '20');
+
+    // Enforce MAX_PER_PAGE limit for security and performance
+    if (perPage > MAX_PER_PAGE) {
+      throw new ValidationError(`perPage cannot exceed ${MAX_PER_PAGE}`);
+    }
+
     const search = c.req.query('search');
     const clientType = c.req.query('client_type');
     const agencyId = c.req.query('agency_id');
@@ -460,7 +469,28 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
         COALESCE(
-          json_agg(DISTINCT t) FILTER (WHERE t.id IS NOT NULL), '[]'
+          json_agg(DISTINCT json_build_object(
+            'id', t.id,
+            'client_id', t.client_id,
+            'user_id', t.user_id,
+            'touchpoint_number', t.touchpoint_number,
+            'type', t.type,
+            'reason', t.reason,
+            'status', t.status,
+            'date', to_char(t.date, 'YYYY-MM-DD'),
+            'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS')::text,
+            'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS')::text,
+            'time_arrival', to_char(t.time_arrival, 'YYYY-MM-DD"T"HH24:MI:SS')::text,
+            'time_departure', to_char(t.time_departure, 'YYYY-MM-DD"T"HH24:MI:SS')::text,
+            'photo_path', t.photo_path,
+            'audio_path', t.audio_path,
+            'location_data', t.location_data,
+            'gps_lat', t.gps_lat,
+            'gps_lng', t.gps_lng,
+            'gps_address', t.gps_address,
+            'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::text,
+            'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"')::text
+          ) FILTER (WHERE t.id IS NOT NULL), '[]'
         ) as touchpoints
        FROM clients c
        LEFT JOIN addresses a ON a.client_id = c.id
@@ -860,7 +890,13 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
 clients.get('/search/unassigned', authMiddleware, async (c) => {
   try {
     const page = parseInt(c.req.query('page') || '1');
-    const perPage = parseInt(c.req.query('perPage') || '20');
+    let perPage = parseInt(c.req.query('perPage') || '20');
+
+    // Enforce MAX_PER_PAGE limit for security and performance
+    if (perPage > MAX_PER_PAGE) {
+      throw new ValidationError(`perPage cannot exceed ${MAX_PER_PAGE}`);
+    }
+
     const search = c.req.query('search');
     const clientType = c.req.query('client_type');
 
