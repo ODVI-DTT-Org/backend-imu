@@ -346,7 +346,7 @@ clients.get('/', authMiddleware, async (c) => {
        ) tp ON tp.client_id = c.id
        LEFT JOIN users lt ON lt.id = tp.last_touchpoint_user_id
        ${whereClause}
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.next_touchpoint_type, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
        ${orderByClause}
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
