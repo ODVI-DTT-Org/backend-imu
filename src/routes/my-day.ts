@@ -58,6 +58,7 @@ const timeOutSchema = z.object({
 const addToMyDaySchema = z.object({
   client_id: z.string().uuid(),
   scheduled_time: z.string().optional(),
+  scheduled_date: z.string().optional(), // Optional: for adding to future dates (YYYY-MM-DD format)
   priority: z.number().int().min(0).max(10).optional(),
   notes: z.string().optional(),
 });
@@ -107,10 +108,29 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
       return c.json({ message: 'Client already in today\'s itinerary' }, 400);
     }
 
-    // Add to itinerary using CURRENT_DATE (respects database timezone Asia/Manila)
+    // Use provided scheduled_date or CURRENT_DATE for today
+    // Note: CURRENT_DATE now respects database timezone (Asia/Manila) due to connection string setting
+    const targetDate = validated.scheduled_date
+      ? `CAST(${pool.escape(validated.scheduled_date)} AS DATE)`
+      : 'CURRENT_DATE';
+
+    // Check for existing itinerary on the target date if custom date is provided
+    if (validated.scheduled_date) {
+      const customDateCheck = await pool.query(
+        `SELECT * FROM itineraries
+         WHERE client_id = $1 AND user_id = $2 AND scheduled_date = ${targetDate}`,
+        [validated.client_id, user.sub]
+      );
+
+      if (customDateCheck.rows.length > 0) {
+        return c.json({ message: 'Client already in this date\'s itinerary' }, 400);
+      }
+    }
+
+    // Add to itinerary using target date (either custom date or CURRENT_DATE for today)
     const result = await pool.query(
       `INSERT INTO itineraries (id, client_id, user_id, scheduled_date, scheduled_time, priority, notes, status, created_by)
-       VALUES (gen_random_uuid(), $1, $2, CURRENT_DATE, $3, $4, $5, 'pending', $6)
+       VALUES (gen_random_uuid(), $1, $2, ${targetDate}, $3, $4, $5, 'pending', $6)
        RETURNING *`,
       [
         validated.client_id,

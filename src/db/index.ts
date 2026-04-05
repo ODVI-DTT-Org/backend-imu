@@ -19,6 +19,11 @@ if (databaseUrl?.includes('ondigitalocean.com')) {
     databaseUrl += '&uselibpqcompat=true';
   }
 
+  // Add timezone=Asia/Manila to ensure CURRENT_DATE returns Philippines date
+  if (!databaseUrl.includes('timezone=')) {
+    databaseUrl += '&timezone=Asia/Manila';
+  }
+
   // For DigitalOcean Managed PostgreSQL with self-signed certificates
   // Use CA certificate from environment variable AND set rejectUnauthorized: false
   const dbCaCert = process.env.DB_CA_CERT;
