@@ -152,35 +152,22 @@ clients.get('/', authMiddleware, async (c) => {
     // Declared once at the top level to avoid duplicate declarations
     const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
-    // Area-based filtering for non-admin/non-assistant-area-manager roles
-    // Admin and Assistant Area Manager see all clients
-    // Area Manager, Caravan, Tele see only clients in assigned municipalities
-    const shouldFilterByMunicipality = !['admin', 'assistant_area_manager'].includes(user.role);
+    // Role level mapping for area-based filtering
+    const ROLE_LEVELS: Record<string, number> = {
+      'admin': 100,
+      'area_manager': 50,
+      'assistant_area_manager': 40,
+      'caravan': 20,
+      'tele': 15,
+    };
 
-    if (shouldFilterByMunicipality) {
-      // Fetch user's assigned municipalities from user_locations table
-      const municipalitiesResult = await pool.query(
-        `SELECT province, municipality
-         FROM user_locations
-         WHERE user_id = $1 AND deleted_at IS NULL
-         ORDER BY assigned_at DESC`,
-        [user.sub]
-      );
+    // Get user level from role (default to 0 if role not found)
+    const userLevel = ROLE_LEVELS[user.role] || 0;
 
-      if (municipalitiesResult.rows.length > 0) {
-        // Format as "PROVINCE-MUNICIPALITY" for backend compatibility
-        const municipalityIds = municipalitiesResult.rows
-          .map(row => `${row.province}-${row.municipality}`)
-          .join(',');
-
-        conditions.push(`c.psgc_id IN (
-          SELECT id FROM psgc
-          WHERE province || '-' || mun_city = ANY($${paramIndex})
-        )`);
-        params.push(municipalityIds.split(','));
-        paramIndex++;
-      }
-    }
+    // Area-based filtering using CTE
+    // NO AREA FILTER for oversight roles: Admin (100), Area Manager (50), Assistant Area Manager (40)
+    // FILTER BY user_locations for field agents: Caravan (20), Tele (15)
+    const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
 
     if (search) {
       conditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${paramIndex} OR c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);
@@ -270,18 +257,6 @@ clients.get('/', authMiddleware, async (c) => {
     const baseParams: any[] = [];
     let baseParamIndex = 1;
 
-    if (shouldFilterByMunicipality && municipalityIds) {
-      const idList = municipalityIds.split(',').map(id => id.trim()).filter(id => id);
-      if (idList.length > 0) {
-        baseWhereConditions.push(`c.psgc_id IN (
-          SELECT id FROM psgc
-          WHERE province || '-' || mun_city = ANY($${baseParamIndex})
-        )`);
-        baseParams.push(idList);
-        baseParamIndex++;
-      }
-    }
-
     if (search) {
       baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
       baseParams.push(`%${search}%`);
@@ -321,8 +296,22 @@ clients.get('/', authMiddleware, async (c) => {
     const baseWhereClause = baseWhereConditions.length > 0 ? `WHERE ${baseWhereConditions.join(' AND ')}` : '';
 
     // Build CTE-based query for proper filter-then-paginate behavior
-    // CTE 1: Calculate touchpoint info for ALL clients (without client filters)
-    const touchpointInfoCTE = `WITH touchpoint_info AS (
+    // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
+    // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
+
+    // Add area filter conditions for Caravan/Tele roles
+    let areaFilterWhereClause = '';
+    if (shouldFilterByArea) {
+      // For Caravan/Tele: Filter by assigned provinces/municipalities
+      // Using the new province and municipality columns directly
+      const whereOrAnd = baseWhereConditions.length > 0 ? 'AND' : 'WHERE';
+      areaFilterWhereClause = ` ${whereOrAnd} (
+        c.province IN (SELECT province FROM user_areas)
+        AND c.municipality IN (SELECT municipality FROM user_areas)
+      )`;
+    }
+
+    const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
         t.client_id,
         COUNT(DISTINCT t.touchpoint_number)::int as completed_count,
@@ -339,8 +328,15 @@ clients.get('/', authMiddleware, async (c) => {
       GROUP BY t.client_id, c.loan_released
     )`;
 
+    // Build WITH clause with user_areas CTE if needed
+    const userAreasCTE = shouldFilterByArea ? `user_areas AS (
+      SELECT province, municipality
+      FROM user_locations
+      WHERE user_id = '${user.sub}' AND deleted_at IS NULL
+    ),` : '';
+
     // CTE 2: Add group score to touchpoint info (for filtering and sorting)
-    let withGroupScoreCTE = touchpointInfoCTE;
+    let withGroupScoreCTE = `WITH ${userAreasCTE}${touchpointInfoCTE}`;
     let groupScoreFilter = '';
 
     if (touchpointStatus) {
@@ -398,6 +394,7 @@ clients.get('/', authMiddleware, async (c) => {
       FROM clients c
       ${touchpointStatus ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id' : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id'}
       ${baseWhereClause}
+      ${areaFilterWhereClause}
       ${groupScoreFilter}
     `;
 
@@ -438,6 +435,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${touchpointInfoJoin}
       LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
       ${baseWhereClause}
+      ${areaFilterWhereClause}
       ${groupScoreFilter}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, lt.first_name, lt.last_name
       ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
