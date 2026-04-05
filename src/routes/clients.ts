@@ -289,11 +289,11 @@ clients.get('/', authMiddleware, async (c) => {
       // Determine if current user can create the next touchpoint
       let canCreateCondition = '';
       if (user.role === 'tele') {
-        canCreateCondition = `next_touchpoint_type = 'Call'`;
+        canCreateCondition = `tp.next_touchpoint_type = 'Call'`;
       } else if (user.role === 'caravan') {
-        canCreateCondition = `next_touchpoint_type = 'Visit'`;
+        canCreateCondition = `tp.next_touchpoint_type = 'Visit'`;
       } else {
-        canCreateCondition = `next_touchpoint_type IS NOT NULL`;
+        canCreateCondition = `tp.next_touchpoint_type IS NOT NULL`;
       }
 
       // Sort by group score, then by completed count (more progress first)
@@ -346,7 +346,7 @@ clients.get('/', authMiddleware, async (c) => {
        ) tp ON tp.client_id = c.id
        LEFT JOIN users lt ON lt.id = tp.last_touchpoint_user_id
        ${whereClause}
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tp.completed_count, tp.next_touchpoint_type, tp.last_touchpoint_type, tp.last_touchpoint_user_id, lt.first_name, lt.last_name
        ${orderByClause}
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
