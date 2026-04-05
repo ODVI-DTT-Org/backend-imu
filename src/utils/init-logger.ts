@@ -684,10 +684,13 @@ export async function initPowerSync(): Promise<InitResult> {
     let jwtTestDetails: Record<string, any> = {};
     try {
       // Import jwt here to avoid issues if not available
-      const jwt = await import('jsonwebtoken');
+      // Note: Dynamic import returns module namespace, need to access .default
+      const jwtModule = await import('jsonwebtoken');
+      const jwt = jwtModule.default || jwtModule;
 
       // Create a test JWT token (same as PowerSync endpoint)
       const testPayload = {
+        sub: '00000000-0000-0000-0000-000000000000', // Test user ID (PowerSync requires 'sub')
         user_id: '00000000-0000-0000-0000-000000000000', // Test user ID
         exp: Math.floor(Date.now() / 1000) + 3600, // Expires in 1 hour
       };
