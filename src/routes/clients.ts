@@ -368,7 +368,7 @@ clients.get('/', authMiddleware, async (c) => {
         // Filter by group score in WHERE clause
         // Use WHERE or AND depending on whether baseWhereClause exists
         const whereOrAnd = baseWhereClause ? 'AND' : 'WHERE';
-        groupScoreFilter = `${whereOrAnd} tws.group_score = ${baseParamIndex}`;
+        groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
         baseParams.push(targetScore);
         baseParamIndex++;
       }

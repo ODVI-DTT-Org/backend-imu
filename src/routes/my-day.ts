@@ -111,7 +111,7 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
     // Use provided scheduled_date or CURRENT_DATE for today
     // Note: CURRENT_DATE now respects database timezone (Asia/Manila) due to connection string setting
     const targetDate = validated.scheduled_date
-      ? `CAST(${pool.escape(validated.scheduled_date)} AS DATE)`
+      ? `CAST($1 AS DATE)`
       : 'CURRENT_DATE';
 
     // Check for existing itinerary on the target date if custom date is provided
@@ -119,7 +119,7 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
       const customDateCheck = await pool.query(
         `SELECT * FROM itineraries
          WHERE client_id = $1 AND user_id = $2 AND scheduled_date = ${targetDate}`,
-        [validated.client_id, user.sub]
+        [validated.client_id, user.sub, validated.scheduled_date]
       );
 
       if (customDateCheck.rows.length > 0) {
