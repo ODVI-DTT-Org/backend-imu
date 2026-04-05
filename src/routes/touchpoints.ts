@@ -125,6 +125,7 @@ const createTouchpointSchema = z.object({
   audio_url: z.string().optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
+  rejection_reason: z.string().optional(),
   // Time In/Out fields
   time_in: z.string().optional(),
   time_in_gps_lat: z.number().optional(),
@@ -160,6 +161,7 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     audio_url: row.audio_url,
     latitude: row.latitude,
     longitude: row.longitude,
+    rejection_reason: row.rejection_reason,
     // Time In/Out fields
     time_in: row.time_in,
     time_in_gps_lat: row.time_in_gps_lat,

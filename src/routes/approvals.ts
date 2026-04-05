@@ -30,6 +30,9 @@ const createApprovalSchema = z.object({
   role: z.string().optional(),
   reason: z.string().optional(),
   notes: z.string().optional(),
+  updated_client_information: z.record(z.unknown()).optional(),
+  updated_udi: z.string().optional(),
+  udi_number: z.string().optional(),
 });
 
 const updateApprovalSchema = z.object({
@@ -69,6 +72,8 @@ function mapRowToApproval(row: Record<string, any>) {
     role: row.role,
     reason: row.reason,
     notes: row.notes,
+    updated_client_information: row.updated_client_information,
+    updated_udi: row.updated_udi,
     udi_number: row.udi_number,
     approved_by: row.approved_by,
     approved_at: row.approved_at,

@@ -69,6 +69,8 @@ function mapRowToUser(row: Record<string, any>) {
     role: row.role,
     phone: row.phone,
     avatar: row.avatar_url,
+    area_manager_id: row.area_manager_id,
+    assistant_area_manager_id: row.assistant_area_manager_id,
     created: row.created_at,
     updated: row.updated_at,
   };
@@ -143,9 +145,12 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
 
     // Get paginated results
     const result = await pool.query(
-      `SELECT id, email, first_name, last_name, role, phone, avatar_url, created_at, updated_at
-       FROM users ${whereClause}
-       ORDER BY created_at DESC
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url,
+              u.created_at, u.updated_at, up.area_manager_id, up.assistant_area_manager_id
+       FROM users u
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       ${whereClause}
+       ORDER BY u.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
     );
@@ -175,8 +180,11 @@ users.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c) 
     }
 
     const result = await pool.query(
-      `SELECT id, email, first_name, last_name, role, phone, avatar_url, created_at, updated_at
-       FROM users WHERE id = $1`,
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url,
+              u.created_at, u.updated_at, up.area_manager_id, up.assistant_area_manager_id
+       FROM users u
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       WHERE u.id = $1`,
       [id]
     );
 

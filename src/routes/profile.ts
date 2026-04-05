@@ -36,7 +36,8 @@ profile.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c
     }
 
     const result = await pool.query(
-      `SELECT u.*, up.name as profile_name, up.avatar_url
+      `SELECT u.*, up.name as profile_name, up.avatar_url as profile_avatar_url,
+              up.area_manager_id, up.assistant_area_manager_id
        FROM users u
        LEFT JOIN user_profiles up ON up.user_id = u.id
        WHERE u.id = $1`,
@@ -57,6 +58,8 @@ profile.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c
       role: row.role,
       phone: row.phone,
       avatar_url: row.avatar_url || row.profile_avatar_url,
+      area_manager_id: row.area_manager_id,
+      assistant_area_manager_id: row.assistant_area_manager_id,
       created: row.created_at,
       updated: row.updated_at,
     });
@@ -114,7 +117,16 @@ profile.put('/:id', authMiddleware, requirePermission('users', 'update'), async 
       throw new NotFoundError('User');
     }
 
-    const row = result.rows[0];
+    // Fetch user profile with manager fields
+    const profileResult = await pool.query(
+      `SELECT u.*, up.area_manager_id, up.assistant_area_manager_id
+       FROM users u
+       LEFT JOIN user_profiles up ON up.user_id = u.id
+       WHERE u.id = $1`,
+      [id]
+    );
+
+    const row = profileResult.rows[0];
     return c.json({
       id: row.id,
       email: row.email,
@@ -124,6 +136,8 @@ profile.put('/:id', authMiddleware, requirePermission('users', 'update'), async 
       role: row.role,
       phone: row.phone,
       avatar_url: row.avatar_url,
+      area_manager_id: row.area_manager_id,
+      assistant_area_manager_id: row.assistant_area_manager_id,
       updated: row.updated_at,
     });
   } catch (error: any) {

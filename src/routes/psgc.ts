@@ -190,6 +190,7 @@ psgc.get('/barangays', authMiddleware, async (c) => {
         region,
         province,
         mun_city as municipality,
+        mun_city_kind,
         barangay,
         pin_location,
         zip_code
@@ -206,6 +207,7 @@ psgc.get('/barangays', authMiddleware, async (c) => {
         region: row.region,
         province: row.province,
         municipality: row.municipality,
+        municipalityKind: row.mun_city_kind,
         barangay: row.barangay,
         pinLocation: row.pin_location,
         zipCode: row.zip_code,
@@ -344,6 +346,7 @@ psgc.get('/barangays/:id', authMiddleware, async (c) => {
         region,
         province,
         mun_city as municipality,
+        mun_city_kind,
         barangay,
         pin_location,
         zip_code
@@ -361,6 +364,7 @@ psgc.get('/barangays/:id', authMiddleware, async (c) => {
       region: row.region,
       province: row.province,
       municipality: row.municipality,
+      municipalityKind: row.mun_city_kind,
       barangay: row.barangay,
       pinLocation: row.pin_location,
       zipCode: row.zip_code,
