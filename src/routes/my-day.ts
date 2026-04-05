@@ -111,7 +111,7 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
     // Use provided scheduled_date or CURRENT_DATE for today
     // Note: CURRENT_DATE now respects database timezone (Asia/Manila) due to connection string setting
     const targetDate = validated.scheduled_date
-      ? `CAST($1 AS DATE)`
+      ? `CAST($7 AS DATE)`
       : 'CURRENT_DATE';
 
     // Check for existing itinerary on the target date if custom date is provided
@@ -128,18 +128,26 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
     }
 
     // Add to itinerary using target date (either custom date or CURRENT_DATE for today)
+    // When scheduled_date is provided, it's passed as $7 parameter to avoid collision with other parameters
+    const insertParams = [
+      validated.client_id,
+      user.sub,
+      validated.scheduled_time || null,
+      validated.priority || 5,
+      validated.notes || null,
+      user.sub,
+    ];
+
+    // Add scheduled_date as 7th parameter only if provided
+    if (validated.scheduled_date) {
+      insertParams.push(validated.scheduled_date);
+    }
+
     const result = await pool.query(
       `INSERT INTO itineraries (id, client_id, user_id, scheduled_date, scheduled_time, priority, notes, status, created_by)
        VALUES (gen_random_uuid(), $1, $2, ${targetDate}, $3, $4, $5, 'pending', $6)
        RETURNING *`,
-      [
-        validated.client_id,
-        user.sub,
-        validated.scheduled_time || null,
-        validated.priority || 5,
-        validated.notes || null,
-        user.sub
-      ]
+      insertParams
     );
 
     return c.json({

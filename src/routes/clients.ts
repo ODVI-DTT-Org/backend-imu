@@ -157,14 +157,27 @@ clients.get('/', authMiddleware, async (c) => {
     // Area Manager, Caravan, Tele see only clients in assigned municipalities
     const shouldFilterByMunicipality = !['admin', 'assistant_area_manager'].includes(user.role);
 
-    if (shouldFilterByMunicipality && municipalityIds) {
-      const idList = municipalityIds.split(',').map(id => id.trim()).filter(id => id);
-      if (idList.length > 0) {
+    if (shouldFilterByMunicipality) {
+      // Fetch user's assigned municipalities from user_locations table
+      const municipalitiesResult = await pool.query(
+        `SELECT province, municipality
+         FROM user_locations
+         WHERE user_id = $1 AND deleted_at IS NULL
+         ORDER BY assigned_at DESC`,
+        [user.sub]
+      );
+
+      if (municipalitiesResult.rows.length > 0) {
+        // Format as "PROVINCE-MUNICIPALITY" for backend compatibility
+        const municipalityIds = municipalitiesResult.rows
+          .map(row => `${row.province}-${row.municipality}`)
+          .join(',');
+
         conditions.push(`c.psgc_id IN (
           SELECT id FROM psgc
           WHERE province || '-' || mun_city = ANY($${paramIndex})
         )`);
-        params.push(idList);
+        params.push(municipalityIds.split(','));
         paramIndex++;
       }
     }
@@ -223,27 +236,31 @@ clients.get('/', authMiddleware, async (c) => {
       const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
       // Determine if current user can create the next touchpoint
+      // Note: Column names used directly (no table prefix) for CTE context
       let canCreateCondition = '';
       if (user.role === 'tele') {
-        canCreateCondition = `tp.next_touchpoint_type = 'Call'`;
+        canCreateCondition = `next_touchpoint_type = 'Call'`;
       } else if (user.role === 'caravan') {
-        canCreateCondition = `tp.next_touchpoint_type = 'Visit'`;
+        canCreateCondition = `next_touchpoint_type = 'Visit'`;
       } else {
-        canCreateCondition = `tp.next_touchpoint_type IS NOT NULL`;
+        canCreateCondition = `next_touchpoint_type IS NOT NULL`;
       }
 
       // Group score CASE expression
+      // Note: Column names used directly (no table prefix) for CTE context
+      // Use c.loan_released to avoid ambiguity when used in ORDER BY
       groupScoreCase = `CASE
-        WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
-        WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
-        WHEN tp.completed_count > 0 AND tp.completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+        WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT c.loan_released THEN 1
+        WHEN completed_count >= 7 OR c.loan_released THEN 2
+        WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
         ELSE 4
       END`;
 
       // Sort by group score, then by completed count (more progress first)
+      // Note: {touchpoint_alias}.completed_count will be replaced with dynamic alias in mainQuery
       orderByClause = `ORDER BY
         ${groupScoreCase} ASC,
-        tp.completed_count DESC,
+        {touchpoint_alias}.completed_count DESC,
         c.created_at DESC`;
     }
 
@@ -423,7 +440,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${baseWhereClause}
       ${groupScoreFilter}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, lt.first_name, lt.last_name
-      ${orderByClause}
+      ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 

@@ -16,6 +16,7 @@ const itineraries = new Hono();
 
 // Validation schemas
 const createItinerarySchema = z.object({
+  user_id: z.string().uuid(),
   client_id: z.string().uuid(),
   scheduled_date: z.string(),
   scheduled_time: z.string().optional(),
@@ -277,7 +278,7 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     const existingCheck = await pool.query(
       `SELECT id FROM itineraries
        WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3`,
-      [validated.client_id, user.sub, validated.scheduled_date]
+      [validated.client_id, validated.user_id, validated.scheduled_date]
     );
     if (existingCheck.rows.length > 0) {
       return c.json({
@@ -296,7 +297,7 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
         gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
       ) RETURNING *`,
       [
-        user.sub, validated.client_id, validated.scheduled_date,
+        validated.user_id, validated.client_id, validated.scheduled_date,
         validated.scheduled_time, validated.status, validated.priority,
         validated.notes, user.sub
       ]
@@ -351,6 +352,7 @@ itineraries.put('/:id', authMiddleware, requirePermission('itineraries', 'update
     let paramIndex = 1;
 
     const fieldMappings: Record<string, string> = {
+      user_id: 'user_id',
       client_id: 'client_id',
       scheduled_date: 'scheduled_date',
       scheduled_time: 'scheduled_time',
