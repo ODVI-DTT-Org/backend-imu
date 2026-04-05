@@ -329,14 +329,16 @@ clients.get('/', authMiddleware, async (c) => {
     )`;
 
     // Build WITH clause with user_areas CTE if needed
-    const userAreasCTE = shouldFilterByArea ? `user_areas AS (
-      SELECT province, municipality
-      FROM user_locations
-      WHERE user_id = '${user.sub}' AND deleted_at IS NULL
-    ),` : '';
-
-    // CTE 2: Add group score to touchpoint info (for filtering and sorting)
-    let withGroupScoreCTE = `WITH ${userAreasCTE}${touchpointInfoCTE}`;
+    let withGroupScoreCTE: string;
+    if (shouldFilterByArea) {
+      withGroupScoreCTE = `WITH user_areas AS (
+        SELECT province, municipality
+        FROM user_locations
+        WHERE user_id = '${user.sub}' AND deleted_at IS NULL
+      ), ${touchpointInfoCTE}`;
+    } else {
+      withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
+    }
     let groupScoreFilter = '';
 
     if (touchpointStatus) {
