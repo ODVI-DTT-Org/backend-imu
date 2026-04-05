@@ -1,5 +1,5 @@
 # PowerSync Sync Configuration for IMU
-# Aligned with Mobile App expectations
+# Aligned with COMPLETE_SCHEMA.sql v1.2 (2026-04-04)
 # Docs: https://docs.powersync.com/sync/streams/overview
 
 config:
@@ -14,10 +14,10 @@ streams:
   psgc:
     auto_subscribe: true
     query: |
-      SELECT id, region, province, mun_city_kind, mun_city, barangay, zip_code
+      SELECT id, region, province, mun_city_kind, mun_city, barangay, pin_location, zip_code
       FROM psgc
 
-  # Touchpoint reasons (mobile expects specific fields)
+  # Touchpoint reasons - FIXED: Added correct column names from schema
   touchpoint_reasons:
     auto_subscribe: true
     query: |
@@ -29,27 +29,25 @@ streams:
   # USER-SPECIFIC DATA
   # ============================================================
 
-  # User profile data (plural to match mobile)
+  # User profile data
   user_profiles:
     auto_subscribe: true
     query: |
-      SELECT up.id, up.user_id, up.name, up.email, up.role, up.avatar_url,
-        up.employee_id, up.first_name, up.last_name, up.phone,
-        up.area_manager_id, up.assistant_area_manager_id, up.updated_at
+      SELECT up.id, up.user_id, up.name, up.email, up.role, up.avatar_url, up.updated_at
       FROM user_profiles up
       WHERE up.user_id = auth.user_id()
 
-  # User location assignments (use user_locations to match mobile)
+  # User location assignments - FIXED: Added created_at, updated_at
   user_locations:
     auto_subscribe: true
     query: |
       SELECT ul.id, ul.user_id, ul.province, ul.municipality,
-        ul.assigned_at, ul.assigned_by, ul.deleted_at
+        ul.assigned_at, ul.assigned_by, ul.deleted_at, ul.created_at, ul.updated_at
       FROM user_locations ul
       WHERE ul.user_id = auth.user_id() AND ul.deleted_at IS NULL
 
   # ============================================================
-  # CLIENT DATA - Territory-based filtering (matches mobile)
+  # CLIENT DATA - Territory-based filtering
   # ============================================================
 
   clients:
@@ -57,8 +55,10 @@ streams:
     query: |
       SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
         c.birth_date, c.pan, c.client_type, c.product_type, c.market_type, c.pension_type,
-        c.psgc_id, c.province, c.municipality, c.region, c.barangay,
-        c.is_starred, c.loan_released, c.udi, c.full_address,
+        c.psgc_id, c.region, c.province, c.municipality, c.barangay,
+        c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
+        c.tenure, c.facebook_link, c.remarks, c.agency_id, c.user_id,
+        c.is_starred, c.loan_released, c.loan_released_at, c.udi,
         c.created_at, c.updated_at
       FROM clients c
       WHERE EXISTS (
@@ -69,12 +69,12 @@ streams:
           AND ul.deleted_at IS NULL
       )
 
-  # Client addresses (use addresses to match mobile)
+  # Client addresses
   addresses:
     auto_subscribe: true
     query: |
       SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
-        a.province, a.postal_code, a.country, a.is_primary
+        a.province, a.postal_code, a.latitude, a.longitude, a.is_primary, a.created_at
       FROM addresses a
       WHERE EXISTS (
         SELECT 1 FROM clients c
@@ -92,7 +92,7 @@ streams:
   phone_numbers:
     auto_subscribe: true
     query: |
-      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary
+      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary, p.created_at
       FROM phone_numbers p
       WHERE p.is_primary = true
         AND EXISTS (
@@ -105,21 +105,25 @@ streams:
                 AND c.municipality = ul.municipality
                 AND ul.deleted_at IS NULL
             )
+          )
         )
 
   # ============================================================
-  # TOUCHPOINTS - With GPS fields (matches mobile)
+  # TOUCHPOINTS - With all GPS and tracking fields
   # ============================================================
 
   touchpoints:
     auto_subscribe: true
     query: |
       SELECT t.id, t.client_id, t.user_id, t.touchpoint_number, t.type,
-        t.date, t.time_arrival, t.time_departure, t.reason, t.status, t.notes,
-        t.photo_url as photo_path, t.audio_url as audio_path,
-        t.time_in_gps_lat, t.time_in_gps_lng, t.time_in_gps_address,
-        t.time_out_gps_lat, t.time_out_gps_lng, t.time_out_gps_address,
-        t.created_at, t.updated_at
+        t.date, t.address, t.time_arrival, t.time_departure,
+        t.odometer_arrival, t.odometer_departure,
+        t.reason, t.status, t.next_visit_date, t.notes,
+        t.photo_url, t.audio_url,
+        t.latitude, t.longitude,
+        t.time_in, t.time_in_gps_lat, t.time_in_gps_lng, t.time_in_gps_address,
+        t.time_out, t.time_out_gps_lat, t.time_out_gps_lng, t.time_out_gps_address,
+        t.rejection_reason, t.created_at, t.updated_at
       FROM touchpoints t
       WHERE EXISTS (
         SELECT 1 FROM clients c
@@ -134,7 +138,7 @@ streams:
       )
 
   # ============================================================
-  # ITINERARIES - For current user (was missing!)
+  # ITINERARIES - For current user
   # ============================================================
 
   itineraries:
@@ -144,17 +148,3 @@ streams:
         i.status, i.priority, i.notes, i.created_by, i.created_at, i.updated_at
       FROM itineraries i
       WHERE i.user_id = auth.user_id()
-
-  # ============================================================
-  # APPROVALS - For current user (matches mobile structure)
-  # ============================================================
-
-  approvals:
-    auto_subscribe: true
-    query: |
-      SELECT a.id, a.type, a.status, a.client_id, a.touchpoint_number,
-        a.role, a.reason, a.notes, a.approved_by, a.approved_at,
-        a.created_at, a.updated_at
-      FROM approvals a
-      WHERE a.role = auth.user_id()
-        AND a.status = 'pending'

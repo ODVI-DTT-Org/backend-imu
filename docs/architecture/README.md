@@ -1,8 +1,8 @@
 # IMU Architecture Documentation
 
-> **Generated:** 2026-04-02
+> **Generated:** 2026-04-04
 > **Project:** IMU (Itinerary Manager Uniformed)
-> **Version:** 2.0 (RBAC System Implemented)
+> **Version:** 2.1 (RBAC System + Error Handling)
 
 ---
 
@@ -80,6 +80,10 @@ docs/
 - **[Testing Strategy](testing-strategy.md)** - Unit, integration, and E2E testing
 - **[Roles & Permissions](roles-permissions.md)** - Complete RBAC system documentation
 - **[RBAC Migration Guide](../RBAC_MIGRATION_GUIDE.md)** - Implementation guide for new permission system
+
+### System Features
+- **[Error Handling System](../superpowers/specs/2026-04-02-error-handling-system-design.md)** - Comprehensive error handling with request tracking, database logging, and admin dashboard
+  - **[Implementation Plan](../superpowers/plans/2026-04-02-error-handling-system-implementation.md)** - Detailed implementation guide with 37 tasks
 
 ### Risk Assessment
 - **[Pre-Mortem](pre-mortem.md)** - Known risks and mitigation strategies
@@ -342,5 +346,5 @@ The Profile page (`/profile`) displays user information and provides logout func
 
 ---
 
-**Last Updated:** 2026-04-03
-**Documentation Version:** 1.1
+**Last Updated:** 2026-04-04
+**Documentation Version:** 1.2

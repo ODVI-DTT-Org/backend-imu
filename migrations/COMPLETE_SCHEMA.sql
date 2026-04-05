@@ -3,7 +3,13 @@
 -- ============================================================
 -- This script creates the complete IMU database schema
 -- including all tables, indexes, triggers, and views
--- Version: 1.1 (as of 2026-04-02) - Added RBAC System
+-- Version: 1.2 (as of 2026-04-04)
+-- Changes:
+-- - Added dashboard, approvals, error_logs RBAC permissions
+-- - Updated user_locations to use province + municipality columns
+-- - Updated group_municipalities to use province + municipality columns
+-- - Added clients.update:own permission to Tele role
+-- - Added background_jobs table
 -- ============================================================
 
 BEGIN;
@@ -234,26 +240,29 @@ CREATE TABLE IF NOT EXISTS group_members (
     UNIQUE(group_id, client_id)
 );
 
--- Group municipalities table
+-- Group municipalities table (updated with province + municipality columns)
 CREATE TABLE IF NOT EXISTS group_municipalities (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     group_id UUID NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-    municipality_id TEXT NOT NULL,
+    province TEXT,
+    municipality TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(group_id, municipality_id)
+    deleted_at TIMESTAMPTZ,
+    UNIQUE(group_id, province, municipality)
 );
 
--- User locations table (renamed from user_municipalities_simple)
+-- User locations table (updated with province + municipality columns)
 CREATE TABLE IF NOT EXISTS user_locations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    municipality_id TEXT NOT NULL,
+    province TEXT,
+    municipality TEXT,
     assigned_at TIMESTAMPTZ DEFAULT NOW(),
     assigned_by UUID REFERENCES users(id) ON DELETE SET NULL,
     deleted_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, municipality_id)
+    UNIQUE(user_id, province, municipality)
 );
 
 -- User PSGC assignments table (for barangay-level assignments)
@@ -323,6 +332,22 @@ CREATE TABLE IF NOT EXISTS touchpoint_reasons (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(reason_code, role, touchpoint_type)
+);
+
+-- Background jobs table (for async job processing)
+CREATE TABLE IF NOT EXISTS background_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    type TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('pending', 'processing', 'completed', 'failed', 'cancelled')),
+    params JSONB,
+    result JSONB,
+    error TEXT,
+    progress INTEGER DEFAULT 0,
+    total_items INTEGER,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL
 );
 
 -- ============================================================
@@ -407,15 +432,19 @@ CREATE INDEX IF NOT EXISTS idx_groups_caravan_id ON groups(caravan_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_group_id ON group_members(group_id);
 CREATE INDEX IF NOT EXISTS idx_group_members_client_id ON group_members(client_id);
 
--- Group municipalities indexes
+-- Group municipalities indexes (updated for province + municipality)
 CREATE INDEX IF NOT EXISTS idx_group_municipalities_group_id ON group_municipalities(group_id);
-CREATE INDEX IF NOT EXISTS idx_group_municipalities_municipality_id ON group_municipalities(municipality_id);
+CREATE INDEX IF NOT EXISTS idx_group_municipalities_province ON group_municipalities(province);
+CREATE INDEX IF NOT EXISTS idx_group_municipalities_municipality ON group_municipalities(municipality);
+CREATE INDEX IF NOT EXISTS idx_group_municipalities_group_province ON group_municipalities(group_id, province) WHERE deleted_at IS NULL;
 
--- User locations indexes
+-- User locations indexes (updated for province + municipality)
 CREATE INDEX IF NOT EXISTS idx_user_locations_user ON user_locations(user_id);
-CREATE INDEX IF NOT EXISTS idx_user_locations_municipality ON user_locations(municipality_id);
-CREATE INDEX IF NOT EXISTS idx_user_locations_active ON user_locations(user_id, municipality_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_user_locations_user_municipality ON user_locations(user_id, municipality_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_locations_province ON user_locations(province);
+CREATE INDEX IF NOT EXISTS idx_user_locations_municipality ON user_locations(municipality);
+CREATE INDEX IF NOT EXISTS idx_user_locations_active ON user_locations(user_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_locations_user_province ON user_locations(user_id, province) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_user_locations_user_province_municipality ON user_locations(user_id, province, municipality) WHERE deleted_at IS NULL;
 
 -- User PSGC assignments indexes
 CREATE INDEX IF NOT EXISTS idx_user_psgc_user ON user_psgc_assignments(user_id);
@@ -446,6 +475,11 @@ CREATE INDEX IF NOT EXISTS idx_touchpoint_reasons_role ON touchpoint_reasons(rol
 CREATE INDEX IF NOT EXISTS idx_touchpoint_reasons_touchpoint_type ON touchpoint_reasons(touchpoint_type);
 CREATE INDEX IF NOT EXISTS idx_touchpoint_reasons_role_type ON touchpoint_reasons(role, touchpoint_type);
 CREATE INDEX IF NOT EXISTS idx_touchpoint_reasons_active ON touchpoint_reasons(is_active) WHERE is_active = true;
+
+-- Background jobs indexes
+CREATE INDEX IF NOT EXISTS idx_background_jobs_type_status ON background_jobs(type, status);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_created_by ON background_jobs(created_by);
+CREATE INDEX IF NOT EXISTS idx_background_jobs_created_at ON background_jobs(created_at DESC);
 
 -- PSGC indexes
 CREATE INDEX IF NOT EXISTS idx_psgc_region ON psgc(region);
@@ -597,9 +631,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_unique_caravan
     ON groups(caravan_id)
     WHERE caravan_id IS NOT NULL;
 
--- Ensure unique active user location assignments
-CREATE UNIQUE INDEX IF NOT EXISTS idx_user_locations_unique_active
-ON user_locations (user_id, municipality_id);
+-- Ensure unique active user location assignments (updated for province + municipality)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_locations_user_province_municipality_unique
+ON user_locations (user_id, province, municipality)
+WHERE deleted_at IS NULL;
+
+-- Ensure unique active group municipality assignments (updated for province + municipality)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_municipalities_group_province_municipality_unique
+ON group_municipalities (group_id, province, municipality)
+WHERE deleted_at IS NULL;
 
 -- ============================================================
 -- SEED DATA: Touchpoint Reasons
@@ -673,9 +713,10 @@ ON CONFLICT (reason_code, role, touchpoint_type) DO NOTHING;
 -- ============================================================
 -- RBAC SYSTEM (Role-Based Access Control)
 -- ============================================================
--- Migration 039: Add Robust RBAC System with Permissions
+-- Migration 039 + 040: Add Robust RBAC System with Permissions
 -- This creates a proper role-based access control system
 -- with fine-grained permissions while maintaining backward compatibility
+-- Updated with dashboard, approvals, and error_logs permissions (Migration 040)
 
 -- Roles table (replaces hardcoded role values)
 CREATE TABLE IF NOT EXISTS roles (
@@ -730,6 +771,7 @@ CREATE INDEX IF NOT EXISTS idx_role_permissions_role_id ON role_permissions(role
 CREATE INDEX IF NOT EXISTS idx_permissions_resource_action ON permissions(resource, action);
 
 -- Updated at trigger for roles
+DROP TRIGGER IF EXISTS update_roles_updated_at ON roles;
 CREATE TRIGGER update_roles_updated_at
     BEFORE UPDATE ON roles
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -828,6 +870,29 @@ INSERT INTO permissions (resource, action, constraint_name, description) VALUES
     ('audit_logs', 'read', 'all', 'View all audit logs')
 ON CONFLICT (resource, action, constraint_name) DO NOTHING;
 
+-- Migration 040: Add dashboard permissions
+INSERT INTO permissions (resource, action, constraint_name, description) VALUES
+    ('dashboard', 'read', NULL, 'View dashboard statistics and metrics'),
+    ('dashboard', 'read_performance', NULL, 'View performance metrics and analytics')
+ON CONFLICT (resource, action, constraint_name) DO NOTHING;
+
+-- Migration 040: Add approvals permissions
+INSERT INTO permissions (resource, action, constraint_name, description) VALUES
+    ('approvals', 'read', NULL, 'View all approval requests'),
+    ('approvals', 'create', NULL, 'Create approval requests'),
+    ('approvals', 'approve', NULL, 'Approve requests'),
+    ('approvals', 'reject', NULL, 'Reject requests'),
+    ('approvals', 'update', NULL, 'Update approval details'),
+    ('approvals', 'delete', NULL, 'Delete approval requests')
+ON CONFLICT (resource, action, constraint_name) DO NOTHING;
+
+-- Migration 040: Add error_logs permissions
+INSERT INTO permissions (resource, action, constraint_name, description) VALUES
+    ('error_logs', 'read', NULL, 'View all error logs'),
+    ('error_logs', 'resolve', NULL, 'Resolve error logs'),
+    ('error_logs', 'delete', NULL, 'Delete error logs')
+ON CONFLICT (resource, action, constraint_name) DO NOTHING;
+
 -- Assign permissions to roles
 -- Admin: All permissions
 INSERT INTO role_permissions (role_id, permission_id)
@@ -841,7 +906,7 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON (
-    p.resource IN ('users', 'clients', 'touchpoints', 'itineraries', 'reports', 'groups', 'targets', 'attendance', 'audit_logs')
+    p.resource IN ('users', 'clients', 'touchpoints', 'itineraries', 'reports', 'groups', 'targets', 'attendance', 'audit_logs', 'dashboard', 'approvals')
     AND (p.constraint_name IS NULL OR p.constraint_name IN ('area', 'all'))
     AND p.action NOT IN ('delete', 'configure', 'system')
 )
@@ -853,7 +918,7 @@ INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON (
-    p.resource IN ('clients', 'touchpoints', 'itineraries', 'reports', 'targets', 'attendance')
+    p.resource IN ('clients', 'touchpoints', 'itineraries', 'reports', 'targets', 'attendance', 'dashboard')
     AND (p.constraint_name IN ('area', 'own') OR p.action = 'read')
     AND p.action NOT IN ('delete')
 )
@@ -876,11 +941,13 @@ WHERE r.slug = 'caravan'
 ON CONFLICT (role_id, permission_id) DO NOTHING;
 
 -- Tele: Touchpoint management (Call touchpoints only), read-only clients
+-- Updated with clients.update:own permission (Migration 045 - second one)
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM roles r
 JOIN permissions p ON (
     (p.resource = 'clients' AND p.action = 'read' AND p.constraint_name = 'own')
+    OR (p.resource = 'clients' AND p.action = 'update' AND p.constraint_name = 'own')
     OR (p.resource = 'touchpoints' AND p.action = 'create' AND p.constraint_name = 'call')
     OR (p.resource = 'touchpoints' AND p.action IN ('read', 'update') AND p.constraint_name = 'own')
     OR (p.resource = 'itineraries' AND p.action = 'read' AND p.constraint_name = 'assigned')
@@ -998,43 +1065,6 @@ LEFT JOIN LATERAL (
 -- END RBAC SYSTEM
 -- ============================================================
 
-COMMIT;
-
--- ============================================================
--- POST-SETUP VERIFICATION
--- ============================================================
-
--- Verify RBAC system was created
-SELECT 'RBAC System' as component, 'Roles created' as description, COUNT(*) as count FROM roles
-UNION ALL
-SELECT 'RBAC System', 'Permissions created', COUNT(*) FROM permissions
-UNION ALL
-SELECT 'RBAC System', 'Role permissions assigned', COUNT(*) FROM role_permissions
-UNION ALL
-SELECT 'RBAC System', 'Users migrated to RBAC', COUNT(*) FROM user_roles WHERE is_active = TRUE;
-
--- Verify all tables were created
-SELECT
-    'Tables created' as description,
-    COUNT(*) as count
-FROM information_schema.tables
-WHERE table_schema = 'public'
-AND table_type = 'BASE TABLE';
-
--- Verify all indexes were created
-SELECT
-    'Indexes created' as description,
-    COUNT(*) as count
-FROM pg_indexes
-WHERE schemaname = 'public';
-
--- Verify all views were created
-SELECT
-    'Views created' as description,
-    COUNT(*) as count
-FROM information_schema.views
-WHERE table_schema = 'public';
-
 -- ============================================================
 -- ERROR LOGS TABLE (for comprehensive error handling system)
 -- ============================================================
@@ -1046,23 +1076,23 @@ CREATE TABLE IF NOT EXISTS error_logs (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     request_id UUID UNIQUE NOT NULL,
     timestamp TIMESTAMPTZ NOT NULL,
-    code TEXT NOT NULL,              -- Error code (e.g., INVALID_CREDENTIALS)
-    message TEXT NOT NULL,           -- Error message
-    status_code INTEGER NOT NULL,    -- HTTP status code (401, 500, etc.)
-    path TEXT NOT NULL,              -- Request path (e.g., /api/auth/login)
-    method TEXT NOT NULL,            -- HTTP method (GET, POST, etc.)
-    user_id UUID,                    -- User who made the request
-    ip_address TEXT,                 -- Client IP address
-    user_agent TEXT,                 -- Client user agent
-    details JSONB,                   -- Additional error details (JSON)
-    errors JSONB,                    -- Field validation errors (JSON)
-    stack_trace TEXT,                -- Error stack trace
-    suggestions TEXT[],              -- Array of suggestions for fixing the error
-    documentation_url TEXT,          -- Link to documentation
-    resolved BOOLEAN DEFAULT FALSE,  -- Whether the error has been resolved
-    resolved_at TIMESTAMPTZ,         -- When the error was resolved
-    resolved_by UUID,                -- Admin user who resolved the error
-    resolution_notes TEXT,           -- Notes about the resolution
+    code TEXT NOT NULL,
+    message TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    method TEXT NOT NULL,
+    user_id UUID,
+    ip_address TEXT,
+    user_agent TEXT,
+    details JSONB DEFAULT '{}',
+    errors JSONB DEFAULT '[]',
+    stack_trace TEXT,
+    suggestions TEXT[] DEFAULT '{}',
+    documentation_url TEXT,
+    resolved BOOLEAN DEFAULT FALSE,
+    resolved_at TIMESTAMPTZ,
+    resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    resolution_notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1074,8 +1104,10 @@ CREATE INDEX IF NOT EXISTS idx_error_logs_status_code ON error_logs(status_code)
 CREATE INDEX IF NOT EXISTS idx_error_logs_timestamp ON error_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_error_logs_resolved ON error_logs(resolved);
 CREATE INDEX IF NOT EXISTS idx_error_logs_user_id ON error_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_error_logs_resolved_timestamp ON error_logs(resolved, timestamp DESC);
 
 -- Apply updated_at trigger for error_logs table
+DROP TRIGGER IF EXISTS update_error_logs_updated_at ON error_logs;
 CREATE TRIGGER update_error_logs_updated_at BEFORE UPDATE ON error_logs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================================
@@ -1113,6 +1145,43 @@ CREATE PUBLICATION powersync FOR TABLE
     -- Touchpoint reasons (global data for touchpoint form dropdowns)
     touchpoint_reasons;
 
+COMMIT;
+
+-- ============================================================
+-- POST-SETUP VERIFICATION
+-- ============================================================
+
+-- Verify RBAC system was created
+SELECT 'RBAC System' as component, 'Roles created' as description, COUNT(*) as count FROM roles
+UNION ALL
+SELECT 'RBAC System', 'Permissions created', COUNT(*) FROM permissions
+UNION ALL
+SELECT 'RBAC System', 'Role permissions assigned', COUNT(*) FROM role_permissions
+UNION ALL
+SELECT 'RBAC System', 'Users migrated to RBAC', COUNT(*) FROM user_roles WHERE is_active = TRUE;
+
+-- Verify all tables were created
+SELECT
+    'Tables created' as description,
+    COUNT(*) as count
+FROM information_schema.tables
+WHERE table_schema = 'public'
+AND table_type = 'BASE TABLE';
+
+-- Verify all indexes were created
+SELECT
+    'Indexes created' as description,
+    COUNT(*) as count
+FROM pg_indexes
+WHERE schemaname = 'public';
+
+-- Verify all views were created
+SELECT
+    'Views created' as description,
+    COUNT(*) as count
+FROM information_schema.views
+WHERE table_schema = 'public';
+
 -- Verify publication was created
 SELECT
     'PowerSync publication created' as description,
@@ -1121,4 +1190,4 @@ SELECT
 FROM pg_publication
 WHERE pubname = 'powersync';
 
-SELECT 'IMU database schema created successfully!' as result;
+SELECT 'IMU database schema v1.2 created successfully!' as result;

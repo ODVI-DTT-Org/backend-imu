@@ -24,8 +24,10 @@ const isPowerSyncConfigured = POWERSYNC_PRIVATE_KEY &&
  * Generate PowerSync JWT token
  *
  * PowerSync requires RS256 JWT tokens with specific claims:
- * - user_id: The user's unique identifier
- * - expires: Token expiration time
+ * - sub: The user's unique identifier (REQUIRED by PowerSync)
+ * - user_id: The user's unique identifier (for backwards compatibility)
+ * - exp: Token expiration time
+ * - iat: Token issued at time
  *
  * The token is signed with the PowerSync private key and verified
  * by the PowerSync service using the public key.
@@ -44,7 +46,8 @@ powersync.get('/token', authMiddleware, async (c) => {
 
     // PowerSync JWT payload
     const payload = {
-      user_id: user.sub, // PowerSync expects 'user_id' claim
+      sub: user.sub, // PowerSync requires 'sub' claim
+      user_id: user.sub, // Keep for backwards compatibility
       exp: Math.floor(Date.now() / 1000) + (24 * 60 * 60), // 24 hours
       iat: Math.floor(Date.now() / 1000),
       // Additional claims for debugging

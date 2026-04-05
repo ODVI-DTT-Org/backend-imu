@@ -1,6 +1,6 @@
 // IMU PowerSync Schema
 // Defines the data schema for PowerSync synchronization
-// Aligned with COMPLETE_SCHEMA.sql v1.2 database structure (2026-04-04)
+// This schema matches the PostgreSQL database structure
 
 import { Column, ColumnType, Table } from '@powersync/service-core';
 
@@ -166,7 +166,24 @@ export const tables: Table[] = [
   }),
 
   // ============================================================
-  // USER LOCATIONS
+  // APPROVALS
+  // ============================================================
+
+  new Table({
+    name: 'approvals',
+    columns: [
+      new Column({ name: 'id', type: ColumnType.TEXT, primary_key: true }),
+      new Column({ name: 'touchpoint_id', type: ColumnType.TEXT }),
+      new Column({ name: 'approver_id', type: ColumnType.TEXT }),
+      new Column({ name: 'status', type: ColumnType.TEXT }),
+      new Column({ name: 'notes', type: ColumnType.TEXT, optional: true }),
+      new Column({ name: 'created_at', type: ColumnType.TEXT }),
+      new Column({ name: 'updated_at', type: ColumnType.TEXT }),
+    ],
+  }),
+
+  // ============================================================
+  // USER LOCATIONS (for municipality-based filtering)
   // ============================================================
 
   new Table({
@@ -192,13 +209,12 @@ export const tables: Table[] = [
     name: 'psgc',
     columns: [
       new Column({ name: 'id', type: ColumnType.INTEGER, primary_key: true }),
+      new Column({ name: 'code', type: ColumnType.TEXT }),
+      new Column({ name: 'name', type: ColumnType.TEXT }),
       new Column({ name: 'region', type: ColumnType.TEXT }),
       new Column({ name: 'province', type: ColumnType.TEXT }),
-      new Column({ name: 'mun_city_kind', type: ColumnType.TEXT, optional: true }),
-      new Column({ name: 'mun_city', type: ColumnType.TEXT }),
-      new Column({ name: 'barangay', type: ColumnType.TEXT }),
-      new Column({ name: 'pin_location', type: ColumnType.TEXT, optional: true }),
-      new Column({ name: 'zip_code', type: ColumnType.TEXT, optional: true }),
+      new Column({ name: 'municipality', type: ColumnType.TEXT }),
+      new Column({ name: 'level', type: ColumnType.TEXT }),
     ],
   }),
 
@@ -210,13 +226,11 @@ export const tables: Table[] = [
     name: 'touchpoint_reasons',
     columns: [
       new Column({ name: 'id', type: ColumnType.TEXT, primary_key: true }),
-      new Column({ name: 'reason_code', type: ColumnType.TEXT }),
-      new Column({ name: 'label', type: ColumnType.TEXT }),
-      new Column({ name: 'touchpoint_type', type: ColumnType.TEXT }),
-      new Column({ name: 'role', type: ColumnType.TEXT }),
-      new Column({ name: 'category', type: ColumnType.TEXT, optional: true }),
-      new Column({ name: 'sort_order', type: ColumnType.INTEGER }),
+      new Column({ name: 'reason', type: ColumnType.TEXT }),
+      new Column({ name: 'category', type: ColumnType.TEXT }),
       new Column({ name: 'is_active', type: ColumnType.BOOLEAN }),
+      new Column({ name: 'sort_order', type: ColumnType.INTEGER }),
+      new Column({ name: 'created_at', type: ColumnType.TEXT }),
     ],
   }),
 ];
