@@ -661,7 +661,9 @@ export async function initPowerSync(): Promise<InitResult> {
     }
 
     // Validate key format (basic check)
-    const privateKey = process.env.POWERSYNC_PRIVATE_KEY;
+    // Handle escaped newlines in environment variables (DigitalOcean format)
+    const privateKeyInput = process.env.POWERSYNC_PRIVATE_KEY;
+    const privateKey = privateKeyInput?.trim().replace(/\\n/g, '\n');
     const isValidKey = privateKey?.includes('BEGIN PRIVATE KEY') ||
                        privateKey?.includes('BEGIN RSA PRIVATE KEY');
 
@@ -707,7 +709,9 @@ export async function initPowerSync(): Promise<InitResult> {
 
       // Verify the test token with public key
       console.log('[PowerSync Test] Verifying JWT with public key...');
-      const publicKey = process.env.POWERSYNC_PUBLIC_KEY as string; // Non-null assertion after validation above
+      // Handle escaped newlines in environment variables (DigitalOcean format)
+      const publicKeyInput = process.env.POWERSYNC_PUBLIC_KEY;
+      const publicKey = (publicKeyInput || privateKeyInput)?.trim().replace(/\\n/g, '\n') as string;
 
       const decoded = jwt.verify(testToken, publicKey, { algorithms: ['RS256'] });
       jwtTestDetails['Verification'] = 'Success';
