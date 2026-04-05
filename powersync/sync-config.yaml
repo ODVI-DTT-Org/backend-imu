@@ -1,23 +1,26 @@
 # PowerSync Sync Configuration for IMU
-# Aligned with COMPLETE_SCHEMA.sql v1.2 (2026-04-04)
 # Docs: https://docs.powersync.com/sync/streams/overview
+#
+# BUSINESS RULE: Caravan users can VIEW all clients
+# Touchpoint status controls who can CREATE touchpoints
 
 config:
   edition: 3
 
+# Define Sync Streams to control which data is synced to each user
 streams:
   # ============================================================
   # GLOBAL DATA - Sync to all users (reference tables)
   # ============================================================
 
-  # PSGC geographic data
+  # PSGC geographic data (single table with all locations)
   psgc:
     auto_subscribe: true
     query: |
       SELECT id, region, province, mun_city_kind, mun_city, barangay, pin_location, zip_code
       FROM psgc
 
-  # Touchpoint reasons - FIXED: Added correct column names from schema
+  # Touchpoint reasons (26 standard reason codes)
   touchpoint_reasons:
     auto_subscribe: true
     query: |
@@ -29,122 +32,79 @@ streams:
   # USER-SPECIFIC DATA
   # ============================================================
 
-  # User profile data
-  user_profiles:
+  # User profile data - sync current user's profile
+  user_profile:
     auto_subscribe: true
     query: |
       SELECT up.id, up.user_id, up.name, up.email, up.role, up.avatar_url, up.updated_at
       FROM user_profiles up
       WHERE up.user_id = auth.user_id()
 
-  # User location assignments - FIXED: Added created_at, updated_at
-  user_locations:
+  # User municipality assignments - for location-based filtering
+  # Using separate province and municipality columns
+  user_municipalities:
     auto_subscribe: true
     query: |
-      SELECT ul.id, ul.user_id, ul.province, ul.municipality,
-        ul.assigned_at, ul.assigned_by, ul.deleted_at, ul.created_at, ul.updated_at
-      FROM user_locations ul
-      WHERE ul.user_id = auth.user_id() AND ul.deleted_at IS NULL
+      SELECT id, user_id, province, municipality, assigned_at, assigned_by, deleted_at
+      FROM user_locations
+      WHERE user_id = auth.user_id() AND deleted_at IS NULL
 
   # ============================================================
-  # CLIENT DATA - Territory-based filtering
+  # CLIENT DATA - ALL clients (business rule: caravan can see all)
   # ============================================================
 
   clients:
     auto_subscribe: true
     query: |
       SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
-        c.birth_date, c.pan, c.client_type, c.product_type, c.market_type, c.pension_type,
-        c.psgc_id, c.region, c.province, c.municipality, c.barangay,
-        c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
-        c.tenure, c.facebook_link, c.remarks, c.agency_id, c.user_id,
-        c.is_starred, c.loan_released, c.loan_released_at, c.udi,
-        c.created_at, c.updated_at
+        c.client_type, c.product_type, c.market_type, c.pension_type,
+        c.municipality, c.is_starred, c.created_at, c.updated_at
       FROM clients c
-      WHERE EXISTS (
-        SELECT 1 FROM user_locations ul
-        WHERE ul.user_id = auth.user_id()
-          AND c.province = ul.province
-          AND c.municipality = ul.municipality
-          AND ul.deleted_at IS NULL
-      )
 
-  # Client addresses
-  addresses:
+  # Client addresses - only for active clients
+  client_addresses:
     auto_subscribe: true
     query: |
       SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
-        a.province, a.postal_code, a.latitude, a.longitude, a.is_primary, a.created_at
+        a.province, a.postal_code, a.latitude, a.longitude, a.is_primary
       FROM addresses a
-      WHERE EXISTS (
-        SELECT 1 FROM clients c
-        WHERE c.id = a.client_id
-          AND EXISTS (
-            SELECT 1 FROM user_locations ul
-            WHERE ul.user_id = auth.user_id()
-              AND c.province = ul.province
-              AND c.municipality = ul.municipality
-              AND ul.deleted_at IS NULL
-          )
-      )
+      JOIN clients c ON c.id = a.client_id
 
-  # Phone numbers
+  # Phone numbers - only primary numbers
   phone_numbers:
     auto_subscribe: true
     query: |
-      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary, p.created_at
+      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary
       FROM phone_numbers p
       WHERE p.is_primary = true
-        AND EXISTS (
-          SELECT 1 FROM clients c
-          WHERE c.id = p.client_id
-            AND EXISTS (
-              SELECT 1 FROM user_locations ul
-              WHERE ul.user_id = auth.user_id()
-                AND c.province = ul.province
-                AND c.municipality = ul.municipality
-                AND ul.deleted_at IS NULL
-            )
-          )
-        )
 
-  # ============================================================
-  # TOUCHPOINTS - With all GPS and tracking fields
-  # ============================================================
-
+  # Touchpoints - ALL touchpoints for touchpoint_status calculation
+  # Required for mobile app to show next touchpoint info
   touchpoints:
     auto_subscribe: true
     query: |
       SELECT t.id, t.client_id, t.user_id, t.touchpoint_number, t.type,
-        t.date, t.address, t.time_arrival, t.time_departure,
-        t.odometer_arrival, t.odometer_departure,
-        t.reason, t.status, t.next_visit_date, t.notes,
-        t.photo_url, t.audio_url,
-        t.latitude, t.longitude,
-        t.time_in, t.time_in_gps_lat, t.time_in_gps_lng, t.time_in_gps_address,
-        t.time_out, t.time_out_gps_lat, t.time_out_gps_lng, t.time_out_gps_address,
-        t.rejection_reason, t.created_at, t.updated_at
+        t.date, t.time_in, t.time_out, t.reason, t.status, t.photo_url,
+        t.odometer_arrival, t.odometer_departure, t.created_at, t.updated_at
       FROM touchpoints t
-      WHERE EXISTS (
-        SELECT 1 FROM clients c
-        WHERE c.id = t.client_id
-          AND EXISTS (
-            SELECT 1 FROM user_locations ul
-            WHERE ul.user_id = auth.user_id()
-              AND c.province = ul.province
-              AND c.municipality = ul.municipality
-              AND ul.deleted_at IS NULL
-          )
-      )
 
   # ============================================================
-  # ITINERARIES - For current user
+  # USER-SPECIFIC DATA
   # ============================================================
 
-  itineraries:
+  # My touchpoints - touchpoints created by current user
+  my_touchpoints:
     auto_subscribe: true
     query: |
-      SELECT i.id, i.client_id, i.user_id, i.scheduled_date, i.scheduled_time,
-        i.status, i.priority, i.notes, i.created_by, i.created_at, i.updated_at
-      FROM itineraries i
-      WHERE i.user_id = auth.user_id()
+      SELECT t.* FROM touchpoints t WHERE t.user_id = auth.user_id()
+
+  # Approvals - for caravan/tele approval workflow
+  approvals:
+    auto_subscribe: true
+    query: |
+      SELECT a.id, a.type, a.status, a.client_id, a.user_id, a.touchpoint_number,
+        a.role, a.reason, a.notes, a.updated_client_information, a.updated_udi,
+        a.udi_number, a.approved_by, a.approved_at, a.rejected_by, a.rejected_at,
+        a.rejection_reason, a.created_at, a.updated_at
+      FROM approvals a
+      WHERE a.user_id = auth.user_id()
