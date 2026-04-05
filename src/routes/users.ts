@@ -146,9 +146,8 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
     // Get paginated results
     const result = await pool.query(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url,
-              u.created_at, u.updated_at, up.area_manager_id, up.assistant_area_manager_id
+              u.created_at, u.updated_at
        FROM users u
-       LEFT JOIN user_profiles up ON up.user_id = u.id
        ${whereClause}
        ORDER BY u.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -181,9 +180,8 @@ users.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c) 
 
     const result = await pool.query(
       `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url,
-              u.created_at, u.updated_at, up.area_manager_id, up.assistant_area_manager_id
+              u.created_at, u.updated_at
        FROM users u
-       LEFT JOIN user_profiles up ON up.user_id = u.id
        WHERE u.id = $1`,
       [id]
     );
