@@ -206,11 +206,14 @@ clients.get('/', authMiddleware, async (c) => {
       const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
       // Calculate next touchpoint type based on completed count
+      // Note: In subquery context, reference completed_count directly (no tp. prefix)
       const nextTouchpointTypeCase = TOUCHPOINT_SEQUENCE.map((type, index) =>
-        `WHEN tp.completed_count = ${index} THEN '${type}'`
+        `WHEN completed_count = ${index} THEN '${type}'`
       ).join(' ');
 
       // Determine if current user can create the next touchpoint
+      // Note: For WHERE clause subquery, check if next_touchpoint_type IS NOT NULL
+      // (different from main query where we check the specific value)
       let canCreateCondition = '';
       if (user.role === 'tele') {
         // Tele: Can only create Call types (2, 3, 5, 6)
@@ -222,6 +225,14 @@ clients.get('/', authMiddleware, async (c) => {
         // Admin/Manager: Can create any touchpoint
         canCreateCondition = 'CASE WHEN tp.next_touchpoint_type IS NOT NULL THEN true ELSE false END';
       }
+
+      // For WHERE clause subquery: create a simpler condition that doesn't reference tp.next_touchpoint_type
+      // The subquery will check if next_touchpoint_type IS NOT NULL
+      const subqueryCanCreateCondition = user.role === 'tele'
+        ? `next_touchpoint_type = 'Call'`
+        : user.role === 'caravan'
+        ? `next_touchpoint_type = 'Visit'`
+        : `next_touchpoint_type IS NOT NULL`;
 
       // Calculate group score
       const groupScoreCase = `
@@ -246,7 +257,7 @@ clients.get('/', authMiddleware, async (c) => {
         conditions.push(`(
           SELECT
             CASE
-              WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
+              WHEN (${subqueryCanCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
               WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
               WHEN tp.completed_count > 0 THEN 3
               ELSE 4
@@ -254,10 +265,13 @@ clients.get('/', authMiddleware, async (c) => {
           FROM (
             SELECT
               t.client_id,
-              COUNT(DISTINCT t.touchpoint_number)::int as completed_count
+              COUNT(DISTINCT t.touchpoint_number)::int as completed_count,
+              CASE ${nextTouchpointTypeCase}
+                ELSE NULL
+              END as next_touchpoint_type
             FROM touchpoints t
             WHERE t.client_id = c.id
-            GROUP BY t.client_id
+            GROUP BY t.client_id, completed_count
           ) tp
         ) = $${paramIndex}`);
         params.push(targetScore);
