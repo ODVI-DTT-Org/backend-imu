@@ -256,10 +256,12 @@ errors.post('/', async (c) => {
         occurrences_count,
         app_version,
         os_version,
+        platform,
+        device_info,
         suggestions,
         documentation_url
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
       )
       RETURNING id
     `;
@@ -284,6 +286,8 @@ errors.post('/', async (c) => {
       1,
       report.appVersion || null,
       report.osVersion || null,
+      report.platform || null,
+      report.deviceInfo ? JSON.stringify(report.deviceInfo) : null,
       report.suggestions || [],
       report.documentationUrl || null,
     ];
