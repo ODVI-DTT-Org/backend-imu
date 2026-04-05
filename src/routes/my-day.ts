@@ -178,18 +178,38 @@ myDay.delete('/remove-client/:id', authMiddleware, requirePermission('clients', 
   try {
     const user = c.get('user');
     const clientId = c.req.param('id');
+    const body = await c.req.json().catch(() => ({}));
+    const validated = addToMyDaySchema.parse(body);
+
+    // Use provided scheduled_date or CURRENT_DATE for today
+    // Note: CURRENT_DATE respects database timezone (Asia/Manila) due to connection string setting
+    // But mobile should always send scheduled_date to avoid timezone issues
+    const targetDate = validated.scheduled_date
+      ? `CAST($3 AS DATE)`
+      : 'CURRENT_DATE';
+
+    const insertParams = [clientId, user.sub];
+    if (validated.scheduled_date) {
+      insertParams.push(validated.scheduled_date);
+    }
+
+    console.log('[Remove from My Day] Client ID:', clientId);
+    console.log('[Remove from My Day] Received scheduled_date:', validated.scheduled_date);
+    console.log('[Remove from My Day] targetDate expression:', targetDate);
 
     const result = await pool.query(
       `DELETE FROM itineraries
-       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = CURRENT_DATE
+       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = ${targetDate}
        RETURNING *`,
-      [clientId, user.sub]
+      insertParams
     );
 
     if (result.rows.length === 0) {
+      console.log('[Remove from My Day] No itinerary found for deletion');
       return c.json({ message: 'Client not found in today\'s itinerary' }, 404);
     }
 
+    console.log('[Remove from My Day] Deleted itinerary:', result.rows[0]);
     return c.json({
       message: 'Client removed from My Day',
     });
