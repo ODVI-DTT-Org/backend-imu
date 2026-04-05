@@ -50,7 +50,9 @@ streams:
       WHERE user_id = auth.user_id() AND deleted_at IS NULL
 
   # ============================================================
-  # CLIENT DATA - ALL clients (business rule: caravan can see all)
+  # CLIENT DATA - Sync all clients for caravan to view
+  # BUSINESS RULE: Caravan users can VIEW all clients
+  # LIMIT: Sync most recent 1000 clients to avoid row limit
   # ============================================================
 
   clients:
@@ -58,19 +60,20 @@ streams:
     query: |
       SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
         c.client_type, c.product_type, c.market_type, c.pension_type,
-        c.municipality, c.is_starred, c.created_at, c.updated_at
+        c.province, c.municipality, c.barangay, c.is_starred, c.created_at, c.updated_at
       FROM clients c
+      ORDER BY c.created_at DESC
+      LIMIT 1000
 
-  # Client addresses - only for active clients
+  # Client addresses - all clients
   client_addresses:
     auto_subscribe: true
     query: |
       SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
         a.province, a.postal_code, a.latitude, a.longitude, a.is_primary
       FROM addresses a
-      JOIN clients c ON c.id = a.client_id
 
-  # Phone numbers - only primary numbers
+  # Phone numbers - all clients (primary only)
   phone_numbers:
     auto_subscribe: true
     query: |
@@ -78,8 +81,7 @@ streams:
       FROM phone_numbers p
       WHERE p.is_primary = true
 
-  # Touchpoints - ALL touchpoints for touchpoint_status calculation
-  # Required for mobile app to show next touchpoint info
+  # Touchpoints - user's own touchpoints only
   touchpoints:
     auto_subscribe: true
     query: |
@@ -87,6 +89,7 @@ streams:
         t.date, t.time_in, t.time_out, t.reason, t.status, t.photo_url,
         t.odometer_arrival, t.odometer_departure, t.created_at, t.updated_at
       FROM touchpoints t
+      WHERE t.user_id = auth.user_id()
 
   # ============================================================
   # USER-SPECIFIC DATA

@@ -708,13 +708,13 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
             odometer_arrival, odometer_departure, next_visit_date,
             notes, photo_url, audio_url, latitude, longitude, status
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
           ) RETURNING *`,
           [
             clientId, user.sub, touchpointNumber, type, today,
             reason, address, timeArrival, timeDeparture,
             odometerArrival, odometerDeparture, nextVisitDate,
-            notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed' // ✅ FIXED: Use status
+            notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed'
           ]
         );
       }

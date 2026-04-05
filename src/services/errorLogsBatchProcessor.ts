@@ -23,7 +23,7 @@ export async function processMobileErrorLogs() {
         details,
         created_at
       FROM error_logs
-      WHERE is_synced = 0
+      WHERE is_synced = FALSE
         AND platform = 'mobile'
       ORDER BY created_at ASC
       LIMIT 100
@@ -60,7 +60,7 @@ export async function processMobileErrorLogs() {
         ]);
 
         // Mark as synced
-        await pool.query('UPDATE error_logs SET is_synced = 1 WHERE id = $1', [row.id]);
+        await pool.query('UPDATE error_logs SET is_synced = TRUE WHERE id = $1', [row.id]);
         processed++;
       } catch (e) {
         logger.error('error-logs', `Failed to process mobile error log: ${row.id}`, { error: e });
