@@ -140,10 +140,8 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
         queryLog.duration = Date.now() - startTime;
         queryLog.rows = dbResult.rowCount;
 
-        // Only log SELECT queries and slow queries to reduce noise
-        if (queryLog.duration > 100 || query.toUpperCase().startsWith('SELECT')) {
-          logQuery(queryLog);
-        }
+        // Log all queries for debugging
+        logQuery(queryLog);
 
         return dbResult;
       })
@@ -218,10 +216,8 @@ Pool.prototype.connect = function(this: Pool, ...args: any[]) {
               queryLog.duration = Date.now() - startTime;
               queryLog.rows = dbResult.rowCount;
 
-              // Only log SELECT queries and slow queries
-              if (queryLog.duration > 100 || query.toUpperCase().startsWith('SELECT')) {
-                logQuery(queryLog);
-              }
+              // Log all queries for debugging
+              logQuery(queryLog);
 
               return dbResult;
             })
