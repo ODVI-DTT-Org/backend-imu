@@ -165,9 +165,10 @@ clients.get('/', authMiddleware, async (c) => {
     const userLevel = ROLE_LEVELS[user.role] || 0;
 
     // Area-based filtering using CTE
+    // NO AREA FILTER when municipality_ids is NOT provided (All Clients mode)
+    // FILTER BY municipality_ids when explicitly provided (Assigned Clients mode)
     // NO AREA FILTER for oversight roles: Admin (100), Area Manager (50), Assistant Area Manager (40)
-    // FILTER BY user_locations for field agents: Caravan (20), Tele (15)
-    const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
+    const shouldFilterByArea = municipalityIds && (userLevel < 40 || ['caravan', 'tele'].includes(user.role));
 
     if (search) {
       conditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${paramIndex} OR c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);
@@ -226,11 +227,15 @@ clients.get('/', authMiddleware, async (c) => {
       // Note: Column names used directly (no table prefix) for CTE context
       let canCreateCondition = '';
       if (user.role === 'tele') {
-        canCreateCondition = `next_touchpoint_type = 'Call'`;
+        // Tele can create Call touchpoints (2, 3, 5, 6)
+        // Assigned clients = callable (next is Call) OR no touchpoints yet (can start with Call)
+        canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
       } else if (user.role === 'caravan') {
-        canCreateCondition = `next_touchpoint_type = 'Visit'`;
+        // Caravan can create Visit touchpoints (1, 4, 7)
+        canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
       } else {
-        canCreateCondition = `next_touchpoint_type IS NOT NULL`;
+        // Admin/Manager can create any touchpoint
+        canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
       }
 
       // Group score CASE expression
@@ -313,19 +318,19 @@ clients.get('/', authMiddleware, async (c) => {
 
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        t.client_id,
+        c.id as client_id,
         CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
-        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
-        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = t.client_id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
+        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
+        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
         CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
           `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
         ).join(' ')}
           ELSE NULL
         END as next_touchpoint_type,
         c.loan_released
-      FROM touchpoints t
-      JOIN clients c ON c.id = t.client_id
-      GROUP BY t.client_id, c.loan_released
+      FROM clients c
+      LEFT JOIN touchpoints t ON t.client_id = c.id
+      GROUP BY c.id, c.loan_released
     )`;
 
     // Build WITH clause with user_areas CTE if needed
@@ -348,11 +353,13 @@ clients.get('/', authMiddleware, async (c) => {
       // Determine if current user can create the next touchpoint
       let canCreateCondition = '';
       if (user.role === 'tele') {
-        canCreateCondition = `next_touchpoint_type = 'Call'`;
+        // Tele can create Call touchpoints (2, 3, 5, 6)
+        // Assigned clients = callable (next is Call) OR no touchpoints yet (can start with Call)
+        canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
       } else if (user.role === 'caravan') {
-        canCreateCondition = `next_touchpoint_type = 'Visit'`;
+        canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
       } else {
-        canCreateCondition = `next_touchpoint_type IS NOT NULL`;
+        canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
       }
 
       // Map touchpoint_status to group score
@@ -541,14 +548,14 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
              'touchpoint_type', t.type,
              'reason', t.reason,
              'status', t.status,
-             'date', to_char(t.date, 'YYYY-MM-DD'),
-             'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS'),
-             'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS'),
-             'time_arrival', t.time_arrival,
-             'time_departure', t.time_departure,
+             'date', to_char(t.date, 'YYYY-MM-DD"T"00:00:00"Z'),
+             'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
+             'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
+             'time_arrival', to_char(t.time_arrival, 'HH24:MI'),
+             'time_departure', to_char(t.time_departure, 'HH24:MI'),
              'odometer_arrival', t.odometer_arrival,
              'odometer_departure', t.odometer_departure,
-             'next_visit_date', to_char(t.next_visit_date, 'YYYY-MM-DD'),
+             'next_visit_date', to_char(t.next_visit_date, 'YYYY-MM-DD"T"00:00:00"Z'),
              'notes', t.notes,
              'photo_url', t.photo_url,
              'audio_url', t.audio_url,
