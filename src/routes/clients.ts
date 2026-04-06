@@ -537,9 +537,8 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
        LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id
        LEFT JOIN phone_numbers p ON p.client_id = c.id
-       LEFT JOIN (
+       LEFT JOIN LATERAL (
          SELECT
-           t.client_id,
            json_agg(json_build_object(
              'id', t.id,
              'client_id', t.client_id,
@@ -571,13 +570,12 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
              'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z')
            ) ORDER BY t.touchpoint_number) as touchpoints
          FROM touchpoints t
-         WHERE t.client_id = $2
-         GROUP BY t.client_id
-       ) client_touchpoints ON client_touchpoints.client_id = c.id
+         WHERE t.client_id = c.id
+       ) client_touchpoints ON true
        WHERE c.id = $1
        GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay
       `,
-      [id, id]
+      [id]
     );
 
     if (result.rows.length === 0) {
