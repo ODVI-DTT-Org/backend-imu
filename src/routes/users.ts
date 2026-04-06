@@ -51,6 +51,7 @@ const updateUserSchema = z.object({
   role: z.enum(VALID_ROLES).optional(),
   phone: z.string().max(50).optional(),
   avatar_url: z.string().max(500).optional(),
+  is_active: z.boolean().optional(),
 });
 
 const changePasswordSchema = z.object({
@@ -69,6 +70,7 @@ function mapRowToUser(row: Record<string, any>) {
     role: row.role,
     phone: row.phone,
     avatar: row.avatar_url,
+    is_active: row.is_active,
     area_manager_id: row.area_manager_id,
     assistant_area_manager_id: row.assistant_area_manager_id,
     created: row.created_at,
@@ -366,6 +368,7 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
       role: 'role',
       phone: 'phone',
       avatar_url: 'avatar_url',
+      is_active: 'is_active',
     };
 
     // Handle password separately (needs hashing)
@@ -391,7 +394,7 @@ users.put('/:id', authMiddleware, requirePermission('users', 'update'), auditMid
     updateValues.push(id);
     const result = await pool.query(
       `UPDATE users SET ${updateFields.join(', ')} WHERE id = $${paramIndex}
-       RETURNING id, email, first_name, last_name, role, phone, avatar_url, created_at, updated_at`,
+       RETURNING id, email, first_name, last_name, role, phone, avatar_url, is_active, created_at, updated_at`,
       updateValues
     );
 

@@ -80,14 +80,9 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
     const result = await pool.query(
       `SELECT g.*,
               CONCAT(c.first_name, ' ', c.last_name) as caravan_name,
-              COALESCE(gm.member_count, 0) as member_count
+              COALESCE(jsonb_array_length(g.members), 0) as member_count
        FROM groups g
        LEFT JOIN users c ON c.id = g.caravan_id
-       LEFT JOIN (
-         SELECT group_id, COUNT(*) as member_count
-         FROM group_members
-         GROUP BY group_id
-       ) gm ON gm.group_id = g.id
        ${whereClause}
        ORDER BY g.name ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -141,15 +136,23 @@ groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c
     }
 
     const group = result.rows[0];
+    const memberIds = group.members || [];
 
-    // Fetch members for this group
-    const membersResult = await pool.query(
-      `SELECT gm.user_id, u.first_name, u.last_name, u.email
-       FROM group_members gm
-       JOIN users u ON u.id = gm.user_id
-       WHERE gm.group_id = $1`,
-      [id]
-    );
+    // Fetch member details if there are members
+    let expandedMembers: any[] = [];
+    if (memberIds.length > 0) {
+      const membersResult = await pool.query(
+        `SELECT id, first_name, last_name, email
+         FROM users
+         WHERE id = ANY($1)`,
+        [memberIds]
+      );
+      expandedMembers = membersResult.rows.map(m => ({
+        id: m.id,
+        name: `${m.first_name} ${m.last_name}`,
+        email: m.email
+      }));
+    }
 
     return c.json({
       id: group.id,
@@ -157,11 +160,10 @@ groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c
       description: group.description,
       caravan_id: group.caravan_id,
       caravan_name: group.caravan_name || null,
-      members: membersResult.rows.map(m => ({
-        id: m.user_id,
-        name: `${m.first_name} ${m.last_name}`,
-        email: m.email
-      })),
+      members: memberIds,
+      expand: {
+        members: expandedMembers
+      },
       created: group.created_at,
     });
   } catch (error) {
@@ -179,33 +181,20 @@ groups.post('/', authMiddleware, requirePermission('groups', 'create'), auditMid
 
     const members = validated.members || [];
 
-    // Insert group (only columns that exist in schema)
+    // Insert group with members as JSONB array
     const result = await pool.query(
-      `INSERT INTO groups (id, name, description, caravan_id)
-       VALUES (gen_random_uuid(), $1, $2, $3) RETURNING *`,
+      `INSERT INTO groups (id, name, description, caravan_id, members)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4) RETURNING *`,
       [
         validated.name,
         validated.description || null,
-        validated.caravan_id || null
+        validated.caravan_id || null,
+        JSON.stringify(members)
       ]
     );
 
-    const groupId = result.rows[0].id;
-
-    // Insert members into group_members junction table
-    if (members.length > 0) {
-      const memberValues = members.map((memberId, index) => {
-        return `($${index + 1}, '${groupId}', '${memberId}')`;
-      }).join(', ');
-
-      await pool.query(
-        `INSERT INTO group_members (group_id, user_id) VALUES ${memberValues}
-         ON CONFLICT (group_id, user_id) DO NOTHING`
-      );
-    }
-
     return c.json({
-      id: groupId,
+      id: result.rows[0].id,
       name: result.rows[0].name,
       description: result.rows[0].description,
       caravan_id: result.rows[0].caravan_id,
@@ -257,6 +246,10 @@ groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditM
       updateFields.push(`caravan_id = $${paramIndex++}`);
       updateValues.push(validated.caravan_id);
     }
+    if (validated.members !== undefined) {
+      updateFields.push(`members = $${paramIndex++}`);
+      updateValues.push(JSON.stringify(validated.members));
+    }
 
     if (updateFields.length === 0) {
       throw new ValidationError('No fields to update');
@@ -268,43 +261,13 @@ groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditM
       updateValues
     );
 
-    // Handle members update if provided
-    if (validated.members !== undefined) {
-      // Delete existing members
-      await pool.query('DELETE FROM group_members WHERE group_id = $1', [id]);
-
-      // Insert new members
-      if (validated.members.length > 0) {
-        const memberValues = validated.members.map((memberId, index) => {
-          return `($${index + 1}, '${id}', '${memberId}')`;
-        }).join(', ');
-
-        await pool.query(
-          `INSERT INTO group_members (group_id, user_id) VALUES ${memberValues}
-           ON CONFLICT (group_id, user_id) DO NOTHING`
-        );
-      }
-    }
-
-    // Fetch updated members
-    const membersResult = await pool.query(
-      `SELECT gm.user_id, u.first_name, u.last_name, u.email
-       FROM group_members gm
-       JOIN users u ON u.id = gm.user_id
-       WHERE gm.group_id = $1`,
-      [id]
-    );
-
+    // Return updated group with members from JSONB column
     return c.json({
       id: result.rows[0].id,
       name: result.rows[0].name,
       description: result.rows[0].description,
       caravan_id: result.rows[0].caravan_id,
-      members: membersResult.rows.map(m => ({
-        id: m.user_id,
-        name: `${m.first_name} ${m.last_name}`,
-        email: m.email
-      })),
+      members: result.rows[0].members || [],
       created: result.rows[0].created_at,
     });
   } catch (error: any) {
