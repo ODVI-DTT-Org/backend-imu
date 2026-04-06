@@ -20,25 +20,17 @@ streams:
       SELECT id, region, province, mun_city_kind, mun_city, barangay, pin_location, zip_code
       FROM psgc
 
-  # Touchpoint reasons (26 standard reason codes)
+  # Touchpoint reasons (Caravan role only)
   touchpoint_reasons:
     auto_subscribe: true
     query: |
       SELECT id, reason_code, label, touchpoint_type, role, category, sort_order, is_active
       FROM touchpoint_reasons
-      WHERE is_active = true
+      WHERE is_active = true AND role = 'caravan'
 
   # ============================================================
   # USER-SPECIFIC DATA
   # ============================================================
-
-  # User profile data - sync current user's profile
-  user_profile:
-    auto_subscribe: true
-    query: |
-      SELECT up.id, up.user_id, up.name, up.email, up.role, up.avatar_url, up.updated_at
-      FROM user_profiles up
-      WHERE up.user_id = auth.user_id()
 
   # User municipality assignments - for location-based filtering
   # Using separate province and municipality columns
@@ -50,56 +42,36 @@ streams:
       WHERE user_id = auth.user_id() AND deleted_at IS NULL
 
   # ============================================================
-  # CLIENT DATA - Sync all clients for caravan to view
-  # BUSINESS RULE: Caravan users can VIEW all clients
-  # LIMIT: Sync most recent 1000 clients to avoid row limit
+  # CLIENT DATA - Territory-based filtering for ALL users
   # ============================================================
 
+  # Clients - sync all clients for caravan to view
+  # BUSINESS RULE: Caravan users can VIEW all clients
   clients:
     auto_subscribe: true
     query: |
       SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
-        c.client_type, c.product_type, c.market_type, c.pension_type,
-        c.province, c.municipality, c.barangay, c.is_starred, c.created_at, c.updated_at
+        c.birth_date, c.pan, c.client_type, c.product_type, c.market_type, c.pension_type,
+        c.psgc_id, c.province, c.municipality, c.region, c.barangay,
+        c.is_starred, c.loan_released, c.udi, c.full_address,
+        c.created_at, c.updated_at
       FROM clients c
-      ORDER BY c.created_at DESC
-      LIMIT 1000
 
-  # Client addresses - all clients
-  client_addresses:
-    auto_subscribe: true
-    query: |
-      SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
-        a.province, a.postal_code, a.latitude, a.longitude, a.is_primary
-      FROM addresses a
+  # ============================================================
+  # TOUCHPOINT & ITINERARY DATA
+  # ============================================================
 
-  # Phone numbers - all clients (primary only)
-  phone_numbers:
-    auto_subscribe: true
-    query: |
-      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary
-      FROM phone_numbers p
-      WHERE p.is_primary = true
-
-  # Touchpoints - user's own touchpoints only
+  # Touchpoints - all touchpoints
   touchpoints:
     auto_subscribe: true
     query: |
-      SELECT t.id, t.client_id, t.user_id, t.touchpoint_number, t.type,
-        t.date, t.time_in, t.time_out, t.reason, t.status, t.photo_url,
-        t.odometer_arrival, t.odometer_departure, t.created_at, t.updated_at
-      FROM touchpoints t
-      WHERE t.user_id = auth.user_id()
+      SELECT * FROM touchpoints
 
-  # ============================================================
-  # USER-SPECIFIC DATA
-  # ============================================================
-
-  # My touchpoints - touchpoints created by current user
-  my_touchpoints:
+  # Itineraries - user's own itineraries
+  itineraries:
     auto_subscribe: true
     query: |
-      SELECT t.* FROM touchpoints t WHERE t.user_id = auth.user_id()
+      SELECT * FROM itineraries WHERE user_id = auth.user_id()
 
   # Approvals - for caravan/tele approval workflow
   approvals:
