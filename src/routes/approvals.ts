@@ -798,7 +798,7 @@ approvals.get('/stats/summary', authMiddleware, requirePermission('approvals', '
 });
 
 // POST /api/approvals/loan-release - Submit loan release for approval (Admin, Caravan, Tele)
-approvals.post('/loan-release', authMiddleware, requirePermission('approvals', 'update'), async (c) => {
+approvals.post('/loan-release', authMiddleware, requirePermission('approvals', 'create'), async (c) => {
   const client = await pool.connect(); // Use transaction
   try {
     await client.query('BEGIN'); // Start transaction
