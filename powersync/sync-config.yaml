@@ -45,15 +45,15 @@ streams:
   # CLIENT DATA - Territory-based filtering for ALL users
   # ============================================================
 
-  # Clients - sync all clients for caravan to view
-  # BUSINESS RULE: Caravan users can VIEW all clients
+  # Clients - sync all clients
+  # Note: Territory filtering done in mobile app local sync rules
   clients:
     auto_subscribe: true
     query: |
       SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
         c.birth_date, c.pan, c.client_type, c.product_type, c.market_type, c.pension_type,
         c.psgc_id, c.province, c.municipality, c.region, c.barangay,
-        c.is_starred, c.loan_released, c.udi, c.full_address,
+        c.is_starred, c.loan_released, c.udi,
         c.created_at, c.updated_at
       FROM clients c
 
