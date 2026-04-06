@@ -558,33 +558,192 @@ Authorization: Bearer <token>
 
 | Method | Endpoint | Description | Role Required |
 |--------|----------|-------------|---------------|
-| GET | `/dashboard/kpi` | Get KPI metrics | Admin, Manager |
-| GET | `/dashboard/performance` | Get performance data | Admin, Manager |
-| GET | `/dashboard/trends` | Get trend data | Admin, Manager |
+| GET | `/dashboard/target-progress` | Get target progress for current user | Yes |
+| GET | `/dashboard/team-performance` | Get team performance metrics | Admin, Manager |
+| GET | `/dashboard/action-items` | Get action items (overdue visits, follow-ups) | Yes |
 
-#### KPI Metrics
+#### Target Progress
 ```
-GET /dashboard/kpi?period=month&agencyId=uuid
+GET /dashboard/target-progress?period=weekly
+```
+
+**Query Parameters:**
+- `period` (optional): `daily` | `weekly` | `monthly` | `quarterly` (default: user's default period)
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "target": {
+      "id": "uuid",
+      "userId": "uuid",
+      "period": "weekly",
+      "targetClients": 50,
+      "targetTouchpoints": 100,
+      "targetConversions": 10
+    },
+    "progress": {
+      "clientsCount": 35,
+      "touchpointsCount": 72,
+      "conversionsCount": 7,
+      "clientsPercentage": 70,
+      "touchpointsPercentage": 72,
+      "conversionsPercentage": 70
+    },
+    "period": {
+      "start": "2026-04-01T00:00:00Z",
+      "end": "2026-04-07T23:59:59Z",
+      "current": true
+    }
+  }
+}
+```
+
+#### Team Performance
+```
+GET /dashboard/team-performance?period=weekly
+```
+
+**Query Parameters:**
+- `period` (optional): `daily` | `weekly` | `monthly` | `quarterly` (default: `weekly`)
+- `limit` (optional): Number of records (default: 10)
+- `role` (optional): Filter by role (admin, area_manager, assistant_area_manager, caravan, tele)
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "userId": "uuid",
+      "firstName": "Juan",
+      "lastName": "Dela Cruz",
+      "role": "caravan",
+      "target": {
+        "targetClients": 50,
+        "targetTouchpoints": 100,
+        "targetConversions": 10
+      },
+      "progress": {
+        "clientsCount": 35,
+        "touchpointsCount": 72,
+        "conversionsCount": 7,
+        "clientsPercentage": 70,
+        "touchpointsPercentage": 72,
+        "conversionsPercentage": 70
+      }
+    }
+  ]
+}
+```
+
+#### Action Items
+```
+GET /dashboard/action-items?limit=20
+```
+
+**Query Parameters:**
+- `limit` (optional): Number of items (default: 20)
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "type": "overdue_visit",
+      "clientId": "uuid",
+      "clientName": "Juan Dela Cruz",
+      "itineraryId": "uuid",
+      "scheduledDate": "2026-04-05",
+      "daysOverdue": 2,
+      "priority": "high"
+    },
+    {
+      "type": "follow_up",
+      "clientId": "uuid",
+      "clientName": "Maria Santos",
+      "touchpointId": "uuid",
+      "lastTouchpointDate": "2026-04-01",
+      "daysSinceLastTouchpoint": 5,
+      "nextTouchpointType": "Call",
+      "priority": "medium"
+    }
+  ],
+  "pagination": {
+    "total": 45,
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+---
+
+### Feature Flags (`/feature-flags`)
+
+| Method | Endpoint | Description | Role Required |
+|--------|----------|-------------|---------------|
+| GET | `/feature-flags` | List all feature flags | Yes |
+| GET | `/feature-flags/check/:name` | Check if feature is enabled for user | Yes |
+| POST | `/feature-flags` | Create feature flag | Admin |
+| PUT | `/feature-flags/:name` | Update feature flag | Admin |
+| DELETE | `/feature-flags/:name` | Delete feature flag | Admin |
+
+#### Check Feature Flag
+```
+GET /feature-flags/check/new_dashboard
 ```
 
 **Response:**
 ```json
 {
-  "totalClients": 500,
-  "newClients": 50,
-  "activeClients": 350,
-  "totalTouchpoints": 1200,
-  "completedTouchpoints": 1000,
-  "conversionRate": 0.25,
-  "avgTouchpointsPerClient": 2.4,
-  "topPerformers": [
-    {
-      "userId": "uuid",
-      "userName": "Juan Dela Cruz",
-      "touchpointCount": 50,
-      "conversionCount": 15
-    }
-  ]
+  "success": true,
+  "enabled": true,
+  "feature": {
+    "name": "new_dashboard",
+    "description": "Redesigned dashboard with improved metrics",
+    "enabled": true,
+    "rolloutPercentage": 100
+  }
+}
+```
+
+#### Create Feature Flag
+```
+POST /feature-flags
+Content-Type: application/json
+```
+
+**Request:**
+```json
+{
+  "name": "new_dashboard",
+  "description": "Redesigned dashboard with improved metrics",
+  "enabled": true,
+  "environments": ["production", "staging"],
+  "roles": ["admin", "area_manager"],
+  "rolloutPercentage": 50,
+  "userIds": ["uuid-1", "uuid-2"]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "id": "uuid",
+    "name": "new_dashboard",
+    "description": "Redesigned dashboard with improved metrics",
+    "enabled": true,
+    "environments": ["production", "staging"],
+    "roles": ["admin", "area_manager"],
+    "rolloutPercentage": 50,
+    "userIds": ["uuid-1", "uuid-2"],
+    "createdAt": "2026-04-07T00:00:00Z"
+  }
 }
 ```
 

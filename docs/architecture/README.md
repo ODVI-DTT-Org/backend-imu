@@ -1,8 +1,8 @@
 # IMU Architecture Documentation
 
-> **Generated:** 2026-04-04
+> **Generated:** 2026-04-07
 > **Project:** IMU (Itinerary Manager Uniformed)
-> **Version:** 2.1 (RBAC System + Error Handling)
+> **Version:** 2.2 (Schema v1.3 - Dashboard Redesign)
 
 ---
 
@@ -15,6 +15,24 @@ IMU is a mobile-first field agent management system with three parallel implemen
 3. **Hono Backend API** - RESTful API with PostgreSQL database and PowerSync integration
 
 **Target Users:** Field agents (Caravan role) managing client visits for retired police personnel (PNP retirees).
+
+---
+
+## What's New in Schema v1.3 (Dashboard Redesign)
+
+### New Tables
+- **targets** - User goal tracking with period-based metrics (daily/weekly/monthly/quarterly)
+- **feature_flags** - Controlled rollout system for new features
+- **action_items** - Materialized view for dashboard action items (overdue visits/follow-ups)
+
+### New API Endpoints
+- **Dashboard APIs:** Target progress, team performance, action items
+- **Feature Flag APIs:** Check features, manage flags (admin only)
+
+### Performance Improvements
+- Added dashboard-specific indexes for < 100-200ms query responses
+- Materialized view for action items with concurrent refresh support
+- Cron job for automated action items refresh (every hour)
 
 ---
 
@@ -346,5 +364,5 @@ The Profile page (`/profile`) displays user information and provides logout func
 
 ---
 
-**Last Updated:** 2026-04-04
-**Documentation Version:** 1.2
+**Last Updated:** 2026-04-07
+**Documentation Version:** 2.2
