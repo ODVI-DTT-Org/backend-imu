@@ -701,6 +701,14 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       ]
     );
 
+    // Mark ALL itineraries for this client as 'completed' when touchpoint is submitted
+    // This ensures the client is removed from itinerary lists across all date tabs
+    await pool.query(
+      `UPDATE itineraries SET status = 'completed', updated_at = NOW()
+       WHERE client_id = $1 AND status = 'pending'`,
+      [validated.client_id]
+    );
+
     return c.json({
       ...mapRowToTouchpoint(result.rows[0]),
       message: 'Touchpoint submitted for approval'
@@ -715,6 +723,200 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     }
     console.error('Create touchpoint error:', error);
     throw new Error('Failed to create touchpoint');
+  }
+});
+
+// POST /api/touchpoints/bulk - Create multiple touchpoints at once
+touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'create'), auditMiddleware('touchpoint'), async (c) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const user = c.get('user');
+    const body = await c.req.json();
+
+    // Validate bulk request schema
+    const bulkTouchpointSchema = z.object({
+      touchpoints: z.array(z.object({
+        client_id: z.string().uuid(),
+        touchpoint_number: z.number().int().min(1).max(7),
+        type: z.enum(['Visit', 'Call']),
+        reason: z.string().min(1).max(100),
+        status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed']).default('Interested'),
+        remarks: z.string().max(1000).optional(),
+        date: z.string().optional(), // Will default to CURRENT_DATE
+        time_in: z.string().optional(),
+        time_out: z.string().optional(),
+        gps_lat: z.number().optional(),
+        gps_lng: z.number().optional(),
+        gps_address: z.string().optional(),
+      })).min(1).max(50), // Max 50 touchpoints at once
+      gps_lat: z.number().optional(), // Shared GPS for all touchpoints
+      gps_lng: z.number().optional(),
+      gps_address: z.string().optional(),
+    });
+
+    const validated = bulkTouchpointSchema.parse(body);
+
+    // Helper function to convert time string (HH:MM) to timestamp
+    const timeToTimestamp = (timeStr: string | null | undefined, dateStr: string): string | null => {
+      if (!timeStr) return null;
+      if (timeStr.includes('T') || timeStr.includes('-')) {
+        return timeStr;
+      }
+      return `${dateStr}T${timeStr}:00`;
+    };
+
+    const createdTouchpoints = [];
+    const errors = [];
+
+    // Process each touchpoint
+    for (const touchpointData of validated.touchpoints) {
+      try {
+        // Apply shared GPS if individual touchpoint doesn't have it
+        const finalGpsLat = touchpointData.gps_lat ?? validated.gps_lat;
+        const finalGpsLng = touchpointData.gps_lng ?? validated.gps_lng;
+        const finalGpsAddress = touchpointData.gps_address ?? validated.gps_address;
+
+        // === Role-based Validation ===
+        if (!canCreateTouchpoint(user.role, touchpointData.touchpoint_number, touchpointData.type)) {
+          errors.push({
+            clientId: touchpointData.client_id,
+            error: user.role === 'caravan'
+              ? 'Caravan users can only create Visit touchpoints (1, 4, 7)'
+              : 'Tele users can only create Call touchpoints (2, 3, 5, 6)',
+          });
+          continue;
+        }
+
+        // Check if client exists and loan not released
+        const clientCheck = await client.query(
+          `SELECT id, loan_released::int as loan_released_bool FROM clients WHERE id = $1`,
+          [touchpointData.client_id]
+        );
+
+        if (clientCheck.rows.length === 0) {
+          errors.push({
+            clientId: touchpointData.client_id,
+            error: 'Client not found',
+          });
+          continue;
+        }
+
+        const clientData = clientCheck.rows[0];
+        if (clientData.loan_released || clientData.loan_released_bool) {
+          errors.push({
+            clientId: touchpointData.client_id,
+            error: 'Loan already released',
+          });
+          continue;
+        }
+
+        // Check if touchpoint already exists
+        const existingCheck = await client.query(
+          `SELECT id FROM touchpoints WHERE client_id = $1 AND touchpoint_number = $2`,
+          [touchpointData.client_id, touchpointData.touchpoint_number]
+        );
+
+        if (existingCheck.rows.length > 0) {
+          errors.push({
+            clientId: touchpointData.client_id,
+            error: `Touchpoint #${touchpointData.touchpoint_number} already exists`,
+          });
+          continue;
+        }
+
+        // Use provided date or default to CURRENT_DATE
+        const date = touchpointData.date || new Date().toISOString().split('T')[0];
+
+        // Convert time_in and time_out to timestamps
+        const time_in = timeToTimestamp(touchpointData.time_in, date);
+        const time_out = timeToTimestamp(touchpointData.time_out, date);
+
+        // Insert touchpoint - match exact database schema order
+        // Columns: client_id, user_id, touchpoint_number, type, date, address, time_arrival, time_departure,
+        //          odometer_arrival, odometer_departure, reason, status, next_visit_date, notes,
+        //          photo_url, audio_url, latitude, longitude, time_in, time_in_gps_lat, time_in_gps_lng,
+        //          time_in_gps_address, time_out, time_out_gps_lat, time_out_gps_lng, time_out_gps_address
+        const result = await client.query(
+          `INSERT INTO touchpoints (
+            client_id, user_id, touchpoint_number, type, date, address,
+            time_arrival, time_departure, odometer_arrival, odometer_departure,
+            reason, status, next_visit_date, notes, photo_url, audio_url,
+            latitude, longitude,
+            time_in, time_in_gps_lat, time_in_gps_lng, time_in_gps_address,
+            time_out, time_out_gps_lat, time_out_gps_lng, time_out_gps_address
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10,
+            $11, $12, $13, $14, $15, $16,
+            $17, $18,
+            $19, $20, $21, $22, $23,
+            $24, $25, $26, $27
+          ) RETURNING *`,
+          [
+            touchpointData.client_id,
+            user.sub,
+            touchpointData.touchpoint_number,
+            touchpointData.type,
+            date,
+            finalGpsAddress || null,  // address
+            null,  // time_arrival
+            null,  // time_departure
+            null,  // odometer_arrival
+            null,  // odometer_departure
+            touchpointData.reason,
+            touchpointData.status,
+            null,  // next_visit_date
+            touchpointData.remarks || null,  // notes (remarks from mobile maps to notes in DB)
+            null,  // photo_url
+            null,  // audio_url
+            finalGpsLat,  // latitude
+            finalGpsLng,  // longitude
+            time_in,
+            finalGpsLat,  // time_in_gps_lat
+            finalGpsLng,  // time_in_gps_lng
+            finalGpsAddress,  // time_in_gps_address
+            time_out,
+            null,  // time_out_gps_lat (not captured yet)
+            null,  // time_out_gps_lng
+            null,  // time_out_gps_address
+          ]
+        );
+
+        createdTouchpoints.push(mapRowToTouchpoint(result.rows[0]));
+      } catch (error) {
+        console.error(`Error creating touchpoint for client ${touchpointData.client_id}:`, error);
+        errors.push({
+          clientId: touchpointData.client_id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return c.json({
+      message: `Created ${createdTouchpoints.length} touchpoint(s)`,
+      created: createdTouchpoints,
+      errors: errors,
+      totalCount: validated.touchpoints.length,
+      successCount: createdTouchpoints.length,
+      errorCount: errors.length,
+    }, 201);
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    console.error('Bulk touchpoint creation error:', error);
+    throw new Error('Failed to create bulk touchpoints');
+  } finally {
+    client.release();
   }
 });
 
