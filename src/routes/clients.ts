@@ -486,7 +486,8 @@ clients.get('/', authMiddleware, async (c) => {
           expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
         } else if (user.role === 'tele') {
           // Tele: Only Call types (2, 3, 5, 6)
-          canCreateTouchpoint = nextTouchpointType === 'Call' || completedCount === 0;
+          // FIX: Cannot create touchpoint 1 (Visit) - that's for Caravan
+          canCreateTouchpoint = nextTouchpointType === 'Call';
           expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
         } else {
           // Admin/Manager: Can create any touchpoint
@@ -786,7 +787,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
           canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
           expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
         } else if (user.role === 'tele') {
-          canCreateTouchpoint = nextTouchpointType === 'Call' || completedCount === 0;
+          // Tele: Only Call types (2, 3, 5, 6)
+          // FIX: Cannot create touchpoint 1 (Visit) - that's for Caravan
+          canCreateTouchpoint = nextTouchpointType === 'Call';
           expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
         } else {
           canCreateTouchpoint = true;
@@ -921,7 +924,9 @@ clients.get('/:id', authMiddleware, async (c) => {
         canCreateTouchpoint = nextTouchpointType === 'Visit' || completedTouchpoints === 0;
         expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
       } else if (user.role === 'tele') {
-        canCreateTouchpoint = nextTouchpointType === 'Call' || completedTouchpoints === 0;
+        // Tele: Only Call types (2, 3, 5, 6)
+        // FIX: Cannot create touchpoint 1 (Visit) - that's for Caravan
+        canCreateTouchpoint = nextTouchpointType === 'Call';
         expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
       } else {
         canCreateTouchpoint = true;
