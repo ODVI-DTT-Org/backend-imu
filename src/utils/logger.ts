@@ -70,20 +70,30 @@ class Logger {
     console.log(this.getDivider());
   }
 
-  databaseQuery(table: string, operation: string, duration?: number): void {
-    if (!this.shouldLog('debug')) return;
+  databaseQuery(table: string, operation: string, duration?: number, details?: { query?: string; params?: any[]; rows?: number }): void {
+    if (!this.shouldLog('info')) return; // Changed from debug to info level
 
     const message = duration
       ? `Query took ${duration}ms`
       : 'Executing query';
 
-    console.log(this.formatMessage(`Database Query (${table})`, message, { operation }));
+    const logDetails: any = { operation };
+    if (details?.query) logDetails.query = details.query;
+    if (details?.params && details.params.length > 0) logDetails.params = details.params;
+    if (details?.rows !== undefined) logDetails.rows = details.rows;
+
+    console.log(this.formatMessage(`Database Query (${table})`, message, logDetails));
   }
 
   databaseError(table: string, error: any): void {
     if (!this.shouldLog('error')) return;
 
-    console.log(this.formatMessage(`Database Error (${table})`, error.message || 'Unknown error'));
+    const errorDetails: any = { message: error.message || 'Unknown error' };
+    if (error.query) errorDetails.query = error.query;
+    if (error.params) errorDetails.params = error.params;
+    if (error.duration !== undefined) errorDetails.duration = error.duration;
+
+    console.log(this.formatMessage(`Database Error (${table})`, error.message || 'Unknown error', errorDetails));
   }
 
   info(context: string, message: string, details?: any): void {

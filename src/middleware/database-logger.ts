@@ -84,18 +84,38 @@ function sanitizeParams(params: any[]): any[] {
 }
 
 /**
- * Log a database query using simplified logger
+ * Truncate query for logging (show first N chars)
+ */
+function truncateQuery(query: string, maxLength: number = 200): string {
+  if (query.length <= maxLength) return query;
+  return query.substring(0, maxLength) + '...';
+}
+
+/**
+ * Log a database query with full SQL and parameters
  */
 function logQuery(queryLog: QueryLog) {
   if (!DB_LOGGING_ENABLED) return;
 
   const tableName = extractTableName(queryLog.query);
   const operation = extractOperation(queryLog.query);
+  const sanitizedParams = queryLog.params ? sanitizeParams(queryLog.params) : [];
+  const truncatedQuery = truncateQuery(queryLog.query);
 
   if (queryLog.error) {
-    logger.databaseError(tableName, { message: queryLog.error, operation });
+    logger.databaseError(tableName, {
+      message: queryLog.error,
+      operation,
+      query: truncatedQuery,
+      params: sanitizedParams,
+      duration: queryLog.duration,
+    });
   } else {
-    logger.databaseQuery(tableName, operation, queryLog.duration);
+    logger.databaseQuery(tableName, operation, queryLog.duration, {
+      query: truncatedQuery,
+      params: sanitizedParams.length > 0 ? sanitizedParams : undefined,
+      rows: queryLog.rows,
+    });
   }
 }
 

@@ -954,12 +954,38 @@ clients.get('/:id', authMiddleware, async (c) => {
 
 // POST /api/clients - Create new client
 clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditMiddleware('client'), async (c) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+
     const user = c.get('user');
     const body = await c.req.json();
     const validated = createClientSchema.parse(body);
 
-    const result = await pool.query(
+    // For Tele and Caravan users, create approval request instead of inserting directly
+    if (user.role === 'tele' || user.role === 'caravan') {
+      // Store client data as JSON in notes field
+      const clientData = JSON.stringify(validated);
+
+      // Create approval request for client creation
+      const approvalResult = await client.query(
+        `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+         VALUES (gen_random_uuid(), $1, NULL, $2, $3, $4, $5, 'pending')
+         RETURNING *`,
+        ['client', user.sub, user.role, 'Client Creation Request', clientData]
+      );
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Client creation submitted for approval',
+        approval: mapRowToApproval(approvalResult.rows[0]),
+        requires_approval: true
+      });
+    }
+
+    // For Admin users, create directly
+    const result = await client.query(
       `INSERT INTO clients (
         id, first_name, last_name, middle_name, birth_date, email, phone,
         agency_name, department, position, employment_status, payroll_date, tenure,
@@ -978,8 +1004,10 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
       ]
     );
 
+    await client.query('COMMIT');
     return c.json(mapRowToClient(result.rows[0]), 201);
   } catch (error) {
+    await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Validation failed');
       error.errors.forEach((err: any) => {
@@ -989,6 +1017,8 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
     }
     console.error('Create client error:', error);
     throw new Error();
+  } finally {
+    client.release();
   }
 });
 

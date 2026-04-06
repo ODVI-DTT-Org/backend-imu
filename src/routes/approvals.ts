@@ -440,6 +440,41 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       }
     }
 
+    // For client creation approvals, create the client
+    let newClientId: string | null = null;
+    if (approval.type === 'client' && approval.reason === 'Client Creation Request') {
+      try {
+        const clientData = JSON.parse(approval.notes);
+
+        // Insert the new client
+        const insertResult = await client.query(
+          `INSERT INTO clients (
+            first_name, last_name, middle_name, birth_date, email, phone,
+            agency_name, department, position, employment_status, payroll_date, tenure,
+            client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
+            agency_id, caravan_id, is_starred
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+          ) RETURNING id`,
+          [
+            clientData.first_name, clientData.last_name, clientData.middle_name, clientData.birth_date,
+            clientData.email, clientData.phone, clientData.agency_name, clientData.department,
+            clientData.position, clientData.employment_status, clientData.payroll_date, clientData.tenure,
+            clientData.client_type, clientData.product_type, clientData.market_type, clientData.pension_type,
+            clientData.pan, clientData.facebook_link, clientData.remarks, clientData.agency_id,
+            clientData.caravan_id, clientData.is_starred
+          ]
+        );
+
+        newClientId = insertResult.rows[0].id;
+        console.log(`Created new client ${newClientId} from approval`);
+      } catch (parseError) {
+        console.error('Failed to parse client creation data or create client:', parseError);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to create client from approval');
+      }
+    }
+
     // For client edit approvals, apply the changes to the client
     let clientChanges: Record<string, any> | null = null;
     if (approval.type === 'client' && approval.reason === 'Client Edit Request') {
@@ -509,9 +544,10 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
            notes = COALESCE($2, notes),
            updated_udi = $3,
            updated_client_information = $4,
+           client_id = COALESCE($5, client_id),
            updated_at = NOW()
-       WHERE id = $5 RETURNING *`,
-      [user.sub, validated?.notes, udiNumber, clientChanges ? JSON.stringify(clientChanges) : null, id]
+       WHERE id = $6 RETURNING *`,
+      [user.sub, validated?.notes, udiNumber, clientChanges ? JSON.stringify(clientChanges) : null, newClientId, id]
     );
 
     await client.query('COMMIT');
