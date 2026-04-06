@@ -521,7 +521,17 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
     const id = c.req.param('id');
 
     const result = await pool.query(
-      `SELECT c.*,
+      `SELECT c.id, c.first_name, c.last_name, c.middle_name, c.birth_date, c.email, c.phone,
+        c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
+        c.tenure, c.client_type, c.product_type, c.market_type, c.pension_type,
+        c.pan, c.facebook_link, c.remarks, c.agency_id, c.caravan_id, c.is_starred,
+        c.psgc_id, c.region, c.province, c.municipality, c.barangay,
+        c.loan_released, c.loan_released_at, c.udi, c.deleted_at,
+        c.created_at, c.updated_at,
+        psg.region as psgc_region,
+        psg.province as psgc_province,
+        psg.mun_city as psgc_municipality,
+        psg.barangay as psgc_barangay,
         COALESCE(
           json_agg(DISTINCT a) FILTER (WHERE a.id IS NOT NULL), '[]'
         ) as addresses,
@@ -561,16 +571,18 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
           ) FILTER (WHERE t.id IS NOT NULL), '[]'
         ) as touchpoints
        FROM clients c
+       LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id
        LEFT JOIN phone_numbers p ON p.client_id = c.id
        LEFT JOIN touchpoints t ON t.client_id = c.id
        WHERE c.id = $1
-       GROUP BY c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
-                c.birth_date, c.pan, c.client_type, c.product_type, c.market_type,
-                c.pension_type, c.psgc_id, c.region, c.province, c.municipality, c.barangay,
+       GROUP BY c.id, c.first_name, c.last_name, c.middle_name, c.birth_date, c.email, c.phone,
                 c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
-                c.tenure, c.facebook_link, c.remarks, c.agency_id, c.user_id, c.is_starred,
-                c.loan_released, c.loan_released_at, c.udi, c.created_at, c.updated_at
+                c.tenure, c.client_type, c.product_type, c.market_type, c.pension_type,
+                c.pan, c.facebook_link, c.remarks, c.agency_id, c.caravan_id, c.is_starred,
+                c.psgc_id, c.region, c.province, c.municipality, c.barangay,
+                c.loan_released, c.loan_released_at, c.udi, c.deleted_at,
+                c.created_at, c.updated_at, psg.region, psg.province, psg.mun_city, psg.barangay
       `,
       [id]
     );
