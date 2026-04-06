@@ -504,7 +504,7 @@ clients.get('/', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: completedCount >= 7, // Only complete when 7/7 touchpoints done
+          is_complete: completedCount >= 7 || loanReleased, // Complete when 7/7 touchpoints OR loan released
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
@@ -803,7 +803,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: completedCount >= 7,
+          is_complete: completedCount >= 7 || loanReleased,
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
