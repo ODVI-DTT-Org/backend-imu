@@ -479,11 +479,11 @@ clients.get('/', authMiddleware, async (c) => {
       } else if (nextTouchpointNumber) {
         if (user.role === 'caravan') {
           // Caravan: Only Visit types (1, 4, 7)
-          canCreateTouchpoint = nextTouchpointType === 'Visit';
+          canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
           expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
         } else if (user.role === 'tele') {
           // Tele: Only Call types (2, 3, 5, 6)
-          canCreateTouchpoint = nextTouchpointType === 'Call';
+          canCreateTouchpoint = nextTouchpointType === 'Call' || completedCount === 0;
           expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
         } else {
           // Admin/Manager: Can create any touchpoint
@@ -780,10 +780,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
         expectedRole = null;
       } else if (nextTouchpointNumber) {
         if (user.role === 'caravan') {
-          canCreateTouchpoint = nextTouchpointType === 'Visit';
+          canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
           expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
         } else if (user.role === 'tele') {
-          canCreateTouchpoint = nextTouchpointType === 'Call';
+          canCreateTouchpoint = nextTouchpointType === 'Call' || completedCount === 0;
           expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
         } else {
           canCreateTouchpoint = true;
@@ -915,10 +915,10 @@ clients.get('/:id', authMiddleware, async (c) => {
       expectedRole = null;
     } else if (nextTouchpointNumber) {
       if (user.role === 'caravan') {
-        canCreateTouchpoint = nextTouchpointType === 'Visit';
+        canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
         expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
       } else if (user.role === 'tele') {
-        canCreateTouchpoint = nextTouchpointType === 'Call';
+        canCreateTouchpoint = nextTouchpointType === 'Call' || completedCount === 0;
         expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
       } else {
         canCreateTouchpoint = true;
