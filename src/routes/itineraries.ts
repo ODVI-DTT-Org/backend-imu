@@ -259,7 +259,7 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     // Validate that client exists, check loan_released status, and user has access to client's municipality
     // RULE: loan_released clients cannot be added to itinerary (they're "done")
     const clientCheck = await pool.query(
-      `SELECT id, municipality, loan_released::int as loan_released_bool FROM clients WHERE id = $1`,
+      `SELECT id, municipality, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL`,
       [validated.client_id]
     );
     if (clientCheck.rows.length === 0) {

@@ -180,7 +180,7 @@ async function matchClientToPSGC(client: any): Promise<PSGCMatchResult> {
  */
 async function updateClientPSGC(clientId: string, psgcId: string): Promise<void> {
   await pool.query(
-    'UPDATE clients SET psgc_id = $1, updated_at = NOW() WHERE id = $2',
+    'UPDATE clients SET psgc_id = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
     [psgcId, clientId]
   );
 }

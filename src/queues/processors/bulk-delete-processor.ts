@@ -135,6 +135,7 @@ export class BulkDeleteProcessor extends BaseProcessor<BulkJobData, JobResult> {
       bulk_delete_groups: 'groups',
       bulk_delete_caravans: 'caravans',
       bulk_delete_itineraries: 'itineraries',
+      bulk_delete_my_day: 'itineraries',
       bulk_delete_clients: 'clients',
       bulk_delete_touchpoints: 'touchpoints',
     };

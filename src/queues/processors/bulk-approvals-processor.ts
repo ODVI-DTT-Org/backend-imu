@@ -153,7 +153,7 @@ export class BulkApprovalsProcessor extends BaseProcessor<BulkJobData, JobResult
               if (updateFields.length > 0) {
                 updateValues.push(approval!.client_id);
                 await client.query(
-                  `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex}`,
+                  `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} AND deleted_at IS NULL`,
                   updateValues
                 );
               }

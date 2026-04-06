@@ -104,7 +104,7 @@ targets.get('/current', authMiddleware, requirePermission('targets', 'read'), as
     // Get actual progress
     const progressResult = await pool.query(
       `SELECT
-        (SELECT COUNT(*) FROM clients WHERE user_id = $1 AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3) as actual_clients,
+        (SELECT COUNT(*) FROM clients WHERE user_id = $1 AND deleted_at IS NULL AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3) as actual_clients,
         (SELECT COUNT(*) FROM touchpoints WHERE user_id = $1 AND EXTRACT(MONTH FROM date) = $2 AND EXTRACT(YEAR FROM date) = $3) as actual_touchpoints,
         (SELECT COUNT(*) FROM touchpoints WHERE user_id = $1 AND type = 'Visit' AND EXTRACT(MONTH FROM date) = $2 AND EXTRACT(YEAR FROM date) = $3) as actual_visits`,
       [userId, month, year]

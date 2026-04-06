@@ -14,6 +14,7 @@ export enum BulkJobType {
   BULK_DELETE_GROUPS = 'bulk_delete_groups',
   BULK_DELETE_CARAVANS = 'bulk_delete_caravans',
   BULK_DELETE_ITINERARIES = 'bulk_delete_itineraries',
+  BULK_DELETE_MY_DAY = 'bulk_delete_my_day',
   BULK_DELETE_CLIENTS = 'bulk_delete_clients',
   BULK_DELETE_TOUCHPOINTS = 'bulk_delete_touchpoints',
 

@@ -7,6 +7,8 @@ import { requirePermission } from '../middleware/permissions.js';
 import { rateLimit } from '../middleware/rate-limit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 import {
   ValidationError,
   NotFoundError,
@@ -81,7 +83,7 @@ myDay.post('/add-client', authMiddleware, requirePermission('clients', 'update')
     // Verify client exists and check if loan is released
     // RULE: loan_released clients cannot be added to itinerary/My Day (they're "done")
     const clientCheck = await pool.query(
-      'SELECT *, loan_released::int as loan_released_bool FROM clients WHERE id = $1',
+      'SELECT *, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL',
       [validated.client_id]
     );
 
@@ -219,6 +221,51 @@ myDay.delete('/remove-client/:id', authMiddleware, requirePermission('clients', 
   }
 });
 
+// Bulk delete validation schema
+const bulkDeleteSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(100)
+});
+
+// POST /api/my-day/bulk-delete - Bulk delete from My Day (now queued)
+myDay.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'delete'), async (c) => {
+  try {
+    const user = c.get('user');
+    if (!user) throw new Error('Unauthorized');
+
+    const { ids } = bulkDeleteSchema.parse(await c.req.json());
+
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_MY_DAY,
+      user.sub,
+      ids
+    );
+
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} my day items`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      return c.json({
+        success: false,
+        message: 'Invalid request body',
+        code: 'VALIDATION_ERROR',
+        errors: error.errors,
+      }, 400);
+    }
+    console.error('Bulk delete my day error:', error);
+    return c.json({
+      success: false,
+      message: 'Failed to create bulk delete job',
+    }, 500);
+  }
+});
+
 // GET /api/my-day/status/:clientId - Check if client is in today's itinerary
 myDay.get('/status/:clientId', authMiddleware, requirePermission('clients', 'read'), async (c) => {
   try {
@@ -259,7 +306,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.client_type,
               a.name as agency_name
        FROM itineraries i
-       JOIN clients c ON c.id = i.client_id
+       JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
        LEFT JOIN agencies a ON a.id = c.agency_id
        WHERE i.user_id = $1 AND i.scheduled_date = $2
        ORDER BY i.scheduled_time ASC NULLS LAST, i.priority DESC`,
@@ -271,7 +318,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       `SELECT t.id, t.client_id, t.touchpoint_number, t.type, t.reason, t.time_arrival, t.time_departure,
               c.first_name, c.last_name, c.client_type
        FROM touchpoints t
-       JOIN clients c ON c.id = t.client_id
+       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        WHERE t.user_id = $1 AND t.date = $2
        ORDER BY t.created_at DESC`,
       [user.sub, targetDate]
@@ -407,9 +454,9 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
     const body = await c.req.json();
     const validated = timeInSchema.parse(body);
 
-    // Verify client belongs to this caravan
+    // Verify client belongs to this caravan (not soft-deleted)
     const clientCheck = await pool.query(
-      'SELECT * FROM clients WHERE id = $1 AND user_id = $2',
+      'SELECT * FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
       [clientId, user.sub]
     );
 
@@ -472,9 +519,9 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
     const body = await c.req.json();
     const validated = timeOutSchema.parse(body);
 
-    // Verify client exists (no ownership check - any caravan can visit any client)
+    // Verify client exists (not soft-deleted, no ownership check - any caravan can visit any client)
     const clientCheck = await pool.query(
-      'SELECT * FROM clients WHERE id = $1',
+      'SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL',
       [clientId]
     );
 
@@ -719,9 +766,9 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     await pool.query('BEGIN');
 
     try {
-      // Verify client exists
+      // Verify client exists (not soft-deleted)
       const clientCheck = await pool.query(
-        'SELECT * FROM clients WHERE id = $1',
+        'SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL',
         [clientId]
       );
 
@@ -1148,9 +1195,9 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     await pool.query('BEGIN');
 
     try {
-      // Step 1: Verify client exists
+      // Step 1: Verify client exists (not soft-deleted)
       const clientCheck = await pool.query(
-        'SELECT * FROM clients WHERE id = $1',
+        'SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL',
         [clientId]
       );
 

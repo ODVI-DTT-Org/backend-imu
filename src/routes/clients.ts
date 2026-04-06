@@ -1040,8 +1040,8 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
 
     const validated = updateClientSchema.parse(body);
 
-    // Check if client exists
-    const existingResult = await client.query('SELECT * FROM clients WHERE id = $1', [id]);
+    // Check if client exists (not soft-deleted)
+    const existingResult = await client.query('SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (existingResult.rows.length === 0) {
       await client.query('ROLLBACK');
       throw new NotFoundError('Client');
@@ -1156,8 +1156,8 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     const body = await c.req.json();
     const validated = patchClientSchema.parse(body);
 
-    // Check if client exists
-    const existingResult = await client.query('SELECT * FROM clients WHERE id = $1', [id]);
+    // Check if client exists (not soft-deleted)
+    const existingResult = await client.query('SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (existingResult.rows.length === 0) {
       await client.query('ROLLBACK');
       throw new NotFoundError('Client');

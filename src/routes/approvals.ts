@@ -423,7 +423,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
           // Update client's UDI
           await client.query(
-            'UPDATE clients SET udi = $1, updated_at = NOW() WHERE id = $2',
+            'UPDATE clients SET udi = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
             [udiNumber, approval.client_id]
           );
 
@@ -526,7 +526,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         if (updateFields.length > 0) {
           updateValues.push(approval.client_id);
           await client.query(
-            `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex}`,
+            `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} AND deleted_at IS NULL`,
             updateValues
           );
         }
@@ -858,7 +858,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
 
     // Check if client exists and if loan already released
     const clientCheck = await client.query(
-      'SELECT id, first_name, last_name, loan_released FROM clients WHERE id = $1',
+      'SELECT id, first_name, last_name, loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL',
       [validated.client_id]
     );
 
@@ -876,7 +876,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
 
     // Step 1: Mark client as loan_released
     await client.query(
-      'UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(), updated_at = NOW() WHERE id = $1',
+      'UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(), updated_at = NOW() WHERE id = $1 AND deleted_at IS NULL',
       [validated.client_id]
     );
 

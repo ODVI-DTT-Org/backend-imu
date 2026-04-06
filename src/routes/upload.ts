@@ -97,7 +97,7 @@ upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (
 
         if (needsApproval) {
           // Check if client exists
-          const existingClient = await client.query('SELECT id FROM clients WHERE id = $1', [id]);
+          const existingClient = await client.query('SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
           if (existingClient.rows.length === 0) {
             results.push({ id, operation, success: false, error: 'Client not found', approval_required: true });
             continue;

@@ -95,14 +95,14 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         'touchpoint' as type, t.id, t.created_at as date,
         c.first_name || ' ' || c.last_name as client_name
        FROM touchpoints t
-       JOIN clients c ON c.id = t.client_id
+       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        WHERE t.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 't.user_id')}
        UNION ALL
        SELECT
         'itinerary' as type, i.id, i.created_at as date,
         c.first_name || ' ' || c.last_name as client_name
        FROM itineraries i
-       JOIN clients c ON c.id = i.client_id
+       JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
        WHERE i.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 'i.user_id')}
        ORDER BY date DESC
        LIMIT 10`,

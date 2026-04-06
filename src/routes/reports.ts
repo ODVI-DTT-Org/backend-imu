@@ -352,7 +352,7 @@ reports.get('/target-achievement', authMiddleware, requirePermission('reports', 
     // Get actuals
     const actualsResult = await pool.query(
       `SELECT
-        (SELECT COUNT(*) FROM clients WHERE user_id = $1
+        (SELECT COUNT(*) FROM clients WHERE user_id = $1 AND deleted_at IS NULL
          AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3) as actual_clients,
         (SELECT COUNT(*) FROM touchpoints WHERE user_id = $1
          AND EXTRACT(MONTH FROM date) = $2 AND EXTRACT(YEAR FROM date) = $3) as actual_touchpoints,
@@ -518,7 +518,7 @@ reports.get('/area-coverage', authMiddleware, requirePermission('reports', 'read
         COUNT(DISTINCT t.client_id) as unique_clients,
         COUNT(DISTINCT CASE WHEN t.type = 'Visit' THEN t.id END) as visits
        FROM touchpoints t
-       JOIN clients c ON c.id = t.client_id
+       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        LEFT JOIN addresses a ON a.client_id = c.id AND a.is_primary = true
        ${whereClause}
        GROUP BY a.city
@@ -533,7 +533,7 @@ reports.get('/area-coverage', authMiddleware, requirePermission('reports', 'read
         COUNT(DISTINCT t.id) as touchpoints,
         COUNT(DISTINCT t.client_id) as unique_clients
        FROM touchpoints t
-       JOIN clients c ON c.id = t.client_id
+       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        LEFT JOIN addresses a ON a.client_id = c.id AND a.is_primary = true
        ${whereClause}
        GROUP BY a.province
@@ -548,7 +548,7 @@ reports.get('/area-coverage', authMiddleware, requirePermission('reports', 'read
         COUNT(DISTINCT a.city) as cities_covered,
         COUNT(DISTINCT a.province) as provinces_covered
        FROM touchpoints t
-       JOIN clients c ON c.id = t.client_id
+       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        LEFT JOIN addresses a ON a.client_id = c.id AND a.is_primary = true
        ${whereClause}`,
       params
@@ -606,7 +606,7 @@ reports.get('/export', authMiddleware, requirePermission('reports', 'export'), a
                   c.first_name as client_first_name, c.last_name as client_last_name,
                   u.first_name as agent_first_name, u.last_name as agent_last_name
            FROM touchpoints t
-           JOIN clients c ON c.id = t.client_id
+           JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
            JOIN users u ON u.id = t.user_id
            WHERE t.date >= $1 AND t.date <= $2
            ORDER BY t.date DESC`,

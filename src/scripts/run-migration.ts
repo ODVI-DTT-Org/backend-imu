@@ -5,9 +5,12 @@
  * Usage: pnpm exec tsx src/scripts/run-migration.ts <migration-file>
  */
 
-import { pool } from '../db/index.js';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
+
+// Load .env file before importing database
+import 'dotenv/config';
+import { pool } from '../db/index.js';
 
 async function runMigration(migrationFile: string) {
   const client = await pool.connect();

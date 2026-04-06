@@ -3,10 +3,11 @@
 -- Issue: Dashboard needs target tracking for clients, touchpoints, visits
 -- Solution: Create targets table with monthly/weekly/daily periods and performance indexes
 
-BEGIN;
+-- Drop table if it exists from partial migration
+DROP TABLE IF EXISTS targets CASCADE;
 
 -- Create targets table
-CREATE TABLE IF NOT EXISTS targets (
+CREATE TABLE targets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   period TEXT NOT NULL CHECK (period IN ('daily', 'weekly', 'monthly', 'quarterly')),
@@ -20,26 +21,19 @@ CREATE TABLE IF NOT EXISTS targets (
   target_calls INTEGER DEFAULT 0 CHECK (target_calls >= 0),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  created_by UUID REFERENCES users(id),
-  UNIQUE(user_id, period, year, COALESCE(month, 0), COALESCE(quarter, 0), COALESCE(week, 0))
+  created_by UUID REFERENCES users(id)
 );
 
 -- Index for user queries (most common: get targets for specific user)
-CREATE INDEX IF NOT EXISTS idx_targets_user_period ON targets(user_id, period, year, month, quarter, week);
+CREATE INDEX idx_targets_user_period ON targets(user_id, period, year, month, quarter, week);
 
 -- Index for admin queries (all targets for a period)
-CREATE INDEX IF NOT EXISTS idx_targets_period ON targets(period, year, month, quarter, week);
+CREATE INDEX idx_targets_period ON targets(period, year, month, quarter, week);
 
 -- Index for manager queries (area-based, filtered by created_by)
-CREATE INDEX IF NOT EXISTS idx_targets_created_by ON targets(created_by);
+CREATE INDEX idx_targets_created_by ON targets(created_by);
 
 -- Create updated_at trigger
 CREATE TRIGGER update_targets_updated_at
     BEFORE UPDATE ON targets
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
-COMMIT;
-
--- Verification query
--- SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'targets' ORDER BY ordinal_position;
--- SELECT indexname FROM pg_indexes WHERE tablename = 'targets';

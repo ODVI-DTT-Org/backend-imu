@@ -537,7 +537,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     // === Loan Released Validation ===
     // RULE: Cannot create touchpoints for clients with released loans (they're "done")
     const clientCheck = await pool.query(
-      `SELECT id, loan_released::int as loan_released_bool FROM clients WHERE id = $1`,
+      `SELECT id, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL`,
       [validated.client_id]
     );
     if (clientCheck.rows.length === 0) {
@@ -800,7 +800,7 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
 
         // Check if client exists and loan not released
         const clientCheck = await client.query(
-          `SELECT id, loan_released::int as loan_released_bool FROM clients WHERE id = $1`,
+          `SELECT id, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL`,
           [touchpointData.client_id]
         );
 

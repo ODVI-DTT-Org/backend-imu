@@ -132,7 +132,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
   private async processPsgcMatching(client: any, clientId: string): Promise<void> {
     // Get client information
     const clientResult = await client.query(
-      'SELECT municipality, province FROM clients WHERE id = $1',
+      'SELECT municipality, province FROM clients WHERE id = $1 AND deleted_at IS NULL',
       [clientId]
     );
 
@@ -159,7 +159,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
 
     // Update client with PSGC code
     await client.query(
-      'UPDATE clients SET psgc_code = $1, updated_at = NOW() WHERE id = $2',
+      'UPDATE clients SET psgc_code = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
       [psgcData.code, clientId]
     );
   }

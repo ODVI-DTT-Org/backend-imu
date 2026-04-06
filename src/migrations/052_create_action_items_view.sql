@@ -3,8 +3,6 @@
 -- Issue: Dashboard needs action items for overdue visits and follow-ups
 -- Solution: Create materialized view with periodic refresh for performance
 
-BEGIN;
-
 -- Drop existing view if it exists
 DROP MATERIALIZED VIEW IF EXISTS action_items CASCADE;
 
@@ -21,7 +19,7 @@ WITH overdue_visits AS (
     c.municipality,
     i.scheduled_date,
     u.id as assigned_to,
-    EXTRACT(DAY FROM CURRENT_DATE - i.scheduled_date) as days_overdue
+    (CURRENT_DATE - i.scheduled_date)::INTEGER as days_overdue
   FROM itineraries i
   JOIN clients c ON i.client_id = c.id
   JOIN users u ON c.user_id = u.id
@@ -41,7 +39,7 @@ WITH overdue_visits AS (
     c.municipality,
     MAX(t.date) as scheduled_date,
     c.user_id as assigned_to,
-    EXTRACT(DAY FROM CURRENT_DATE - MAX(t.date)) as days_overdue
+    (CURRENT_DATE - MAX(t.date))::INTEGER as days_overdue
   FROM clients c
   JOIN touchpoints t ON t.client_id = c.id
   WHERE c.loan_released = false
@@ -66,9 +64,3 @@ COMMENT ON MATERIALIZED VIEW action_items IS 'Action items for dashboard: overdu
 COMMENT ON COLUMN action_items.action_type IS 'Type of action: overdue_visit or overdue_followup';
 COMMENT ON COLUMN action_items.priority IS 'Priority level: high, medium, low';
 COMMENT ON COLUMN action_items.days_overdue IS 'Number of days overdue (for sorting)';
-
-COMMIT;
-
--- Verification query
--- SELECT * FROM action_items LIMIT 10;
--- Refresh command: REFRESH MATERIALIZED VIEW action_items;

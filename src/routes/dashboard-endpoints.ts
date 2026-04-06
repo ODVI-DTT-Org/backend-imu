@@ -41,7 +41,7 @@ export async function getTargetProgress(params: {
       LEFT JOIN touchpoints t ON t.client_id = c.id
         AND t.date >= $2::date
         AND t.date <= $3::date
-      WHERE c.user_id = $1 OR c.user_id IS NULL
+      WHERE (c.user_id = $1 OR c.user_id IS NULL) AND c.deleted_at IS NULL
     )
     SELECT
       t.*,
@@ -144,7 +144,7 @@ export async function getTeamPerformance(params: {
         COALESCE(SUM(targ.target_touchpoints), 0) as touchpointsTarget,
         COALESCE(SUM(targ.target_visits), 0) as visitsTarget
       FROM users u
-      LEFT JOIN clients c ON c.user_id = u.id
+      LEFT JOIN clients c ON c.user_id = u.id AND c.deleted_at IS NULL
       LEFT JOIN touchpoints t ON t.client_id = c.id
         AND t.date >= $1::date AND t.date <= $2::date
       LEFT JOIN targets targ ON targ.user_id = u.id
