@@ -147,7 +147,7 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
 
     // Get paginated results
     const result = await pool.query(
-      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url,
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url, u.is_active,
               u.created_at, u.updated_at
        FROM users u
        ${whereClause}
@@ -181,7 +181,7 @@ users.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c) 
     }
 
     const result = await pool.query(
-      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url,
+      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url, u.is_active,
               u.created_at, u.updated_at
        FROM users u
        WHERE u.id = $1`,

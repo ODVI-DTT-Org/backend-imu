@@ -1222,23 +1222,25 @@ function mapRowToApproval(row: Record<string, any>) {
   };
 }
 
-// DELETE /api/clients/:id - Delete client
+// DELETE /api/clients/:id - Delete client (soft delete, admin only)
 clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), auditMiddleware('client'), async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');
 
-    // Check if client exists and user has access
-    const existingResult = await pool.query('SELECT * FROM clients WHERE id = $1', [id]);
+    // Soft delete: Only admin users can delete clients
+    if (user.role !== 'admin') {
+      throw new AuthorizationError('Only administrators can delete clients');
+    }
+
+    // Check if client exists and is not already deleted
+    const existingResult = await pool.query('SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (existingResult.rows.length === 0) {
       throw new NotFoundError('Client');
     }
 
-    if (user.role === 'caravan' && existingResult.rows[0].user_id !== user.sub) {
-      throw new AuthorizationError('You do not have permission to perform this action');
-    }
-
-    await pool.query('DELETE FROM clients WHERE id = $1', [id]);
+    // Soft delete: Set deleted_at timestamp instead of deleting the record
+    await pool.query('UPDATE clients SET deleted_at = NOW() WHERE id = $1', [id]);
     return c.json({ message: 'Client deleted successfully' });
   } catch (error) {
     console.error('Delete client error:', error);
