@@ -11,6 +11,7 @@ import { reportsProcessor } from './processors/reports-processor.js';
 import { csvExportsProcessor } from './processors/csv-exports-processor.js';
 import { locationAssignmentsProcessor } from './processors/location-assignments-processor.js';
 import { syncOperationsProcessor } from './processors/sync-operations-processor.js';
+import { excelReportsProcessor } from './processors/excel-reports-processor.js';
 import { getQueueManager } from './queue-manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -65,6 +66,13 @@ export async function startWorkers() {
       queueManager.registerWorker('sync-operations', syncOperationsWorker);
     }
 
+    // Register Excel reports processor
+    await excelReportsProcessor.start();
+    const excelReportsWorker = excelReportsProcessor.getWorker();
+    if (excelReportsWorker) {
+      queueManager.registerWorker('reports', excelReportsWorker);
+    }
+
     // Removed verbose startup logs - now handled by init-logger
   } catch (error) {
     logger.error('Workers', 'Failed to start workers', error);
@@ -94,6 +102,9 @@ export async function stopWorkers() {
 
     logger.info('Workers', 'Stopping sync operations processor...');
     await syncOperationsProcessor.stop();
+
+    logger.info('Workers', 'Stopping Excel reports processor...');
+    await excelReportsProcessor.stop();
 
     logger.info('Workers', 'All workers stopped successfully');
   } catch (error) {

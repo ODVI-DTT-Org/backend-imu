@@ -43,6 +43,12 @@ export enum ReportJobType {
   EXPORT_TOUCHPOINTS_CSV = 'export_touchpoints_csv',
   EXPORT_CLIENTS_CSV = 'export_clients_csv',
   EXPORT_ATTENDANCE_CSV = 'export_attendance_csv',
+
+  // Excel Reports (Executive Dashboard)
+  EXCEL_EXECUTIVE_DASHBOARD = 'excel_executive_dashboard',
+  EXCEL_QUICK_REPORT = 'excel_quick_report',
+  EXCEL_CUSTOM_REPORT = 'excel_custom_report',
+  EXCEL_SCHEDULED_REPORT = 'excel_scheduled_report',
 }
 
 /**
@@ -126,7 +132,14 @@ export interface ReportJobData extends BaseJobData {
     municipality?: string;
     province?: string;
     clientType?: string;
-    format?: 'json' | 'csv';
+    format?: 'json' | 'csv' | 'excel';
+    // Excel-specific parameters
+    reportMode?: 'quick' | 'custom' | 'scheduled';
+    sheets?: string[];
+    columns?: string[];
+    filters?: Record<string, any>;
+    scheduledReportId?: string;
+    recipients?: string[];
   };
 }
 
