@@ -37,7 +37,7 @@ const createClientSchema = z.object({
   facebook_link: z.string().max(500).optional(),
   remarks: z.string().max(1000).optional(),
   agency_id: z.string().uuid().optional().nullable(),
-  caravan_id: z.string().uuid().optional().nullable(),
+  user_id: z.string().uuid().optional().nullable(),
   is_starred: z.boolean().default(false),
   loan_released: z.boolean().optional().default(false),
   loan_released_at: z.string().max(50).optional(),
@@ -94,7 +94,7 @@ function mapRowToClient(row: Record<string, any>) {
     facebook_link: row.facebook_link,
     remarks: row.remarks,
     agency_id: row.agency_id,
-    caravan_id: row.caravan_id,
+    user_id: row.user_id,
     // Address fields (from addresses table, mapped to client for easier access)
     street: row.street,
     // PSGC fields
@@ -915,10 +915,10 @@ clients.get('/:id', authMiddleware, async (c) => {
       expectedRole = null;
     } else if (nextTouchpointNumber) {
       if (user.role === 'caravan') {
-        canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
+        canCreateTouchpoint = nextTouchpointType === 'Visit' || completedTouchpoints === 0;
         expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
       } else if (user.role === 'tele') {
-        canCreateTouchpoint = nextTouchpointType === 'Call' || completedCount === 0;
+        canCreateTouchpoint = nextTouchpointType === 'Call' || completedTouchpoints === 0;
         expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
       } else {
         canCreateTouchpoint = true;
@@ -990,7 +990,7 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         id, first_name, last_name, middle_name, birth_date, email, phone,
         agency_name, department, position, employment_status, payroll_date, tenure,
         client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
-        agency_id, caravan_id, is_starred
+        agency_id, user_id, is_starred
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
       ) RETURNING *`,
@@ -1000,7 +1000,7 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         validated.position, validated.employment_status, validated.payroll_date, validated.tenure,
         validated.client_type, validated.product_type, validated.market_type, validated.pension_type,
         validated.pan, validated.facebook_link, validated.remarks, validated.agency_id,
-        validated.caravan_id, validated.is_starred
+        validated.user_id, validated.is_starred
       ]
     );
 
@@ -1094,7 +1094,7 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
       facebook_link: 'facebook_link',
       remarks: 'remarks',
       agency_id: 'agency_id',
-      caravan_id: 'caravan_id',
+      user_id: 'user_id',
       region: 'region',
       province: 'province',
       municipality: 'municipality',
@@ -1234,7 +1234,7 @@ clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), a
       throw new NotFoundError('Client');
     }
 
-    if (user.role === 'field_agent' && existingResult.rows[0].caravan_id !== user.sub) {
+    if (user.role === 'caravan' && existingResult.rows[0].user_id !== user.sub) {
       throw new AuthorizationError('You do not have permission to perform this action');
     }
 
@@ -1318,7 +1318,7 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     const clientType = c.req.query('client_type');
 
     const offset = (page - 1) * perPage;
-    const conditions: string[] = ['c.caravan_id IS NULL'];
+    const conditions: string[] = ['c.user_id IS NULL'];
     const params: any[] = [];
     let paramIndex = 1;
 
