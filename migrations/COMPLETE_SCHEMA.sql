@@ -3,8 +3,10 @@
 -- ============================================================
 -- This script creates the complete IMU database schema
 -- including all tables, indexes, triggers, and views
--- Version: 1.2 (as of 2026-04-04)
+-- Version: 1.3 (as of 2026-04-07)
 -- Changes:
+-- - Added dashboard tables: targets, action_items, feature_flags
+-- - Added dashboard performance indexes for < 100-200ms queries
 -- - Added dashboard, approvals, error_logs RBAC permissions
 -- - Updated user_locations to use province + municipality columns
 -- - Updated group_municipalities to use province + municipality columns
@@ -1109,6 +1111,140 @@ CREATE INDEX IF NOT EXISTS idx_error_logs_resolved_timestamp ON error_logs(resol
 -- Apply updated_at trigger for error_logs table
 DROP TRIGGER IF EXISTS update_error_logs_updated_at ON error_logs;
 CREATE TRIGGER update_error_logs_updated_at BEFORE UPDATE ON error_logs FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- DASHBOARD TABLES
+-- ============================================================
+-- Targets table for tracking user goals and performance metrics
+CREATE TABLE IF NOT EXISTS targets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    period TEXT NOT NULL CHECK (period IN ('daily', 'weekly', 'monthly', 'quarterly')),
+    year INTEGER NOT NULL CHECK (year >= EXTRACT(YEAR FROM CURRENT_DATE) - 1 AND year <= EXTRACT(YEAR FROM CURRENT_DATE) + 1),
+    month INTEGER CHECK (month >= 1 AND month <= 12),
+    quarter INTEGER CHECK (quarter >= 1 AND quarter <= 4),
+    week INTEGER CHECK (week >= 1 AND week <= 53),
+    target_clients INTEGER DEFAULT 0 CHECK (target_clients >= 0),
+    target_touchpoints INTEGER DEFAULT 0 CHECK (target_touchpoints >= 0),
+    target_visits INTEGER DEFAULT 0 CHECK (target_visits >= 0),
+    target_calls INTEGER DEFAULT 0 CHECK (target_calls >= 0),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    created_by UUID REFERENCES users(id)
+);
+
+-- Create indexes for targets table
+CREATE INDEX IF NOT EXISTS idx_targets_user_period ON targets(user_id, period, year, month, quarter, week);
+CREATE INDEX IF NOT EXISTS idx_targets_period ON targets(period, year, month, quarter, week);
+CREATE INDEX IF NOT EXISTS idx_targets_created_by ON targets(created_by);
+
+-- Apply updated_at trigger for targets table
+DROP TRIGGER IF EXISTS update_targets_updated_at ON targets;
+CREATE TRIGGER update_targets_updated_at BEFORE UPDATE ON targets FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Feature flags table for controlled rollout of new features
+CREATE TABLE IF NOT EXISTS feature_flags (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    enabled BOOLEAN DEFAULT false NOT NULL,
+    user_whitelist TEXT[] DEFAULT '{}',
+    role_whitelist TEXT[] DEFAULT '{}',
+    environment_whitelist TEXT[] DEFAULT '{}',
+    percentage INTEGER DEFAULT 0 CHECK (percentage >= 0 AND percentage <= 100),
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
+);
+
+-- Create indexes for feature_flags table
+CREATE INDEX IF NOT EXISTS idx_feature_flags_enabled ON feature_flags(enabled) WHERE enabled = true;
+CREATE INDEX IF NOT EXISTS idx_feature_flags_name ON feature_flags(name);
+CREATE INDEX IF NOT EXISTS idx_feature_flags_environment ON feature_flags USING GIN(environment_whitelist);
+CREATE INDEX IF NOT EXISTS idx_feature_flags_role ON feature_flags USING GIN(role_whitelist);
+
+-- Apply updated_at trigger for feature_flags table
+DROP TRIGGER IF EXISTS update_feature_flags_updated_at ON feature_flags;
+CREATE TRIGGER update_feature_flags_updated_at BEFORE UPDATE ON feature_flags FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- DASHBOARD MATERIALIZED VIEWS
+-- ============================================================
+-- Action items materialized view for dashboard
+DROP MATERIALIZED VIEW IF EXISTS action_items CASCADE;
+
+CREATE MATERIALIZED VIEW action_items AS
+WITH overdue_visits AS (
+  -- Overdue visits (past scheduled date, not completed)
+  SELECT
+    'overdue_visit' as action_type,
+    'high' as priority,
+    c.id as client_id,
+    c.first_name,
+    c.last_name,
+    c.municipality,
+    i.scheduled_date,
+    u.id as assigned_to,
+    (CURRENT_DATE - i.scheduled_date)::INTEGER as days_overdue
+  FROM itineraries i
+  JOIN clients c ON i.client_id = c.id
+  JOIN users u ON c.user_id = u.id
+  WHERE i.scheduled_date < CURRENT_DATE
+    AND i.status NOT IN ('completed', 'cancelled')
+    AND c.user_id = u.id
+
+  UNION ALL
+
+  -- Overdue follow-ups (no touchpoint in 14+ days for interested clients)
+  SELECT
+    'overdue_followup' as action_type,
+    'medium' as priority,
+    c.id as client_id,
+    c.first_name,
+    c.last_name,
+    c.municipality,
+    MAX(t.date) as scheduled_date,
+    c.user_id as assigned_to,
+    (CURRENT_DATE - MAX(t.date))::INTEGER as days_overdue
+  FROM clients c
+  JOIN touchpoints t ON t.client_id = c.id
+  WHERE c.loan_released = false
+    AND EXISTS (
+      SELECT 1 FROM touchpoints
+      WHERE client_id = c.id
+        AND status IN ('Interested', 'Undecided')
+        AND date > CURRENT_DATE - INTERVAL '30 days'
+    )
+  GROUP BY c.id, c.first_name, c.last_name, c.municipality, c.user_id
+  HAVING MAX(t.date) < CURRENT_DATE - INTERVAL '14 days'
+)
+SELECT * FROM overdue_visits
+ORDER BY priority DESC, days_overdue DESC;
+
+-- Create indexes on materialized view for fast queries
+CREATE UNIQUE INDEX idx_action_items_client_type ON action_items(client_id, action_type);
+CREATE INDEX IF NOT EXISTS idx_action_items_priority ON action_items(priority);
+CREATE INDEX IF NOT EXISTS idx_action_items_assigned_to ON action_items(assigned_to);
+
+-- ============================================================
+-- DASHBOARD PERFORMANCE INDEXES
+-- ============================================================
+-- Touchpoints performance indexes
+CREATE INDEX IF NOT EXISTS idx_touchpoints_client_date ON touchpoints(client_id, date DESC);
+CREATE INDEX IF NOT EXISTS idx_touchpoints_client_type_status ON touchpoints(client_id, type, status);
+CREATE INDEX IF NOT EXISTS idx_touchpoints_date ON touchpoints(date DESC);
+CREATE INDEX IF NOT EXISTS idx_touchpoints_client_user_date ON touchpoints(client_id, date DESC, type);
+
+-- Clients performance indexes
+CREATE INDEX IF NOT EXISTS idx_clients_user_type ON clients(user_id, client_type);
+CREATE INDEX IF NOT EXISTS idx_clients_municipality_loan ON clients(municipality, loan_released);
+CREATE INDEX IF NOT EXISTS idx_clients_loan_released ON clients(loan_released);
+
+-- Itineraries performance indexes
+CREATE INDEX IF NOT EXISTS idx_itineraries_user_status_date ON itineraries(user_id, status, scheduled_date);
+CREATE INDEX IF NOT EXISTS idx_itineraries_client_status ON itineraries(client_id, status);
+
+-- Users performance indexes
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 
 -- ============================================================
 -- POWERSYNC PUBLICATION SETUP
