@@ -532,14 +532,8 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        COALESCE(client_touchpoints.touchpoints, '[]') as touchpoints
-       FROM clients c
-       LEFT JOIN psgc psg ON psg.id = c.psgc_id
-       LEFT JOIN addresses a ON a.client_id = c.id
-       LEFT JOIN phone_numbers p ON p.client_id = c.id
-       LEFT JOIN LATERAL (
-         SELECT
-           json_agg(json_build_object(
+        COALESCE(
+          (SELECT json_agg(json_build_object(
              'id', t.id,
              'client_id', t.client_id,
              'user_id', t.user_id,
@@ -568,10 +562,15 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
              'time_out_gps_address', t.time_out_gps_address,
              'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
              'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z')
-           ) ORDER BY t.touchpoint_number) as touchpoints
-         FROM touchpoints t
-         WHERE t.client_id = c.id
-       ) client_touchpoints ON true
+           ) ORDER BY t.touchpoint_number)
+           FROM touchpoints t
+           WHERE t.client_id = c.id
+          ), '[]'
+        ) as touchpoints
+       FROM clients c
+       LEFT JOIN psgc psg ON psg.id = c.psgc_id
+       LEFT JOIN addresses a ON a.client_id = c.id
+       LEFT JOIN phone_numbers p ON p.client_id = c.id
        WHERE c.id = $1
        GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay
       `,
