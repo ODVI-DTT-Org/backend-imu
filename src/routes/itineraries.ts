@@ -245,6 +245,13 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
   try {
     const user = c.get('user');
     const body = await c.req.json();
+
+    // Debug logging to see what's being received
+    console.log('[Itineraries POST] Request body:', JSON.stringify(body, null, 2));
+    console.log('[Itineraries POST] user_id value:', body.user_id, 'type:', typeof body.user_id);
+    console.log('[Itineraries POST] client_id value:', body.client_id, 'type:', typeof body.client_id);
+    console.log('[Itineraries POST] scheduled_date value:', body.scheduled_date, 'type:', typeof body.scheduled_date);
+
     const validated = createItinerarySchema.parse(body);
 
     // Validate that scheduled_date is not in the past
@@ -306,6 +313,13 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     return c.json(mapRowToItinerary(result.rows[0]), 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
+      // Log detailed Zod validation errors
+      console.error('[Itineraries POST] Zod validation errors:');
+      error.errors.forEach((err: any) => {
+        console.error(`  Field: ${err.path[0] || 'unknown'}, Message: ${err.message}, Code: ${err.code}`);
+        console.error(`  Received value:`, err.received);
+      });
+
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
         validationError.addFieldError(err.path[0] || 'unknown', err.message);
