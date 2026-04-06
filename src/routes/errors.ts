@@ -258,10 +258,11 @@ errors.post('/', async (c) => {
         os_version,
         platform,
         device_info,
+        is_synced,
         suggestions,
         documentation_url
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25
       )
       RETURNING id
     `;
@@ -288,6 +289,7 @@ errors.post('/', async (c) => {
       report.osVersion || null,
       report.platform || null,
       report.deviceInfo ? JSON.stringify(report.deviceInfo) : null,
+      false, // is_synced: false by default (will be synced for mobile)
       report.suggestions || [],
       report.documentationUrl || null,
     ];
