@@ -8,6 +8,7 @@ import { authMiddleware, requireRole } from './middleware/auth.js';
 import { logger, simpleRequestLogger } from './utils/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
+import { startScheduler, stopScheduler } from './services/cronScheduler.js';
 import './middleware/database-logger.js'; // Initialize database query logging
 import { initializeBackend, isInitializationSuccessful } from './utils/init-logger.js';
 import { processMobileErrorLogs } from './services/errorLogsBatchProcessor.js';
@@ -39,6 +40,7 @@ import errorLogsRoutes from './routes/error-logs.js';
 import errorsRoutes from './routes/errors.js';
 import jobsRoutes from './routes/jobs.js';
 import powersyncRoutes from './routes/powersync.js';
+import featureFlagsRoutes from './routes/feature-flags.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
@@ -593,6 +595,7 @@ app.get('/', (c) => {
       errorLogs: '/api/error-logs',
       errors: '/api/errors',
       jobs: '/api/jobs',
+      featureFlags: '/api/feature-flags',
     },
   });
 });
@@ -624,6 +627,7 @@ app.route('/api/error-logs', errorLogsRoutes);
 app.route('/api/errors', errorsRoutes);
 app.route('/api/jobs', jobsRoutes);
 app.route('/api/powersync', powersyncRoutes);
+app.route('/api/feature-flags', featureFlagsRoutes);
 
 // 404 handler
 app.notFound((c) => {
@@ -692,6 +696,9 @@ if (!isInitializationSuccessful(initSummary, initResults)) {
 logger.info('Startup', 'Starting IMU Backend API...');
 logger.info('Startup', `Server running on http://localhost:${port}`);
 
+// Start cron scheduler for scheduled tasks
+startScheduler();
+
 // Batch process mobile error logs every 5 minutes
 cron.schedule('*/5 * * * *', async () => {
   await processMobileErrorLogs();
@@ -715,4 +722,17 @@ cron.schedule('0 2 * * *', async () => {
 serve({
   fetch: app.fetch,
   port,
+});
+
+// Graceful shutdown handler
+process.on('SIGINT', () => {
+  logger.info('Shutdown', 'Received SIGINT, shutting down gracefully...');
+  stopScheduler();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  logger.info('Shutdown', 'Received SIGTERM, shutting down gracefully...');
+  stopScheduler();
+  process.exit(0);
 });

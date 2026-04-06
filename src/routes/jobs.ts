@@ -25,6 +25,8 @@ import { logger } from '../utils/logger.js';
 import { getQueueManager } from '../queues/index.js';
 import { requireRole } from '../middleware/auth.js';
 import { getJobStatus, cancelJob as cancelBullMQJob } from '../queues/utils/job-helpers.js';
+import { manualRefreshActionItems } from '../services/actionItemsRefreshService.js';
+import { getSchedulerStatus, triggerTask } from '../services/cronScheduler.js';
 
 const jobs = new Hono();
 
@@ -303,6 +305,72 @@ jobs.get('/health', authMiddleware, requireRole('admin'), async (c) => {
     return c.json({
       success: false,
       message: 'Failed to get queue health',
+      error: error.message,
+    }, 500);
+  }
+});
+
+/**
+ * POST /api/jobs/refresh/action-items
+ * Manually refresh the action_items materialized view (admin only)
+ */
+jobs.post('/refresh/action-items', authMiddleware, requireRole('admin'), async (c) => {
+  try {
+    const result = await manualRefreshActionItems();
+    return c.json(result);
+  } catch (error: any) {
+    logger.error('jobs/refresh-action-items', error);
+    return c.json({
+      success: false,
+      message: 'Failed to refresh action items',
+      error: error.message,
+    }, 500);
+  }
+});
+
+/**
+ * GET /api/jobs/scheduler/status
+ * Get cron scheduler status (admin only)
+ */
+jobs.get('/scheduler/status', authMiddleware, requireRole('admin'), async (c) => {
+  try {
+    const status = getSchedulerStatus();
+    return c.json({
+      success: true,
+      scheduler: status,
+    });
+  } catch (error: any) {
+    logger.error('jobs/scheduler-status', error);
+    return c.json({
+      success: false,
+      message: 'Failed to get scheduler status',
+      error: error.message,
+    }, 500);
+  }
+});
+
+/**
+ * POST /api/jobs/scheduler/trigger/:taskName
+ * Manually trigger a scheduled task (admin only)
+ */
+jobs.post('/scheduler/trigger/:taskName', authMiddleware, requireRole('admin'), async (c) => {
+  try {
+    const taskName = c.req.param('taskName');
+
+    if (!taskName) {
+      return c.json({
+        success: false,
+        message: 'Task name is required',
+      }, 400);
+    }
+
+    const result = await triggerTask(taskName);
+    return c.json(result);
+  } catch (error: any) {
+    logger.error('jobs/trigger-task', error);
+    return c.json({
+      success: false,
+      message: 'Failed to trigger task',
       error: error.message,
     }, 500);
   }
