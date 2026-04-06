@@ -91,8 +91,8 @@ auth.post('/login', authRateLimit, async (c) => {
     throw new InvalidCredentialsError();
   }
 
-  // Generate access token (1 day = 24 hours)
-  const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '24');
+  // Generate access token (30 days = 720 hours)
+  const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '720');
 
   const accessToken = sign(
     {

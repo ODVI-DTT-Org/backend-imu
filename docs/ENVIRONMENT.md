@@ -25,7 +25,7 @@ DATABASE_URL=postgresql://user:password@host:5432/database_name
 
 # JWT Authentication
 JWT_SECRET=your-super-secret-key-min-256-bits
-JWT_EXPIRY_HOURS=24           # Access token expiration (1 day)
+JWT_EXPIRY_HOURS=720          # Access token expiration (30 days)
 JWT_REFRESH_EXPIRY_DAYS=30    # Refresh token expiration (30 days)
 
 # PowerSync

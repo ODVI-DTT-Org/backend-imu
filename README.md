@@ -24,7 +24,7 @@ Copy `.env.example` to `.env` and configure:
 ```env
 DATABASE_URL=postgresql://user:password@localhost:5432/imu
 JWT_SECRET=your-256-bit-secret-key
-JWT_EXPIRY_HOURS=24
+JWT_EXPIRY_HOURS=720
 PORT=3000
 ```
 
