@@ -575,7 +575,7 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
          GROUP BY t.client_id
        ) client_touchpoints ON client_touchpoints.client_id = c.id
        WHERE c.id = $1
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, client_touchpoints.touchpoints
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay
       `,
       [id, id]
     );
