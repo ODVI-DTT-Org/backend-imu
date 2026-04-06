@@ -452,7 +452,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             first_name, last_name, middle_name, birth_date, email, phone,
             agency_name, department, position, employment_status, payroll_date, tenure,
             client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
-            agency_id, caravan_id, is_starred
+            agency_id, user_id, is_starred
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
           ) RETURNING id`,
@@ -462,7 +462,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             clientData.position, clientData.employment_status, clientData.payroll_date, clientData.tenure,
             clientData.client_type, clientData.product_type, clientData.market_type, clientData.pension_type,
             clientData.pan, clientData.facebook_link, clientData.remarks, clientData.agency_id,
-            clientData.caravan_id, clientData.is_starred
+            clientData.user_id, clientData.is_starred
           ]
         );
 
@@ -507,7 +507,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
           facebook_link: 'facebook_link',
           remarks: 'remarks',
           agency_id: 'agency_id',
-          caravan_id: 'caravan_id',
+          user_id: 'user_id',
           region: 'region',
           province: 'province',
           municipality: 'municipality',

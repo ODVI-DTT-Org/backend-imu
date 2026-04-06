@@ -549,12 +549,21 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     const client = clientCheck.rows[0];
     if (client.loan_released || client.loan_released_bool) {
-      return c.json({
-        message: 'Cannot create touchpoint: Loan has already been released for this client',
-        errorCode: 'LOAN_ALREADY_RELEASED',
-        clientId: validated.client_id,
-        loanReleasedAt: null // TODO: Add loan_released_at to response if needed
-      }, 400);
+      // EXCEPTION: Allow preterm touchpoints even when loan is released
+      // Preterm reasons include: "preterm", "Preterm", "PRETERM", or reason_code starting with "PRETERM"
+      const isPretermTouchpoint = validated.reason && (
+        validated.reason.toLowerCase().includes('preterm') ||
+        validated.reason.toUpperCase().startsWith('PRETERM')
+      );
+
+      if (!isPretermTouchpoint) {
+        return c.json({
+          message: 'Cannot create touchpoint: Loan has already been released for this client',
+          errorCode: 'LOAN_ALREADY_RELEASED',
+          clientId: validated.client_id,
+          loanReleasedAt: null // TODO: Add loan_released_at to response if needed
+        }, 400);
+      }
     }
 
     // === Touchpoint Sequence Validation ===
@@ -805,10 +814,20 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
 
         const clientData = clientCheck.rows[0];
         if (clientData.loan_released || clientData.loan_released_bool) {
-          errors.push({
-            clientId: touchpointData.client_id,
-            error: 'Loan already released',
-          });
+          // EXCEPTION: Allow preterm touchpoints even when loan is released
+          // Preterm reasons include: "preterm", "Preterm", "PRETERM", or reason_code starting with "PRETERM"
+          const isPretermTouchpoint = touchpointData.reason && (
+            touchpointData.reason.toLowerCase().includes('preterm') ||
+            touchpointData.reason.toUpperCase().startsWith('PRETERM')
+          );
+
+          if (!isPretermTouchpoint) {
+            errors.push({
+              clientId: touchpointData.client_id,
+              error: 'Loan already released',
+            });
+          }
+          // If it's a preterm touchpoint, skip this validation and continue
           continue;
         }
 
