@@ -521,13 +521,7 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
     const id = c.req.param('id');
 
     const result = await pool.query(
-      `SELECT c.id, c.first_name, c.last_name, c.middle_name, c.birth_date, c.email, c.phone,
-        c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
-        c.tenure, c.client_type, c.product_type, c.market_type, c.pension_type,
-        c.pan, c.facebook_link, c.remarks, c.agency_id, c.caravan_id, c.is_starred,
-        c.psgc_id, c.region, c.province, c.municipality, c.barangay,
-        c.loan_released, c.loan_released_at, c.udi,
-        c.created_at, c.updated_at,
+      `SELECT c.*,
         psg.region as psgc_region,
         psg.province as psgc_province,
         psg.mun_city as psgc_municipality,
@@ -538,53 +532,52 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        COALESCE(
-          json_agg(DISTINCT json_build_object(
-            'id', t.id,
-            'client_id', t.client_id,
-            'user_id', t.user_id,
-            'touchpoint_number', t.touchpoint_number,
-            'touchpoint_type', t.type,
-            'reason', t.reason,
-            'status', t.status,
-            'date', to_char(t.date, 'YYYY-MM-DD'),
-            'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS'),
-            'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS'),
-            'time_arrival', t.time_arrival,
-            'time_departure', t.time_departure,
-            'odometer_arrival', t.odometer_arrival,
-            'odometer_departure', t.odometer_departure,
-            'next_visit_date', to_char(t.next_visit_date, 'YYYY-MM-DD'),
-            'notes', t.notes,
-            'photo_url', t.photo_url,
-            'audio_url', t.audio_url,
-            'latitude', t.latitude,
-            'longitude', t.longitude,
-            'time_in_gps_lat', t.time_in_gps_lat,
-            'time_in_gps_lng', t.time_in_gps_lng,
-            'time_in_gps_address', t.time_in_gps_address,
-            'time_out_gps_lat', t.time_out_gps_lat,
-            'time_out_gps_lng', t.time_out_gps_lng,
-            'time_out_gps_address', t.time_out_gps_address,
-            'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
-            'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z')
-          ) FILTER (WHERE t.id IS NOT NULL), '[]'
-        ) as touchpoints
+        COALESCE(client_touchpoints.touchpoints, '[]') as touchpoints
        FROM clients c
        LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id
        LEFT JOIN phone_numbers p ON p.client_id = c.id
-       LEFT JOIN touchpoints t ON t.client_id = c.id
+       LEFT JOIN (
+         SELECT
+           t.client_id,
+           json_agg(json_build_object(
+             'id', t.id,
+             'client_id', t.client_id,
+             'user_id', t.user_id,
+             'touchpoint_number', t.touchpoint_number,
+             'touchpoint_type', t.type,
+             'reason', t.reason,
+             'status', t.status,
+             'date', to_char(t.date, 'YYYY-MM-DD'),
+             'time_in', to_char(t.time_in, 'YYYY-MM-DD"T"HH24:MI:SS'),
+             'time_out', to_char(t.time_out, 'YYYY-MM-DD"T"HH24:MI:SS'),
+             'time_arrival', t.time_arrival,
+             'time_departure', t.time_departure,
+             'odometer_arrival', t.odometer_arrival,
+             'odometer_departure', t.odometer_departure,
+             'next_visit_date', to_char(t.next_visit_date, 'YYYY-MM-DD'),
+             'notes', t.notes,
+             'photo_url', t.photo_url,
+             'audio_url', t.audio_url,
+             'latitude', t.latitude,
+             'longitude', t.longitude,
+             'time_in_gps_lat', t.time_in_gps_lat,
+             'time_in_gps_lng', t.time_in_gps_lng,
+             'time_in_gps_address', t.time_in_gps_address,
+             'time_out_gps_lat', t.time_out_gps_lat,
+             'time_out_gps_lng', t.time_out_gps_lng,
+             'time_out_gps_address', t.time_out_gps_address,
+             'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
+             'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z')
+           ) ORDER BY t.touchpoint_number) as touchpoints
+         FROM touchpoints t
+         WHERE t.client_id = $2
+         GROUP BY t.client_id
+       ) client_touchpoints ON client_touchpoints.client_id = c.id
        WHERE c.id = $1
-       GROUP BY c.id, c.first_name, c.last_name, c.middle_name, c.birth_date, c.email, c.phone,
-                c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
-                c.tenure, c.client_type, c.product_type, c.market_type, c.pension_type,
-                c.pan, c.facebook_link, c.remarks, c.agency_id, c.caravan_id, c.is_starred,
-                c.psgc_id, c.region, c.province, c.municipality, c.barangay,
-                c.loan_released, c.loan_released_at, c.udi,
-                c.created_at, c.updated_at, psg.region, psg.province, psg.mun_city, psg.barangay
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, client_touchpoints.touchpoints
       `,
-      [id]
+      [id, id]
     );
 
     if (result.rows.length === 0) {
