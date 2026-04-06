@@ -56,16 +56,16 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
 
       switch (type) {
         case 'excel_executive_dashboard':
-          result = await this.generateExecutiveDashboardExcel(userId, params);
+          result = await this.generateExecutiveDashboardExcel(userId, params, job);
           break;
         case 'excel_quick_report':
-          result = await this.generateQuickReportExcel(userId, params);
+          result = await this.generateQuickReportExcel(userId, params, job);
           break;
         case 'excel_custom_report':
-          result = await this.generateCustomReportExcel(userId, params);
+          result = await this.generateCustomReportExcel(userId, params, job);
           break;
         case 'excel_scheduled_report':
-          result = await this.generateScheduledReportExcel(userId, params);
+          result = await this.generateScheduledReportExcel(userId, params, job);
           break;
         default:
           throw new Error(`Unknown Excel report type: ${type}`);
@@ -98,7 +98,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
    * Generate Executive Dashboard Excel report
    * Contains 4 sheets: Executive Summary, Detailed Data, Charts, Methodology
    */
-  private async generateExecutiveDashboardExcel(userId: string, params?: any) {
+  private async generateExecutiveDashboardExcel(userId: string, params?: any, job?: Job<ReportJobData>) {
     const { startDate, endDate } = params || {};
 
     // Create workbook
@@ -107,12 +107,14 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
     workbook.created = new Date();
 
     // Update progress
-    await this.updateProgress(this.currentJob!, {
-      progress: 20,
-      total: 100,
-      current: 1,
-      message: 'Fetching KPI data...',
-    });
+    if (job) {
+      await this.updateProgress(job, {
+        progress: 20,
+        total: 100,
+        current: 1,
+        message: 'Fetching KPI data...',
+      });
+    }
 
     // Fetch KPI data
     const kpiData = await this.fetchDashboardKPIs(startDate, endDate);
@@ -124,14 +126,14 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
     await this.createMethodologySheet(workbook);
 
     // Generate buffer
-    const buffer = await workbook.xlsx.writeBuffer();
+    const buffer = await workbook.xlsx.writeBuffer() as unknown as Buffer;
 
     // Upload to S3
     const fileName = `executive-dashboard-${Date.now()}.xlsx`;
     const fileUrl = await this.uploadToS3(fileName, buffer);
 
     // Update database
-    await this.updateReportJobRecord(userId, 'executive_dashboard', fileUrl, buffer.length);
+    await this.updateReportJobRecord(userId, 'executive_dashboard', fileUrl, buffer.byteLength);
 
     return {
       reportType: 'executive_dashboard',
@@ -140,7 +142,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
       parameters: { startDate, endDate },
       fileUrl,
       fileName,
-      fileSize: buffer.length,
+      fileSize: buffer.byteLength,
       sheets: ['Executive Summary', 'Detailed Data', 'Charts', 'Methodology'],
     };
   }
@@ -148,19 +150,21 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
   /**
    * Generate Quick Report Excel (preset configuration)
    */
-  private async generateQuickReportExcel(userId: string, params?: any) {
+  private async generateQuickReportExcel(userId: string, params?: any, job?: Job<ReportJobData>) {
     const { reportType = 'performance', startDate, endDate } = params || {};
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'IMU System';
     workbook.created = new Date();
 
-    await this.updateProgress(this.currentJob!, {
-      progress: 20,
-      total: 100,
-      current: 1,
-      message: `Fetching ${reportType} data...`,
-    });
+    if (job) {
+      await this.updateProgress(job, {
+        progress: 20,
+        total: 100,
+        current: 1,
+        message: `Fetching ${reportType} data...`,
+      });
+    }
 
     // Fetch report data based on type
     const data = await this.fetchQuickReportData(reportType, startDate, endDate);
@@ -188,11 +192,11 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
     });
 
     // Generate buffer
-    const buffer = await workbook.xlsx.writeBuffer();
+    const buffer = await workbook.xlsx.writeBuffer() as unknown as Buffer;
     const fileName = `quick-${reportType}-${Date.now()}.xlsx`;
     const fileUrl = await this.uploadToS3(fileName, buffer);
 
-    await this.updateReportJobRecord(userId, 'quick', fileUrl, buffer.length);
+    await this.updateReportJobRecord(userId, 'quick', fileUrl, buffer.byteLength);
 
     return {
       reportType: 'quick',
@@ -201,7 +205,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
       parameters: { reportType, startDate, endDate },
       fileUrl,
       fileName,
-      fileSize: buffer.length,
+      fileSize: buffer.byteLength,
       sheets: ['Report'],
     };
   }
@@ -209,19 +213,21 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
   /**
    * Generate Custom Report Excel (user-selected configuration)
    */
-  private async generateCustomReportExcel(userId: string, params?: any) {
+  private async generateCustomReportExcel(userId: string, params?: any, job?: Job<ReportJobData>) {
     const { sheets = [], columns = [], filters = {}, startDate, endDate } = params || {};
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'IMU System';
     workbook.created = new Date();
 
-    await this.updateProgress(this.currentJob!, {
-      progress: 20,
-      total: 100,
-      current: 1,
-      message: 'Fetching custom report data...',
-    });
+    if (job) {
+      await this.updateProgress(job, {
+        progress: 20,
+        total: 100,
+        current: 1,
+        message: 'Fetching custom report data...',
+      });
+    }
 
     // Fetch custom report data
     const data = await this.fetchCustomReportData(sheets, columns, filters, startDate, endDate);
@@ -237,7 +243,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
 
       // Add data
       sheetData.forEach(row => {
-        worksheet.addRow(sheetColumns.map(col => row[col]));
+        worksheet.addRow(sheetColumns.map((col: string) => row[col]));
       });
 
       // Auto-fit columns
@@ -251,11 +257,11 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
       });
     }
 
-    const buffer = await workbook.xlsx.writeBuffer();
+    const buffer = await workbook.xlsx.writeBuffer() as unknown as Buffer;
     const fileName = `custom-${Date.now()}.xlsx`;
     const fileUrl = await this.uploadToS3(fileName, buffer);
 
-    await this.updateReportJobRecord(userId, 'custom', fileUrl, buffer.length);
+    await this.updateReportJobRecord(userId, 'custom', fileUrl, buffer.byteLength);
 
     return {
       reportType: 'custom',
@@ -264,7 +270,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
       parameters: { sheets, columns, filters },
       fileUrl,
       fileName,
-      fileSize: buffer.length,
+      fileSize: buffer.byteLength,
       sheets: sheets.map((s: any) => s.name),
     };
   }
@@ -272,19 +278,21 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
   /**
    * Generate Scheduled Report Excel
    */
-  private async generateScheduledReportExcel(userId: string, params?: any) {
+  private async generateScheduledReportExcel(userId: string, params?: any, job?: Job<ReportJobData>) {
     const { scheduledReportId, recipients = [], ...reportParams } = params || {};
 
     const workbook = new ExcelJS.Workbook();
     workbook.creator = 'IMU System';
     workbook.created = new Date();
 
-    await this.updateProgress(this.currentJob!, {
-      progress: 20,
-      total: 100,
-      current: 1,
-      message: 'Generating scheduled report...',
-    });
+    if (job) {
+      await this.updateProgress(job, {
+        progress: 20,
+        total: 100,
+        current: 1,
+        message: 'Generating scheduled report...',
+      });
+    }
 
     // Get scheduled report configuration
     const scheduleResult = await pool.query(
@@ -303,7 +311,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
     const result = await this.generateCustomReportExcel(userId, {
       ...scheduleParams,
       ...reportParams,
-    });
+    }, job);
 
     // Update last_run_at for scheduled report
     await pool.query(
@@ -696,7 +704,7 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
     const command = new PutObjectCommand({
       Bucket: this.s3Bucket,
       Key: key,
-      Body: buffer,
+      Body: Uint8Array.from(buffer),
       ContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
 
