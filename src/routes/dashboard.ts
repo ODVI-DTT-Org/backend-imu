@@ -14,6 +14,7 @@ import {
   refreshActionItems,
   getActionItemsLastRefresh,
 } from './dashboard-endpoints.js';
+import { kpiCalculatorService } from '../services/kpi-calculator.js';
 
 const dashboard = new Hono();
 
@@ -436,6 +437,44 @@ dashboard.get('/summary', authMiddleware, requirePermission('dashboard', 'read')
   } catch (error) {
     console.error('Get dashboard summary error:', error);
     throw new Error('Failed to get dashboard summary');
+  }
+});
+
+// ============================================
+// Executive Dashboard KPI Endpoint
+// ============================================
+
+const kpiQuerySchema = z.object({
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+/**
+ * GET /api/dashboard/kpi
+ * Get KPIs for Executive Dashboard with traffic light indicators
+ * Performance target: < 200ms
+ */
+dashboard.get('/kpi', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const query = kpiQuerySchema.parse(c.req.query());
+
+    // Calculate all KPIs
+    const kpis = await kpiCalculatorService.calculateAllKPIs(
+      query.start_date,
+      query.end_date
+    );
+
+    return c.json({
+      success: true,
+      data: kpis,
+    });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      throw new ValidationError('Invalid query parameters');
+    }
+    console.error('Get KPIs error:', error);
+    throw new Error('Failed to get KPIs');
   }
 });
 
