@@ -82,4 +82,4 @@ streams:
         a.udi_number, a.approved_by, a.approved_at, a.rejected_by, a.rejected_at,
         a.rejection_reason, a.created_at, a.updated_at
       FROM approvals a
-      WHERE a.user_id = auth.user_id()
+      WHERE a.status = 'pending'
