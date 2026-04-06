@@ -21,7 +21,8 @@ export type AuditAction =
   | 'import'
   | 'bulk_delete'
   | 'bulk_approve'
-  | 'bulk_reject';
+  | 'bulk_reject'
+  | 'refresh';
 
 // Audit entity types
 export type AuditEntity =
@@ -36,7 +37,8 @@ export type AuditEntity =
   | 'attendance'
   | 'approval'
   | 'file'
-  | 'auth';
+  | 'auth'
+  | 'dashboard';
 
 interface AuditLogEntry {
   userId?: string;
