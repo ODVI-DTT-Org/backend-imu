@@ -565,7 +565,12 @@ clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async 
        LEFT JOIN phone_numbers p ON p.client_id = c.id
        LEFT JOIN touchpoints t ON t.client_id = c.id
        WHERE c.id = $1
-       GROUP BY c.id
+       GROUP BY c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
+                c.birth_date, c.pan, c.client_type, c.product_type, c.market_type,
+                c.pension_type, c.psgc_id, c.region, c.province, c.municipality, c.barangay,
+                c.agency_name, c.department, c.position, c.employment_status, c.payroll_date,
+                c.tenure, c.facebook_link, c.remarks, c.agency_id, c.user_id, c.is_starred,
+                c.loan_released, c.loan_released_at, c.udi, c.created_at, c.updated_at
       `,
       [id]
     );
