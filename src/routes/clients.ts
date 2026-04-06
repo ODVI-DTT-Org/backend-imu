@@ -120,7 +120,7 @@ function mapRowToClient(row: Record<string, any>) {
   };
 }
 
-// GET /api/clients - List clients with pagination and filters
+// GET /api/clients - List ALL clients (no area filter) with pagination and filters
 clients.get('/', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
@@ -164,11 +164,9 @@ clients.get('/', authMiddleware, async (c) => {
     // Get user level from role (default to 0 if role not found)
     const userLevel = ROLE_LEVELS[user.role] || 0;
 
-    // Area-based filtering using CTE
-    // NO AREA FILTER when municipality_ids is NOT provided (All Clients mode)
-    // FILTER BY municipality_ids when explicitly provided (Assigned Clients mode)
-    // NO AREA FILTER for oversight roles: Admin (100), Area Manager (50), Assistant Area Manager (40)
-    const shouldFilterByArea = municipalityIds && (userLevel < 40 || ['caravan', 'tele'].includes(user.role));
+    // IMPORTANT: This endpoint returns ALL clients (no area filter)
+    // Area filtering is only applied when municipality_ids is explicitly provided
+    const shouldFilterByArea = municipalityIds && municipalityIds.length > 0;
 
     if (search) {
       conditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${paramIndex} OR c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);
@@ -329,6 +327,7 @@ clients.get('/', authMiddleware, async (c) => {
         END as next_touchpoint_type,
         c.loan_released
       FROM clients c
+      ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
       LEFT JOIN touchpoints t ON t.client_id = c.id
       GROUP BY c.id, c.loan_released
     )`;
@@ -411,6 +410,9 @@ clients.get('/', authMiddleware, async (c) => {
       ${groupScoreFilter}
     `;
 
+    console.log('[clients] COUNT query:', countQuery);
+    console.log('[clients] COUNT params:', baseParams);
+
     const countResult = await pool.query(countQuery, baseParams);
     const totalItems = parseInt(countResult.rows[0].count);
 
@@ -454,6 +456,9 @@ clients.get('/', authMiddleware, async (c) => {
       ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
+
+    console.log('[clients] SELECT query:', mainQuery.substring(0, 500) + '...');
+    console.log('[clients] SELECT params:', [...baseParams, perPage, offset]);
 
     const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
 
@@ -521,8 +526,307 @@ clients.get('/', authMiddleware, async (c) => {
   }
 });
 
+// GET /api/clients/assigned - List ASSIGNED clients for Tele/Caravan (with area filter + callable status)
+clients.get('/assigned', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const page = parseInt(c.req.query('page') || '1');
+    let perPage = parseInt(c.req.query('perPage') || '20');
+
+    // Enforce MAX_PER_PAGE limit for security and performance
+    if (perPage > MAX_PER_PAGE) {
+      throw new ValidationError(`perPage cannot exceed ${MAX_PER_PAGE}`);
+    }
+
+    const search = c.req.query('search');
+    const clientType = c.req.query('client_type');
+    const agencyId = c.req.query('agency_id');
+    const caravanId = c.req.query('caravan_id');
+    const municipality = c.req.query('municipality');
+    const province = c.req.query('province');
+    const productType = c.req.query('product_type');
+    const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
+    const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
+
+    const offset = (page - 1) * perPage;
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Touchpoint sequence: Visit → Call → Call → Visit → Call → Call → Visit
+    // Declared once at the top level to avoid duplicate declarations
+    const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
+
+    // Role level mapping for area-based filtering
+    const ROLE_LEVELS: Record<string, number> = {
+      'admin': 100,
+      'area_manager': 50,
+      'assistant_area_manager': 40,
+      'caravan': 20,
+      'tele': 15,
+    };
+
+    // Get user level from role (default to 0 if role not found)
+    const userLevel = ROLE_LEVELS[user.role] || 0;
+
+    // IMPORTANT: This endpoint ALWAYS filters by user's assigned areas
+    // Caravan/Tele: Filter by their assigned provinces/municipalities from user_locations
+    // Admin/Manager: See all clients (no area filter needed)
+    const shouldFilterByArea = (userLevel < 40 || ['caravan', 'tele'].includes(user.role));
+
+    // Default to 'callable' if touchpoint_status not provided
+    const effectiveTouchpointStatus = touchpointStatus || 'callable';
+
+    // Build WHERE clause conditions for basic client filtering
+    const baseWhereConditions: string[] = [];
+    const baseParams: any[] = [];
+    let baseParamIndex = 1;
+
+    if (search) {
+      baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
+      baseParams.push(`%${search}%`);
+      baseParamIndex++;
+    }
+
+    if (clientType && clientType !== 'all') {
+      baseWhereConditions.push(`c.client_type = $${baseParamIndex}`);
+      baseParams.push(clientType);
+      baseParamIndex++;
+    }
+
+    if (productType && productType !== 'all') {
+      baseWhereConditions.push(`c.product_type = $${baseParamIndex}`);
+      baseParams.push(productType);
+      baseParamIndex++;
+    }
+
+    if (agencyId) {
+      baseWhereConditions.push(`c.agency_id = $${baseParamIndex}`);
+      baseParams.push(agencyId);
+      baseParamIndex++;
+    }
+
+    if (municipality) {
+      baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
+      baseParams.push(municipality);
+      baseParamIndex++;
+    }
+
+    if (province) {
+      baseWhereConditions.push(`c.province = $${baseParamIndex}`);
+      baseParams.push(province);
+      baseParamIndex++;
+    }
+
+    const baseWhereClause = baseWhereConditions.length > 0 ? `WHERE ${baseWhereConditions.join(' AND ')}` : '';
+
+    // Build CTE-based query for proper filter-then-paginate behavior
+    // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
+    // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
+
+    // Add area filter conditions for Caravan/Tele roles
+    let areaFilterWhereClause = '';
+    if (shouldFilterByArea) {
+      // For Caravan/Tele: Filter by assigned provinces/municipalities
+      // Using the new province and municipality columns directly
+      const whereOrAnd = baseWhereClause !== '' ? 'AND' : 'WHERE';
+      areaFilterWhereClause = ` ${whereOrAnd} (
+        c.province IN (SELECT province FROM user_areas)
+        AND c.municipality IN (SELECT municipality FROM user_areas)
+      )`;
+    }
+
+    const touchpointInfoCTE = `touchpoint_info AS (
+      SELECT
+        c.id as client_id,
+        CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
+        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
+        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
+        CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
+          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
+        ).join(' ')}
+          ELSE NULL
+        END as next_touchpoint_type,
+        c.loan_released
+      FROM clients c
+      ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
+      LEFT JOIN touchpoints t ON t.client_id = c.id
+      GROUP BY c.id, c.loan_released
+    )`;
+
+    // Build WITH clause with user_areas CTE if needed
+    let withGroupScoreCTE: string;
+    if (shouldFilterByArea) {
+      withGroupScoreCTE = `WITH user_areas AS (
+        SELECT province, municipality
+        FROM user_locations
+        WHERE user_id = '${user.sub}' AND deleted_at IS NULL
+      ), ${touchpointInfoCTE}`;
+    } else {
+      withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
+    }
+
+    // Always filter by touchpoint status for assigned endpoint (default: callable)
+    // Determine if current user can create the next touchpoint
+    let canCreateCondition = '';
+    if (user.role === 'tele') {
+      // Tele can create Call touchpoints (2, 3, 5, 6)
+      canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
+    } else if (user.role === 'caravan') {
+      canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+    } else {
+      canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
+    }
+
+    // Map touchpoint_status to group score
+    const statusToScoreMap: Record<string, number> = {
+      'callable': 1,
+      'completed': 2,
+      'has_progress': 3,
+      'no_progress': 4
+    };
+
+    const targetScore = statusToScoreMap[effectiveTouchpointStatus];
+    if (targetScore !== undefined) {
+      // Add group score calculation to CTE
+      withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
+        SELECT *,
+          CASE
+            -- Group 1 (callable): User can create next touchpoint AND loan NOT released
+            WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
+            -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
+            WHEN completed_count >= 7 OR loan_released THEN 2
+            -- Group 3 (has_progress): 1-6 touchpoints but user cannot create next
+            WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+            -- Group 4 (no_progress): 0 touchpoints
+            ELSE 4
+          END as group_score
+        FROM touchpoint_info
+      )`;
+
+      // Filter by group score in WHERE clause
+      const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+      const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+      areaFilterWhereClause += `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+      baseParams.push(targetScore);
+      baseParamIndex++;
+    }
+
+    // Get total count using CTE
+    // Use subquery for COUNT when filtering by tws.group_score to avoid GROUP BY issues
+    const countQuery = `
+      ${withGroupScoreCTE}
+      SELECT COUNT(*) as count
+      FROM (
+        SELECT DISTINCT c.id
+        FROM clients c
+        LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id
+        ${baseWhereClause}
+        ${areaFilterWhereClause}
+      ) AS filtered_clients
+    `;
+
+    const countResult = await pool.query(countQuery, baseParams);
+    const totalItems = parseInt(countResult.rows[0].count);
+
+    // Get paginated results using CTEs
+    const mainQuery = `
+      ${withGroupScoreCTE}
+      SELECT c.*,
+        psg.region as psgc_region,
+        psg.province as psgc_province,
+        psg.mun_city as psgc_municipality,
+        psg.barangay as psgc_barangay,
+        COALESCE(
+          json_agg(DISTINCT a) FILTER (WHERE a.id IS NOT NULL), '[]'
+        ) as addresses,
+        COALESCE(
+          json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
+        ) as phone_numbers,
+        COALESCE(tws.completed_count, 0) as completed_touchpoints,
+        tws.next_touchpoint_type,
+        tws.last_touchpoint_type,
+        tws.last_touchpoint_user_id,
+        lt.first_name as last_touchpoint_first_name,
+        lt.last_name as last_touchpoint_last_name
+      FROM clients c
+      LEFT JOIN psgc psg ON psg.id = c.psgc_id
+      LEFT JOIN addresses a ON a.client_id = c.id
+      LEFT JOIN phone_numbers p ON p.client_id = c.id
+      LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id
+      LEFT JOIN users lt ON lt.id = tws.last_touchpoint_user_id
+      ${baseWhereClause}
+      ${areaFilterWhereClause}
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tws.completed_count, tws.next_touchpoint_type, tws.last_touchpoint_type, tws.last_touchpoint_user_id, lt.first_name, lt.last_name, tws.group_score
+      ORDER BY tws.group_score ASC, tws.completed_count DESC, c.created_at DESC
+      LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
+    `;
+
+    const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
+
+    const clientsList = result.rows.map(row => {
+      const completedCount = parseInt(row.completed_touchpoints) || 0;
+      const nextTouchpointNumber = completedCount >= 7 ? null : completedCount + 1;
+      const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
+      const loanReleased = row.loan_released || false;
+
+      // Determine if current user can create the next touchpoint
+      let canCreateTouchpoint = false;
+      let expectedRole = null;
+
+      // IMPORTANT: Cannot create touchpoints if loan is released
+      if (loanReleased) {
+        canCreateTouchpoint = false;
+        expectedRole = null;
+      } else if (nextTouchpointNumber) {
+        if (user.role === 'caravan') {
+          canCreateTouchpoint = nextTouchpointType === 'Visit';
+          expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
+        } else if (user.role === 'tele') {
+          canCreateTouchpoint = nextTouchpointType === 'Call';
+          expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
+        } else {
+          canCreateTouchpoint = true;
+          expectedRole = nextTouchpointType === 'Visit' ? 'caravan' : 'tele';
+        }
+      }
+
+      return {
+        ...mapRowToClient(row),
+        expand: {
+          addresses: row.addresses,
+          phone_numbers: row.phone_numbers,
+        },
+        touchpoint_status: {
+          completed_touchpoints: completedCount,
+          next_touchpoint_number: nextTouchpointNumber,
+          next_touchpoint_type: nextTouchpointType,
+          can_create_touchpoint: canCreateTouchpoint,
+          expected_role: expectedRole,
+          is_complete: completedCount >= 7,
+          last_touchpoint_type: row.last_touchpoint_type,
+          last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
+          loan_released: loanReleased,
+          loan_released_at: row.loan_released_at,
+        },
+      };
+    });
+
+    return c.json({
+      items: clientsList,
+      page,
+      perPage,
+      totalItems,
+      totalPages: Math.ceil(totalItems / perPage),
+    });
+  } catch (error) {
+    console.error('Fetch assigned clients error:', error);
+    throw new Error();
+  }
+});
+
 // GET /api/clients/:id - Get single client with full details
-clients.get('/:id', authMiddleware, requirePermission('clients', 'read'), async (c) => {
+clients.get('/:id', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
     const id = c.req.param('id');

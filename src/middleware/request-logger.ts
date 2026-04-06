@@ -128,10 +128,25 @@ export function requestLogger() {
       const statusEmoji = responseLog.status < 300 ? '✅' : responseLog.status < 400 ? '⚠️' : responseLog.status < 500 ? '❌' : '💥';
       const statusText = getStatusText(responseLog.status);
 
+      // Try to extract response count for GET requests
+      let responseCountStr = '';
+      if (log.method === 'GET' && responseLog.status >= 200 && responseLog.status < 300) {
+        try {
+          const clonedResponse = c.res.clone();
+          const body = await clonedResponse.json();
+          const count = extractResponseCount(body);
+          if (count !== undefined) {
+            responseCountStr = `\n📊 Count:     ${count} items`;
+          }
+        } catch {
+          // Can't parse response body, skip count
+        }
+      }
+
       console.log(`📤 RESPONSE [${requestId}]`);
       console.log('='.repeat(60));
       console.log(`${statusEmoji} Status:    ${responseLog.status} ${statusText}`);
-      console.log(`⏱️  Duration:  ${responseLog.duration}ms`);
+      console.log(`⏱️  Duration:  ${responseLog.duration}ms${responseCountStr}`);
       console.log('='.repeat(60) + '\n');
 
     } catch (error: any) {
@@ -154,6 +169,51 @@ export function requestLogger() {
       throw error;
     }
   };
+}
+
+/**
+ * Extract response count from response body
+ */
+function extractResponseCount(body: any): number | undefined {
+  if (!body) return undefined;
+
+  // If response is an array, return its length
+  if (Array.isArray(body)) {
+    return body.length;
+  }
+
+  // If response has data property that's an array
+  if (body.data && Array.isArray(body.data)) {
+    return body.data.length;
+  }
+
+  // If response has rows property (PostgreSQL result)
+  if (body.rows && Array.isArray(body.rows)) {
+    return body.rows.length;
+  }
+
+  // If response has items property (pagination)
+  if (body.items && Array.isArray(body.items)) {
+    return body.items.length;
+  }
+
+  // If response has clients, users, etc. property
+  const arrayProperties = ['clients', 'users', 'touchpoints', 'itineraries', 'approvals', 'reports', 'municipalities', 'permissions', 'roles', 'groups', 'locations'];
+  for (const prop of arrayProperties) {
+    if (body[prop] && Array.isArray(body[prop])) {
+      return body[prop].length;
+    }
+  }
+
+  // If response has total or count property (for pagination metadata)
+  if (typeof body.total === 'number') {
+    return body.total;
+  }
+  if (typeof body.count === 'number') {
+    return body.count;
+  }
+
+  return undefined;
 }
 
 // Simplified one-line logger with error details
@@ -191,7 +251,22 @@ export function simpleRequestLogger() {
       const statusEmoji = status < 300 ? '✅' : status < 400 ? '⚠️' : status < 500 ? '❌' : '💥';
       const statusText = getStatusText(status);
 
-      console.log(`📤 [${requestId}] RESPONSE: ${status} ${statusText} ${statusEmoji} (${duration}ms)\n`);
+      // Try to extract response count for GET requests
+      let responseCountStr = '';
+      if (method === 'GET' && status >= 200 && status < 300) {
+        try {
+          const clonedResponse = c.res.clone();
+          const body = await clonedResponse.json();
+          const count = extractResponseCount(body);
+          if (count !== undefined) {
+            responseCountStr = ` [${count} items]`;
+          }
+        } catch {
+          // Can't parse response body, skip count
+        }
+      }
+
+      console.log(`📤 [${requestId}] RESPONSE: ${status} ${statusText} ${statusEmoji} (${duration}ms)${responseCountStr}\n`);
 
     } catch (error: any) {
       const duration = Date.now() - start;
