@@ -174,6 +174,9 @@ clients.get('/', authMiddleware, async (c) => {
       paramIndex++;
     }
 
+    // Soft delete filter: Only show active clients (not deleted)
+    conditions.push(`c.deleted_at IS NULL`);
+
     if (clientType && clientType !== 'all') {
       conditions.push(`c.client_type = $${paramIndex}`);
       params.push(clientType);
@@ -882,7 +885,7 @@ clients.get('/:id', authMiddleware, async (c) => {
        LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id
        LEFT JOIN phone_numbers p ON p.client_id = c.id
-       WHERE c.id = $1
+       WHERE c.id = $1 AND c.deleted_at IS NULL
        GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay
       `,
       [id]
@@ -1329,6 +1332,9 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
       params.push(`%${search}%`);
       paramIndex++;
     }
+
+    // Soft delete filter: Only show active clients (not deleted)
+    conditions.push(`c.deleted_at IS NULL`);
 
     if (clientType && clientType !== 'all') {
       conditions.push(`c.client_type = $${paramIndex}`);
