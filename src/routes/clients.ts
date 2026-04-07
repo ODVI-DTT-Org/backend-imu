@@ -328,16 +328,9 @@ clients.get('/', authMiddleware, async (c) => {
     // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
 
     // Add area filter conditions for Caravan/Tele roles
+    // NOTE: Area filtering is applied in touchpoint_info CTE via JOIN user_areas
+    // No need for additional WHERE clause here since CTE already filters by area
     let areaFilterWhereClause = '';
-    if (shouldFilterByArea) {
-      // For Caravan/Tele: Filter by assigned provinces/municipalities
-      // Using the new province and municipality columns directly
-      const whereOrAnd = baseWhereClause !== '' ? 'AND' : 'WHERE';
-      areaFilterWhereClause = ` ${whereOrAnd} (
-        c.province IN (SELECT province FROM user_areas)
-        AND c.municipality IN (SELECT municipality FROM user_areas)
-      )`;
-    }
 
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
@@ -699,16 +692,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
 
     // Add area filter conditions for Caravan/Tele roles
+    // NOTE: Area filtering is applied in touchpoint_info CTE via JOIN user_areas
+    // No need for additional WHERE clause here since CTE already filters by area
     let areaFilterWhereClause = '';
-    if (shouldFilterByArea) {
-      // For Caravan/Tele: Filter by assigned provinces/municipalities
-      // Using the new province and municipality columns directly
-      const whereOrAnd = baseWhereClause !== '' ? 'AND' : 'WHERE';
-      areaFilterWhereClause = ` ${whereOrAnd} (
-        c.province IN (SELECT province FROM user_areas)
-        AND c.municipality IN (SELECT municipality FROM user_areas)
-      )`;
-    }
 
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
@@ -822,17 +808,13 @@ clients.get('/assigned', authMiddleware, async (c) => {
     }
 
     // Get total count using CTE
-    // Use subquery for COUNT when filtering by tws.group_score to avoid GROUP BY issues
+    // The touchpoint_with_score CTE already has area filtering applied
     const countQuery = `
       ${withGroupScoreCTE}
       SELECT COUNT(*) as count
-      FROM (
-        SELECT DISTINCT c.id
-        FROM clients c
-        LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id
-        ${baseWhereClause}
-        ${areaFilterWhereClause}
-      ) AS filtered_clients
+      FROM touchpoint_with_score tws
+      ${baseWhereClause}
+      ${groupScoreFilter}
     `;
 
     const countResult = await pool.query(countQuery, baseParams);
