@@ -221,33 +221,42 @@ clients.get('/', authMiddleware, async (c) => {
 
     if (sortBy === 'touchpoint_status') {
       // Calculate group score for sorting
-      // Group scores: 1=callable, 2=completed, 3=has_progress, 4=no_progress
+      // Group scores: 1=callable, 2=waiting_for_caravan, 3=completed, 4=loan_released, 5=no_progress
       const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
-      // Determine if current user can create the next touchpoint
-      // Note: Column names used directly (no table prefix) for CTE context
-      let canCreateCondition = '';
-      if (user.role === 'tele') {
-        // Tele can create Call touchpoints (2, 3, 5, 6)
-        // Assigned clients = callable (next is Call) OR no touchpoints yet (can start with Call)
-        canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
-      } else if (user.role === 'caravan') {
-        // Caravan can create Visit touchpoints (1, 4, 7)
-        canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
-      } else {
-        // Admin/Manager can create any touchpoint
-        canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
-      }
-
-      // Group score CASE expression
+      // Group score CASE expression - separate Tele logic from Caravan/Manager
       // Note: Column names used directly (no table prefix) for CTE context
       // Use c.loan_released to avoid ambiguity when used in ORDER BY
-      groupScoreCase = `CASE
-        WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT c.loan_released THEN 1
-        WHEN completed_count >= 7 OR c.loan_released THEN 2
-        WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
-        ELSE 4
-      END`;
+      if (user.role === 'tele') {
+        // Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
+        groupScoreCase = `CASE
+          -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
+          WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT c.loan_released THEN 1
+          -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
+          WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT c.loan_released THEN 2
+          -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
+          WHEN completed_count >= 7 AND NOT c.loan_released THEN 3
+          -- Group 4 (loan released): Loan already released
+          WHEN c.loan_released THEN 4
+          -- Group 5 (no progress): 0 touchpoints
+          ELSE 5
+        END`;
+      } else {
+        // Caravan/Manager scoring
+        let canCreateCondition = '';
+        if (user.role === 'caravan') {
+          canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+        } else {
+          canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
+        }
+
+        groupScoreCase = `CASE
+          WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN completed_count >= 7 OR c.loan_released THEN 2
+          WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+          ELSE 4
+        END`;
+      }
 
       // Sort by group score, then by completed count (more progress first)
       // Note: {touchpoint_alias}.completed_count will be replaced with dynamic alias in mainQuery
@@ -352,42 +361,53 @@ clients.get('/', authMiddleware, async (c) => {
     let groupScoreFilter = '';
 
     if (touchpointStatus) {
-      // Determine if current user can create the next touchpoint
-      let canCreateCondition = '';
-      if (user.role === 'tele') {
-        // Tele can create Call touchpoints (2, 3, 5, 6)
-        // Assigned clients = callable (next is Call) OR no touchpoints yet (can start with Call)
-        canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
-      } else if (user.role === 'caravan') {
-        canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
-      } else {
-        canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
-      }
-
       // Map touchpoint_status to group score
-      const statusToScoreMap: Record<string, number> = {
+      // For Tele: 1=callable, 2=waiting_for_caravan, 3=completed, 4=loan_released, 5=no_progress
+      // For others: 1=callable, 2=has_progress, 3=completed, 4=loan_released, 5=no_progress
+      const statusToScoreMap: Record<string, number> = user.role === 'tele' ? {
         'callable': 1,
-        'completed': 2,
-        'has_progress': 3,
-        'no_progress': 4
+        'waiting_for_caravan': 2,
+        'completed': 3,
+        'loan_released': 4,
+        'no_progress': 5
+      } : {
+        'callable': 1,
+        'has_progress': 2,
+        'completed': 3,
+        'loan_released': 4,
+        'no_progress': 5
       };
 
       const targetScore = statusToScoreMap[touchpointStatus];
       if (targetScore !== undefined) {
-        // Add group score calculation to CTE
-        // CRITICAL: loan_released clients should NEVER be callable (group 1)
-        // They should always be in group 2 (completed) regardless of touchpoint count
+        // Add group score calculation to CTE with role-specific logic
+        // CRITICAL: Tele users need separate groups for callable (Call) vs waiting_for_caravan (Visit)
         withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
           SELECT *,
             CASE
+              ${user.role === 'tele' ? `
+              -- Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
+              -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
+              WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 1
+              -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
+              WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT loan_released THEN 2
+              -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
+              WHEN completed_count >= 7 AND NOT loan_released THEN 3
+              -- Group 4 (loan released): Loan already released
+              WHEN loan_released THEN 4
+              -- Group 5 (no progress): 0 touchpoints
+              ELSE 5` : `
+              -- Caravan/Manager scoring: all callable clients in group 1
               -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-              WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
-              -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
-              WHEN completed_count >= 7 OR loan_released THEN 2
-              -- Group 3 (has_progress): 1-6 touchpoints but user cannot create next
-              WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
-              -- Group 4 (no_progress): 0 touchpoints
-              ELSE 4
+              WHEN next_touchpoint_type IS NOT NULL AND completed_count < 7 AND NOT loan_released THEN 1
+              -- Group 2 (has_progress): 1-6 touchpoints but user cannot create next
+              WHEN completed_count > 0 AND completed_count < 7 AND NOT loan_released THEN 2
+              -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
+              WHEN completed_count >= 7 AND NOT loan_released THEN 3
+              -- Group 4 (loan released): Loan already released
+              WHEN loan_released THEN 4
+              -- Group 5 (no progress): 0 touchpoints
+              ELSE 5`}
             END as group_score
           FROM touchpoint_info
         )`;
