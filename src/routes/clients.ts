@@ -72,11 +72,20 @@ const phoneSchema = z.object({
 
 // Helper to map DB row to Client type
 function mapRowToClient(row: Record<string, any>) {
+  // Calculate display_name: "Surname, First Name MiddleName Extension"
+  // Only comma after surname, rest separated by spaces
+  const middleName = row.middle_name || '';
+  const extName = row.ext_name || '';
+  const nameParts = [row.first_name, middleName, extName].filter((p: string) => p && p.trim().length > 0);
+  const displayName = `${row.last_name}, ${nameParts.join(' ')}`;
+
   return {
     id: row.id,
     first_name: row.first_name,
     last_name: row.last_name,
     middle_name: row.middle_name,
+    ext_name: row.ext_name,
+    display_name: displayName,
     birth_date: row.birth_date,
     email: row.email,
     phone: row.phone,
@@ -465,14 +474,32 @@ clients.get('/', authMiddleware, async (c) => {
       ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id'
       : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
 
+    // Build combined WHERE clause properly
+    // We need to handle the case where areaFilterWhereClause starts with "AND" but there's no WHERE clause yet
+    let combinedWhereClause = '';
+    if (baseWhereConditionsJoined || areaFilterWhereClause || groupScoreFilter) {
+      combinedWhereClause = 'WHERE ';
+      const conditions: string[] = [];
+      if (baseWhereConditionsJoined) {
+        conditions.push(baseWhereConditionsJoined);
+      }
+      if (areaFilterWhereClause) {
+        // Remove "AND " or "WHERE " prefix from area filter
+        conditions.push(areaFilterWhereClause.replace(/^(AND |WHERE )/, ''));
+      }
+      if (groupScoreFilter) {
+        // Remove "AND " or "WHERE " prefix from group filter
+        conditions.push(groupScoreFilter.replace(/^(AND |WHERE )/, ''));
+      }
+      combinedWhereClause += conditions.join(' AND ');
+    }
+
     const countQuery = `
       ${withGroupScoreCTE}
       SELECT COUNT(DISTINCT c.id) as count
       FROM clients c
       ${touchpointInfoJoinForCount}
-      ${baseWhereConditionsJoined ? `WHERE ${baseWhereConditionsJoined}` : ''}
-      ${areaFilterWhereClause}
-      ${groupScoreFilter}
+      ${combinedWhereClause}
     `;
 
     console.log('[clients] COUNT query:', countQuery);
@@ -520,9 +547,7 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN phone_numbers p ON p.client_id = c.id
       ${touchpointInfoJoin}
       LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
-      ${baseWhereConditionsJoined ? `WHERE ${baseWhereConditionsJoined}` : ''}
-      ${areaFilterWhereClause}
-      ${groupScoreFilter}
+      ${combinedWhereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
       ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
@@ -857,7 +882,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       LEFT JOIN users lt ON lt.id = acl.last_touchpoint_user_id
       WHERE c.deleted_at IS NULL
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
-      ${areaFilterWhereClause}
+      ${areaFilterWhereClause ? areaFilterWhereClause : ''}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, acl.completed_count, acl.next_touchpoint_type, acl.last_touchpoint_type, acl.last_touchpoint_user_id, lt.first_name, lt.last_name, acl.group_score
       ORDER BY
         -- Primary sort: group_score (1=callable, 2=waiting, 3=completed, 4=loan_released, 5=no_progress)

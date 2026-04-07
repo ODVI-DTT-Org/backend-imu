@@ -135,6 +135,7 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
     const result = await pool.query(
       `SELECT i.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
+              c.middle_name as client_middle_name, c.ext_name as client_ext_name,
               c.municipality as client_municipality,
               u.first_name as user_first_name, u.last_name as user_last_name,
               cb.first_name as created_by_first_name, cb.last_name as created_by_last_name
@@ -148,26 +149,37 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
       [...params, perPage, offset]
     );
 
-    const items = result.rows.map(row => ({
-      ...mapRowToItinerary(row),
-      expand: {
-        client_id: {
-          id: row.client_id,
-          first_name: row.client_first_name,
-          last_name: row.client_last_name,
-          municipality: row.client_municipality,
+    const items = result.rows.map(row => {
+      // Calculate display_name for client: "Surname, First Name MiddleName Extension"
+      const middleName = row.client_middle_name || '';
+      const extName = row.client_ext_name || '';
+      const nameParts = [row.client_first_name, middleName, extName].filter((p: string) => p && p.trim().length > 0);
+      const clientDisplayName = `${row.client_last_name}, ${nameParts.join(' ')}`;
+
+      return {
+        ...mapRowToItinerary(row),
+        expand: {
+          client_id: {
+            id: row.client_id,
+            first_name: row.client_first_name,
+            last_name: row.client_last_name,
+            middle_name: row.client_middle_name,
+            ext_name: row.client_ext_name,
+            display_name: clientDisplayName,
+            municipality: row.client_municipality,
+          },
+          user_id: row.user_id ? {
+            id: row.user_id,
+            first_name: row.user_first_name,
+            last_name: row.user_last_name,
+          } : undefined,
+          created_by: row.created_by ? {
+            id: row.created_by,
+            name: `${row.created_by_first_name} ${row.created_by_last_name}`,
+          } : undefined,
         },
-        user_id: row.user_id ? {
-          id: row.user_id,
-          first_name: row.user_first_name,
-          last_name: row.user_last_name,
-        } : undefined,
-        created_by: row.created_by ? {
-          id: row.created_by,
-          name: `${row.created_by_first_name} ${row.created_by_last_name}`,
-        } : undefined,
-      },
-    }));
+      };
+    });
 
     return c.json({
       items,
