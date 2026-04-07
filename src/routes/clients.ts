@@ -124,6 +124,20 @@ function mapRowToClient(row: Record<string, any>) {
 clients.get('/', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
+
+    // Log the entire request for debugging
+    console.log('[clients] ================================================');
+    console.log('[clients] REQUEST URL:', c.req.url);
+    console.log('[clients] REQUEST METHOD:', c.req.method);
+    console.log('[clients] REQUEST QUERY:', c.req.query());
+    console.log('[clients] REQUEST QUERY PARAMS:');
+    console.log('[clients]   - page:', c.req.query('page'));
+    console.log('[clients]   - perPage:', c.req.query('perPage'));
+    console.log('[clients]   - search:', c.req.query('search'));
+    console.log('[clients]   - client_type:', c.req.query('client_type'));
+    console.log('[clients]   - product_type:', c.req.query('product_type'));
+    console.log('[clients] ================================================');
+
     const page = parseInt(c.req.query('page') || '1');
     let perPage = parseInt(c.req.query('perPage') || '20');
 
@@ -143,10 +157,18 @@ clients.get('/', authMiddleware, async (c) => {
     const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
+    console.log('[clients] DEBUG: search parameter =', search, '(type:', typeof search, ')');
+    console.log('[clients] DEBUG: search === undefined:', search === undefined);
+    console.log('[clients] DEBUG: search === null:', search === null);
+    console.log('[clients] DEBUG: search === "":', search === "");
+    console.log('[clients] DEBUG: clientType =', clientType);
+    console.log('[clients] DEBUG: productType =', productType);
+
+    // IMPORTANT: Log raw query string to debug parameter extraction
+    console.log('[clients] DEBUG: Raw query string:', c.req.url.split('?')[1]);
+    console.log('[clients] ================================================');
+
     const offset = (page - 1) * perPage;
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let paramIndex = 1;
 
     // Touchpoint sequence: Visit → Call → Call → Visit → Call → Call → Visit
     // Declared once at the top level to avoid duplicate declarations
@@ -167,53 +189,6 @@ clients.get('/', authMiddleware, async (c) => {
     // IMPORTANT: This endpoint returns ALL clients (no area filter)
     // Area filtering is only applied when municipality_ids is explicitly provided
     const shouldFilterByArea = municipalityIds && municipalityIds.length > 0;
-
-    if (search) {
-      conditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${paramIndex} OR c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);
-      params.push(`%${search}%`);
-      paramIndex++;
-    }
-
-    // Soft delete filter: Only show active clients (not deleted)
-    conditions.push(`c.deleted_at IS NULL`);
-
-    if (clientType && clientType !== 'all') {
-      conditions.push(`c.client_type = $${paramIndex}`);
-      params.push(clientType);
-      paramIndex++;
-    }
-
-    if (productType && productType !== 'all') {
-      conditions.push(`c.product_type = $${paramIndex}`);
-      params.push(productType);
-      paramIndex++;
-    }
-
-    if (agencyId) {
-      conditions.push(`c.agency_id = $${paramIndex}`);
-      params.push(agencyId);
-      paramIndex++;
-    }
-
-    if (municipality) {
-      // Filter by municipality name (clients table has municipality column)
-      conditions.push(`c.municipality = $${paramIndex}`);
-      params.push(municipality);
-      paramIndex++;
-    }
-
-    if (province) {
-      conditions.push(`c.province = $${paramIndex}`);
-      params.push(province);
-      paramIndex++;
-    }
-
-    if (caravanId) {
-      // caravan_id filter is deprecated - municipality is now used for location assignments
-      // This filter is kept for backwards compatibility but will not return results
-      // Use province/municipality filtering instead
-      // Silently ignore the deprecated filter
-    }
 
     // Determine sort order BEFORE building CTE (needed in both CTE and final query)
     // DEFAULT: Use group scoring ordering (same as /clients/assigned)
@@ -273,10 +248,19 @@ clients.get('/', authMiddleware, async (c) => {
     const baseParams: any[] = [];
     let baseParamIndex = 1;
 
-    if (search) {
+    console.log('[clients] DEBUG: Building baseWhereConditions, search =', search);
+
+    // Fix: Check if search is truthy AND not just whitespace
+    if (search && search.trim()) {
+      console.log('[clients] DEBUG: Adding search condition');
+      const trimmedSearch = search.trim();
       baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
-      baseParams.push(`%${search}%`);
+      baseParams.push(`%${trimmedSearch}%`);
       baseParamIndex++;
+      console.log('[clients] DEBUG: After adding search, baseParams =', baseParams);
+    } else {
+      console.log('[clients] DEBUG: Search condition NOT added (search is falsy or empty)');
+      console.log('[clients] DEBUG: search value:', JSON.stringify(search));
     }
 
     if (clientType && clientType !== 'all') {
@@ -639,9 +623,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
     const offset = (page - 1) * perPage;
-    const conditions: string[] = [];
-    const params: any[] = [];
-    let paramIndex = 1;
 
     // Touchpoint sequence: Visit → Call → Call → Visit → Call → Call → Visit
     // Declared once at the top level to avoid duplicate declarations

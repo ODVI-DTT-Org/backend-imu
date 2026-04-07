@@ -1106,4 +1106,108 @@ touchpoints.delete('/:id', authMiddleware, requirePermission('touchpoints', 'del
   }
 });
 
+/**
+ * GET /api/touchpoints/:id/photo-url - Get presigned URL for touchpoint photo
+ *
+ * Generates a presigned S3 URL for secure access to touchpoint photos.
+ * Caches URLs for 5 minutes to reduce S3 API calls.
+ *
+ * Path Parameters:
+ * - id: Touchpoint UUID
+ *
+ * Response:
+ * {
+ *   url: string (presigned URL),
+ *   cached: boolean,
+ *   expiresAt: string (ISO datetime)
+ * }
+ *
+ * Error Responses:
+ * - 404: Touchpoint not found or no photo
+ * - 400: Photo not stored in S3
+ * - 500: Failed to generate presigned URL
+ */
+touchpoints.get('/:id/photo-url', authMiddleware, async (c) => {
+  try {
+    const touchpointId = c.req.param('id');
+
+    // Import storage service
+    const { storageService } = await import('../services/storage.js');
+    const { cacheService } = await import('../services/cache.js');
+
+    // Check cache first
+    const cacheKey = `touchpoint:photo:${touchpointId}`;
+    const cachedUrl = await cacheService.get(cacheKey);
+
+    if (cachedUrl) {
+      console.log(`[Touchpoints] ✅ Cache HIT for touchpoint ${touchpointId}`);
+      return c.json({
+        url: cachedUrl,
+        cached: true,
+        expiresAt: new Date(Date.now() + 300 * 1000).toISOString(),
+      });
+    }
+
+    console.log(`[Touchpoints] ❌ Cache MISS for touchpoint ${touchpointId}, generating...`);
+
+    // Fetch touchpoint photo_url
+    const touchpointResult = await pool.query(
+      'SELECT photo_url FROM touchpoints WHERE id = $1',
+      [touchpointId]
+    );
+
+    if (touchpointResult.rows.length === 0) {
+      return c.json({ error: 'Touchpoint not found' }, 404);
+    }
+
+    const touchpoint = touchpointResult.rows[0];
+
+    if (!touchpoint.photo_url) {
+      return c.json({ error: 'Touchpoint has no photo' }, 404);
+    }
+
+    // Verify storage provider is S3
+    if (storageService.getProvider() !== 's3') {
+      return c.json({
+        error: 'Presigned URLs only supported for S3 storage',
+        storageProvider: storageService.getProvider(),
+      }, 400);
+    }
+
+    // Extract storage_key from the URL
+    // URL format: https://imu.s3.ap-southeast-1.amazonaws.com/touchpoint_photo/2026/04/07/abc.jpg
+    // We need to extract: touchpoint_photo/2026/04/07/abc.jpg
+    const url = touchpoint.photo_url;
+    const storageKeyMatch = url.match(/\.s3\.[^\.]+\.amazonaws\.com\/(.+)$/);
+
+    if (!storageKeyMatch) {
+      console.error(`[Touchpoints] ❌ Invalid S3 URL format: ${url}`);
+      return c.json({
+        error: 'Photo URL is not a valid S3 URL',
+        url: url
+      }, 400);
+    }
+
+    const storageKey = storageKeyMatch[1];
+
+    // Generate presigned URL (5 minute expiry)
+    const signedUrl = await storageService.getSignedUrl(storageKey, 300);
+
+    // Cache the URL
+    await cacheService.set(cacheKey, signedUrl, 300);
+
+    console.log(`[Touchpoints] ✅ Generated presigned URL for touchpoint ${touchpointId}, cached for 300s`);
+
+    return c.json({
+      url: signedUrl,
+      cached: false,
+      expiresAt: new Date(Date.now() + 300 * 1000).toISOString(),
+      storageKey: storageKey,
+    });
+  } catch (error) {
+    console.error('[Touchpoints] Error generating photo URL:', error);
+    return c.json({ error: 'Failed to generate photo URL' }, 500);
+  }
+});
+
 export default touchpoints;
