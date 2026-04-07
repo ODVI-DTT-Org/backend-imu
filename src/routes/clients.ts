@@ -225,6 +225,7 @@ clients.get('/', authMiddleware, async (c) => {
       const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
       // Role-based group scoring: consistent 5-group pattern for both Tele and Caravan
+      // IMPORTANT: This references {touchpoint_alias} columns which MUST be in GROUP BY
       // Tele: callable=Call(1), waiting_for_caravan=Visit(2), completed(3), loan_released(4), no_progress(5)
       // Caravan: callable=Visit(1), waiting_for_tele=Call(2), completed(3), loan_released(4), no_progress(5)
       // Admin/Manager: callable=any(1), has_progress(2), completed(3), loan_released(4), no_progress(5)
@@ -232,11 +233,11 @@ clients.get('/', authMiddleware, async (c) => {
         // Tele can only create Call touchpoints (2, 3, 5, 6)
         groupScoreCase = `CASE
           -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
-          WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN {touchpoint_alias}.next_touchpoint_type = 'Call' AND {touchpoint_alias}.completed_count < 7 AND NOT c.loan_released THEN 1
           -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
-          WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT c.loan_released THEN 2
+          WHEN {touchpoint_alias}.next_touchpoint_type = 'Visit' AND {touchpoint_alias}.completed_count < 7 AND NOT c.loan_released THEN 2
           -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
-          WHEN completed_count >= 7 AND NOT c.loan_released THEN 3
+          WHEN {touchpoint_alias}.completed_count >= 7 AND NOT c.loan_released THEN 3
           -- Group 4 (loan released): Loan already released
           WHEN c.loan_released THEN 4
           -- Group 5 (no progress): 0 touchpoints
@@ -246,11 +247,11 @@ clients.get('/', authMiddleware, async (c) => {
         // Caravan can only create Visit touchpoints (1, 4, 7)
         groupScoreCase = `CASE
           -- Group 1 (callable): Next is Visit AND < 7 touchpoints AND loan NOT released
-          WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN {touchpoint_alias}.next_touchpoint_type = 'Visit' AND {touchpoint_alias}.completed_count < 7 AND NOT c.loan_released THEN 1
           -- Group 2 (waiting for tele): Next is Call AND < 7 touchpoints AND loan NOT released
-          WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT c.loan_released THEN 2
+          WHEN {touchpoint_alias}.next_touchpoint_type = 'Call' AND {touchpoint_alias}.completed_count < 7 AND NOT c.loan_released THEN 2
           -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
-          WHEN completed_count >= 7 AND NOT c.loan_released THEN 3
+          WHEN {touchpoint_alias}.completed_count >= 7 AND NOT c.loan_released THEN 3
           -- Group 4 (loan released): Loan already released
           WHEN c.loan_released THEN 4
           -- Group 5 (no progress): 0 touchpoints
@@ -260,9 +261,9 @@ clients.get('/', authMiddleware, async (c) => {
         // Admin/Manager can create any touchpoint
         groupScoreCase = `CASE
           -- Group 1 (callable): Has next touchpoint AND < 7 touchpoints AND loan NOT released
-          WHEN next_touchpoint_type IS NOT NULL AND completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN {touchpoint_alias}.next_touchpoint_type IS NOT NULL AND {touchpoint_alias}.completed_count < 7 AND NOT c.loan_released THEN 1
           -- Group 2 (completed): 7/7 touchpoints AND loan NOT released
-          WHEN completed_count >= 7 AND NOT c.loan_released THEN 2
+          WHEN {touchpoint_alias}.completed_count >= 7 AND NOT c.loan_released THEN 2
           -- Group 3 (loan released): Loan already released
           WHEN c.loan_released THEN 3
           -- Group 4 (no progress): 0 touchpoints
@@ -501,7 +502,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${baseWhereClause}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, lt.first_name, lt.last_name
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id${touchpointStatus ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
       ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
