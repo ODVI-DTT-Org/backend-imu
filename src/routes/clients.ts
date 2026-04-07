@@ -769,78 +769,49 @@ clients.get('/assigned', authMiddleware, async (c) => {
           SELECT * FROM loan_released_group
           UNION ALL
           SELECT * FROM no_progress_group
+        ),
+        assigned_clients_in_location AS (
+          SELECT DISTINCT ON (client_id) * FROM touchpoint_with_score
         )`;
 
-      // Map touchpoint_status to group score for Tele
-      const statusToScoreMap: Record<string, number> = {
-        'callable': 1,
-        'waiting_for_caravan': 2,
-        'completed': 3,
-        'loan_released': 4,
-        'no_progress': 5
-      };
-
-      const targetScore = statusToScoreMap[effectiveTouchpointStatus];
-      if (targetScore !== undefined) {
-        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
-        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-        areaFilterWhereClause += `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-        baseParams.push(targetScore);
-        baseParamIndex++;
-      }
+      // Note: Using assigned_clients_in_location CTE instead of filtering by group_score
+      // This shows all assigned clients while maintaining proper sorting
     } else {
       // For Caravan/Admin: Use original CASE expression approach
-      const statusToScoreMap: Record<string, number> = {
-        'callable': 1,
-        'waiting_for_caravan': 2,
-        'completed': 3,
-        'loan_released': 4,
-        'no_progress': 5
-      };
+      // Add touchpoint_with_score and assigned_clients_in_location CTEs
+      withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
+        SELECT *,
+          CASE
+            -- Group 1 (callable): User can create next touchpoint AND loan NOT released
+            WHEN (next_touchpoint_type IS NOT NULL OR completed_count = 0) AND completed_count < 7 AND NOT loan_released THEN 1
+            -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
+            WHEN completed_count >= 7 OR loan_released THEN 2
+            -- Group 3 (no_progress): Should not happen with caravan logic above, but kept for safety
+            ELSE 3
+          END as group_score
+        FROM touchpoint_info
+      ),
+      assigned_clients_in_location AS (
+        SELECT DISTINCT ON (client_id) * FROM touchpoint_with_score
+      )`;
 
-      const targetScore = statusToScoreMap[effectiveTouchpointStatus];
-      if (targetScore !== undefined) {
-        // Add group score calculation to CTE
-        withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
-          SELECT *,
-            CASE
-              -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-              WHEN (next_touchpoint_type IS NOT NULL OR completed_count = 0) AND completed_count < 7 AND NOT loan_released THEN 1
-              -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
-              WHEN completed_count >= 7 OR loan_released THEN 2
-              -- Group 3 (no_progress): Should not happen with caravan logic above, but kept for safety
-              ELSE 3
-            END as group_score
-          FROM touchpoint_info
-        )`;
-
-        // Filter by group score in WHERE clause
-        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
-        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-        areaFilterWhereClause += `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-        baseParams.push(targetScore);
-        baseParamIndex++;
-      }
+      // Note: Using assigned_clients_in_location CTE instead of filtering by group_score
+      // This shows all assigned clients while maintaining proper sorting
     }
 
     // Get total count using CTE
-    // Use subquery for COUNT when filtering by tws.group_score to avoid GROUP BY issues
     const countQuery = `
       ${withGroupScoreCTE}
       SELECT COUNT(*) as count
-      FROM (
-        SELECT DISTINCT c.id
-        FROM clients c
-        LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id
-        ${baseWhereClause}
-        ${areaFilterWhereClause}
-      ) AS filtered_clients
+      FROM assigned_clients_in_location acl
     `;
 
     const countResult = await pool.query(countQuery, baseParams);
     const totalItems = parseInt(countResult.rows[0].count);
 
     // Get paginated results using CTEs
+    // IMPORTANT: Query FROM assigned_clients_in_location to ensure we only get assigned clients
+    // and the ORDER BY works correctly (callable clients first)
     const mainQuery = `
       ${withGroupScoreCTE}
       SELECT c.*,
@@ -854,29 +825,30 @@ clients.get('/assigned', authMiddleware, async (c) => {
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        COALESCE(tws.completed_count, 0) as completed_touchpoints,
-        tws.next_touchpoint_type,
-        tws.last_touchpoint_type,
-        tws.last_touchpoint_user_id,
-        tws.group_score,
+        COALESCE(acl.completed_count, 0) as completed_touchpoints,
+        acl.next_touchpoint_type,
+        acl.last_touchpoint_type,
+        acl.last_touchpoint_user_id,
+        acl.group_score,
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name
-      FROM clients c
+      FROM assigned_clients_in_location acl
+      JOIN clients c ON c.id = acl.client_id
       LEFT JOIN psgc psg ON psg.id = c.psgc_id
       LEFT JOIN addresses a ON a.client_id = c.id
       LEFT JOIN phone_numbers p ON p.client_id = c.id
-      LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id
-      LEFT JOIN users lt ON lt.id = tws.last_touchpoint_user_id
+      LEFT JOIN users lt ON lt.id = acl.last_touchpoint_user_id
+      WHERE c.deleted_at IS NULL
       ${baseWhereClause}
       ${areaFilterWhereClause}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tws.completed_count, tws.next_touchpoint_type, tws.last_touchpoint_type, tws.last_touchpoint_user_id, lt.first_name, lt.last_name, tws.group_score
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, acl.completed_count, acl.next_touchpoint_type, acl.last_touchpoint_type, acl.last_touchpoint_user_id, lt.first_name, lt.last_name, acl.group_score
       ORDER BY
         -- Primary sort: group_score (1=callable, 2=waiting, 3=completed, 4=loan_released, 5=no_progress)
-        COALESCE(tws.group_score, 5) ASC,
+        COALESCE(acl.group_score, 5) ASC,
         -- Secondary sort: most recent activity first within groups
         (SELECT MAX(t.date) FROM touchpoints t WHERE t.client_id = c.id) DESC NULLS LAST,
         -- Tertiary sort: completed count descending
-        COALESCE(tws.completed_count, 0) DESC,
+        COALESCE(acl.completed_count, 0) DESC,
         -- Final sort: client creation date (newest first)
         c.created_at DESC
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
