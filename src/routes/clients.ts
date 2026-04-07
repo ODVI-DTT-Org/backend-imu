@@ -330,6 +330,7 @@ clients.get('/', authMiddleware, async (c) => {
       FROM clients c
       ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
       LEFT JOIN touchpoints t ON t.client_id = c.id
+      WHERE c.deleted_at IS NULL
       GROUP BY c.id, c.loan_released
     )`;
 
@@ -646,6 +647,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
+    // Soft delete filter: Only show active clients (not deleted)
+    baseWhereConditions.push(`c.deleted_at IS NULL`);
+
     if (clientType && clientType !== 'all') {
       baseWhereConditions.push(`c.client_type = $${baseParamIndex}`);
       baseParams.push(clientType);
@@ -709,6 +713,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       FROM clients c
       ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
       LEFT JOIN touchpoints t ON t.client_id = c.id
+      WHERE c.deleted_at IS NULL
       GROUP BY c.id, c.loan_released
     )`;
 
