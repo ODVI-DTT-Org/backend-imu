@@ -216,7 +216,19 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     // Determine sort order BEFORE building CTE (needed in both CTE and final query)
-    let orderByClause = 'ORDER BY c.created_at DESC';
+    // DEFAULT: Use group scoring ordering (same as /clients/assigned)
+    // Group 1 (callable): Next is Call, Group 2 (waiting): Next is Visit, Group 3: Completed, Group 4: Loan released, Group 5: No progress
+    let orderByClause = `ORDER BY
+      CASE
+        WHEN {touchpoint_alias}.loan_released THEN 4
+        WHEN COALESCE({touchpoint_alias}.completed_count, 0) >= 7 THEN 3
+        WHEN {touchpoint_alias}.next_touchpoint_type = 'Call' AND COALESCE({touchpoint_alias}.completed_count, 0) < 7 THEN 1
+        WHEN {touchpoint_alias}.next_touchpoint_type = 'Visit' AND COALESCE({touchpoint_alias}.completed_count, 0) < 7 THEN 2
+        ELSE 5
+      END ASC,
+      (SELECT MAX(t.date) FROM touchpoints t WHERE t.client_id = c.id) DESC NULLS LAST,
+      COALESCE({touchpoint_alias}.completed_count, 0) DESC,
+      c.created_at DESC`;
     let groupScoreCase = '';
 
     if (sortBy === 'touchpoint_status') {
@@ -511,7 +523,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${baseWhereClause}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id${groupScoreSelect !== '' ? ', tws.group_score' : ''}, lt.first_name, lt.last_name
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? ', tws.group_score' : ''}, lt.first_name, lt.last_name
       ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
