@@ -79,7 +79,7 @@ function formatLabel(rawValue: string | null): string {
 const ALLOWED_FILTERS: Record<string, readonly string[]> = {
   clients: ['client_type', 'product_type', 'market_type', 'pension_type'],
   touchpoints: ['type', 'status', 'reason'],
-  users: ['role_slug', 'status'],
+  users: ['role', 'status'],
   itineraries: ['status'],
   groups: ['status'],
   approvals: ['status', 'type'],

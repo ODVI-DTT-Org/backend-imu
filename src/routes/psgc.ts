@@ -10,6 +10,46 @@ import { pool } from '../db/index.js';
 const psgc = new Hono();
 
 // ============================================
+// ALL DATA - Single query for all PSGC data
+// ============================================
+
+// GET /api/psgc/all - Get all PSGC data in one query (no pagination)
+psgc.get('/all', authMiddleware, async (c) => {
+  try {
+    const result = await pool.query(`
+      SELECT
+        id,
+        region,
+        province,
+        mun_city as municipality,
+        mun_city_kind as municipality_kind,
+        barangay,
+        pin_location,
+        zip_code
+      FROM psgc
+      ORDER BY region, province, mun_city, barangay
+    `);
+
+    return c.json({
+      items: result.rows.map(row => ({
+        id: row.id,
+        region: row.region,
+        province: row.province,
+        municipality: row.municipality,
+        municipalityKind: row.municipality_kind,
+        barangay: row.barangay,
+        pinLocation: row.pin_location,
+        zipCode: row.zip_code,
+      })),
+      total: result.rows.length
+    });
+  } catch (error) {
+    console.error('Fetch all PSGC data error:', error);
+    return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
+// ============================================
 // REGIONS
 // ============================================
 
