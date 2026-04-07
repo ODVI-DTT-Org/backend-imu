@@ -9,6 +9,11 @@ import {
 } from '../errors/index.js';
 import { addReportJob, addLocationJob } from '../queues/utils/job-helpers.js';
 import { ReportJobType, LocationJobType } from '../queues/jobs/job-types.js';
+import {
+  exportTouchpointsToExcel,
+  exportClientsToExcel,
+  exportAttendanceToExcel,
+} from '../utils/excel-export.js';
 
 const reports = new Hono();
 
@@ -822,6 +827,52 @@ reports.post('/export-csv', authMiddleware, requirePermission('reports', 'export
     }
     console.error('Export CSV error:', error);
     throw new Error('Failed to create CSV export job');
+  }
+});
+
+// GET /api/reports/export/excel - Export report data as Excel
+reports.get('/export/excel', authMiddleware, requirePermission('reports', 'export'), async (c) => {
+  try {
+    const user = c.get('user');
+    const reportType = c.req.query('type') || 'touchpoints';
+    const period = c.req.query('period') || 'month';
+    const { startDate, endDate } = getDateRange(period);
+
+    // Only admin/staff can export
+    if (user.role === 'field_agent') {
+      throw new AuthorizationError('Unauthorized');
+    }
+
+    let excelBuffer: Buffer;
+    let filename = '';
+
+    switch (reportType) {
+      case 'touchpoints':
+        excelBuffer = await exportTouchpointsToExcel(pool, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
+        filename = `touchpoints_${period}.xlsx`;
+        break;
+
+      case 'clients':
+        excelBuffer = await exportClientsToExcel(pool, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
+        filename = `clients_${period}.xlsx`;
+        break;
+
+      case 'attendance':
+        excelBuffer = await exportAttendanceToExcel(pool, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
+        filename = `attendance_${period}.xlsx`;
+        break;
+
+      default:
+        throw new ValidationError('Invalid report type');
+    }
+
+    return c.body(new Uint8Array(excelBuffer), 200, {
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+    });
+  } catch (error) {
+    console.error('Export Excel error:', error);
+    throw new Error('Failed to export Excel');
   }
 });
 

@@ -6,7 +6,8 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 type StorageProvider = 'local' | 's3' | 'r2' | 'supabase';
 
@@ -115,6 +116,20 @@ class StorageService {
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
+  }
+
+  /**
+   * Get the current storage provider
+   */
+  getProvider(): StorageProvider {
+    return this.provider;
+  }
+
+  /**
+   * Check if S3 client is initialized
+   */
+  isS3Ready(): boolean {
+    return this.provider === 's3' && this.s3Client !== null;
   }
 
   private generateKey(filename: string, folder?: string): string {
@@ -431,11 +446,35 @@ class StorageService {
     }
   }
 
-  // Get signed URL for direct uploads
-  async getSignedUrl(filename: string, expiresIn: number = 3600): Promise<string> {
-    // In production, generate presigned URLs for direct client uploads
-    // For now, return a placeholder
-    return `${this.baseUrl}/upload-signed?filename=${encodeURIComponent(filename)}&expires=${Date.now() + expiresIn * 1000}`;
+  /**
+   * Get signed URL for file access
+   * Generates a presigned URL that allows temporary access to S3 objects
+   * @param storageKey - The S3 object key (file path in bucket)
+   * @param expiresIn - URL expiration time in seconds (default: 300 = 5 minutes)
+   * @returns Presigned URL string
+   */
+  async getSignedUrl(storageKey: string, expiresIn: number = 300): Promise<string> {
+    if (!this.s3Client) {
+      throw new Error('S3 client not initialized');
+    }
+
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucket,
+        Key: storageKey,
+      });
+
+      // Generate presigned URL with expiration
+      const signedUrl = await getSignedUrl(this.s3Client, command, {
+        expiresIn: expiresIn * 1000, // Convert to milliseconds
+      });
+
+      console.log(`[S3Storage] Generated presigned URL for ${storageKey}, expires in ${expiresIn}s`);
+      return signedUrl;
+    } catch (error) {
+      console.error('[S3Storage] Error generating signed URL:', error);
+      throw new Error('Failed to generate signed URL');
+    }
   }
 
   // Check S3 connection health
