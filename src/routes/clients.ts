@@ -297,19 +297,20 @@ clients.get('/', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
-    const baseWhereClause = baseWhereConditions.length > 0 ? `WHERE ${baseWhereConditions.join(' AND ')}` : '';
+    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
+    const baseWhereClause = baseWhereConditions.length > 0 ? `AND ${baseWhereConditions.join(' AND ')}` : '';
 
     // Build CTE-based query for proper filter-then-paginate behavior
     // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
     // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
 
     // Add area filter conditions for Caravan/Tele roles
+    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
     let areaFilterWhereClause = '';
     if (shouldFilterByArea) {
       // For Caravan/Tele: Filter by assigned provinces/municipalities
       // Using the new province and municipality columns directly
-      const whereOrAnd = baseWhereClause !== '' ? 'AND' : 'WHERE';
-      areaFilterWhereClause = ` ${whereOrAnd} (
+      areaFilterWhereClause = `AND (
         c.province IN (SELECT province FROM user_areas)
         AND c.municipality IN (SELECT municipality FROM user_areas)
       )`;
@@ -680,19 +681,20 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
-    const baseWhereClause = baseWhereConditions.length > 0 ? `WHERE ${baseWhereConditions.join(' AND ')}` : '';
+    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
+    const baseWhereClause = baseWhereConditions.length > 0 ? `AND ${baseWhereConditions.join(' AND ')}` : '';
 
     // Build CTE-based query for proper filter-then-paginate behavior
     // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
     // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
 
     // Add area filter conditions for Caravan/Tele roles
+    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
     let areaFilterWhereClause = '';
     if (shouldFilterByArea) {
       // For Caravan/Tele: Filter by assigned provinces/municipalities
       // Using the new province and municipality columns directly
-      const whereOrAnd = baseWhereClause !== '' ? 'AND' : 'WHERE';
-      areaFilterWhereClause = ` ${whereOrAnd} (
+      areaFilterWhereClause = `AND (
         c.province IN (SELECT province FROM user_areas)
         AND c.municipality IN (SELECT municipality FROM user_areas)
       )`;
@@ -1973,12 +1975,13 @@ clients.post(
     try {
       const user = c.get('user');
 
-      // Validation schema for batch PSGC assignment (municipality only, no barangay)
+      // Validation schema for batch PSGC assignment with PSGC ID (from first barangay)
       const batchPsgcSchema = z.object({
         assignments: z
           .array(
             z.object({
               client_id: z.string().uuid(),
+              psgc_id: z.number().int().positive().optional(),
               region: z.string(),
               province: z.string(),
               municipality: z.string(),
@@ -2005,13 +2008,14 @@ clients.post(
              SET region = $1,
                  province = $2,
                  municipality = $3,
-                 psgc_id = NULL,  -- Explicitly set to NULL (barangay required for PSGC ID)
+                 psgc_id = $4,  -- Use PSGC ID from first barangay
                  updated_at = NOW()
-             WHERE id = $4`,
+             WHERE id = $5`,
             [
               assignment.region,
               assignment.province,
               assignment.municipality,
+              assignment.psgc_id || null,  // Use PSGC ID if provided, otherwise NULL
               assignment.client_id,
             ]
           );
