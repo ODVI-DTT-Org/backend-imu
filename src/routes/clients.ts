@@ -538,7 +538,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${areaFilterWhereClause}
       ${groupScoreFilter}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
-      ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
+      ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
