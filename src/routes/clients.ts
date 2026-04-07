@@ -517,7 +517,7 @@ clients.get('/', authMiddleware, async (c) => {
 
     // For grouped CTEs approach (Tele role OR touchpointStatus filter), include group_score in SELECT
     const groupScoreSelect = (touchpointStatus && user.role === 'tele') || (sortBy === 'touchpoint_status' && groupScoreCase !== '')
-      ? ', ${touchpointInfoAlias}.group_score'
+      ? `, ${touchpointInfoAlias}.group_score`
       : '';
 
     const mainQuery = `
@@ -844,6 +844,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${withGroupScoreCTE}
       SELECT COUNT(*) as count
       FROM assigned_clients_in_location acl
+      JOIN clients c ON c.id = acl.client_id
+      WHERE c.deleted_at IS NULL
+      ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
+      ${areaFilterWhereClause ? areaFilterWhereClause : ''}
     `;
 
     const countResult = await pool.query(countQuery, baseParams);
@@ -882,15 +886,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, acl.completed_count, acl.next_touchpoint_type, acl.last_touchpoint_type, acl.last_touchpoint_user_id, lt.first_name, lt.last_name, acl.group_score
-      ORDER BY
-        -- Primary sort: group_score (1=callable, 2=waiting, 3=completed, 4=loan_released, 5=no_progress)
-        COALESCE(acl.group_score, 5) ASC,
-        -- Secondary sort: most recent activity first within groups
-        (SELECT MAX(t.date) FROM touchpoints t WHERE t.client_id = c.id) DESC NULLS LAST,
-        -- Tertiary sort: completed count descending
-        COALESCE(acl.completed_count, 0) DESC,
-        -- Final sort: client creation date (newest first)
-        c.created_at DESC
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
