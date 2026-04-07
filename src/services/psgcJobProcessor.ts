@@ -1,7 +1,7 @@
 /**
  * PSGC Matching Job Processor
  *
- * Processes PSGC matching in background chunks.
+ * Processes PSGC matching using full PSGC data loaded once.
  */
 
 import { pool } from '../db/index.js';
@@ -15,6 +15,12 @@ import {
 import { logger } from '../utils/logger.js';
 
 const BATCH_SIZE = 50; // Process 50 clients per batch
+
+interface PSGCRecord {
+  id: string;
+  province: string;
+  mun_city: string;
+}
 
 interface PSGCMatchResult {
   client_id: string;
@@ -67,9 +73,23 @@ async function countClientsWithoutPSGC(): Promise<number> {
 }
 
 /**
- * Match client to PSGC record using progressive strategies
+ * Fetch all PSGC data at once for matching
  */
-async function matchClientToPSGC(client: any): Promise<PSGCMatchResult> {
+async function getAllPSGCData(): Promise<PSGCRecord[]> {
+  const result = await pool.query(
+    `SELECT id, province, mun_city
+     FROM psgc
+     ORDER BY province, mun_city`
+  );
+
+  return result.rows;
+}
+
+/**
+ * Match client to PSGC record using progressive strategies
+ * Uses pre-loaded PSGC data for matching instead of database queries
+ */
+function matchClientToPSGC(client: any, psgcData: PSGCRecord[]): PSGCMatchResult {
   const { id: clientId, municipality, province } = client;
 
   // Normalize strings
@@ -79,41 +99,34 @@ async function matchClientToPSGC(client: any): Promise<PSGCMatchResult> {
   const clientProvince = normalize(province || '');
 
   // Strategy 1: Direct pattern match
-  let result = await pool.query(
-    `SELECT id, province, mun_city
-     FROM psgc
-     WHERE TRIM(province) || '-' || TRIM(mun_city) = $1
-     LIMIT 1`,
-    [`${clientProvince}-${clientMunicipality}`]
-  );
+  let match = psgcData.find(psgc => {
+    const psgcProvince = normalize(psgc.province);
+    const psgcMunicipality = normalize(psgc.mun_city);
+    return `${psgcProvince}-${psgcMunicipality}` === `${clientProvince}-${clientMunicipality}`;
+  });
 
-  if (result.rows.length > 0) {
-    await updateClientPSGC(clientId, result.rows[0].id);
+  if (match) {
     return {
       client_id: clientId,
-      psgc_id: result.rows[0].id,
+      psgc_id: match.id,
       match_type: 'exact',
       status: 'matched',
     };
   }
 
   // Strategy 2: Reverse pattern match (client municipality in PSGC municipality)
-  result = await pool.query(
-    `SELECT id, province, mun_city
-     FROM psgc
-     WHERE TRIM(province) = $1
-       AND POSITION($2 IN TRIM(mun_city)) > 0
-     LIMIT 1`,
-    [clientProvince, clientMunicipality]
-  );
+  match = psgcData.find(psgc => {
+    const psgcProvince = normalize(psgc.province);
+    const psgcMunicipality = normalize(psgc.mun_city);
+    return psgcProvince === clientProvince && psgcMunicipality.includes(clientMunicipality);
+  });
 
-  if (result.rows.length > 0) {
-    await updateClientPSGC(clientId, result.rows[0].id);
+  if (match) {
     return {
       client_id: clientId,
-      psgc_id: result.rows[0].id,
+      psgc_id: match.id,
       match_type: 'reverse',
-      match_reason: `Client municipality "${clientMunicipality}" found in PSGC municipality "${result.rows[0].mun_city}"`,
+      match_reason: `Client municipality "${clientMunicipality}" found in PSGC municipality "${match.mun_city}"`,
       status: 'matched',
     };
   }
@@ -121,20 +134,16 @@ async function matchClientToPSGC(client: any): Promise<PSGCMatchResult> {
   // Strategy 3: Keyword match (remove "CITY" suffix)
   const keywordMunicipality = clientMunicipality.replace(/CITY$/g, '').trim();
 
-  result = await pool.query(
-    `SELECT id, province, mun_city
-     FROM psgc
-     WHERE TRIM(province) = $1
-       AND REPLACE(TRIM(mun_city), 'CITY', '') = $2
-     LIMIT 1`,
-    [clientProvince, keywordMunicipality]
-  );
+  match = psgcData.find(psgc => {
+    const psgcProvince = normalize(psgc.province);
+    const psgcMunicipality = normalize(psgc.mun_city).replace(/CITY$/g, '').trim();
+    return psgcProvince === clientProvince && psgcMunicipality === keywordMunicipality;
+  });
 
-  if (result.rows.length > 0) {
-    await updateClientPSGC(clientId, result.rows[0].id);
+  if (match) {
     return {
       client_id: clientId,
-      psgc_id: result.rows[0].id,
+      psgc_id: match.id,
       match_type: 'keyword',
       match_reason: `Matched after removing "CITY" suffix`,
       status: 'matched',
@@ -148,20 +157,20 @@ async function matchClientToPSGC(client: any): Promise<PSGCMatchResult> {
     .replace(/^CITY\s+OF\s+/i, '')
     .trim();
 
-  result = await pool.query(
-    `SELECT id, province, mun_city
-     FROM psgc
-     WHERE TRIM(province) = $1
-       AND REPLACE(REPLACE(REPLACE(TRIM(mun_city), 'CITY', ''), 'THE ', ''), 'CITY OF ', '') = $2
-     LIMIT 1`,
-    [clientProvince, advancedClientMun]
-  );
+  match = psgcData.find(psgc => {
+    const psgcProvince = normalize(psgc.province);
+    const psgcMunicipality = normalize(psgc.mun_city)
+      .replace(/CITY$/g, '')
+      .replace(/^THE\s+/i, '')
+      .replace(/^CITY\s+OF\s+/i, '')
+      .trim();
+    return psgcProvince === clientProvince && psgcMunicipality === advancedClientMun;
+  });
 
-  if (result.rows.length > 0) {
-    await updateClientPSGC(clientId, result.rows[0].id);
+  if (match) {
     return {
       client_id: clientId,
-      psgc_id: result.rows[0].id,
+      psgc_id: match.id,
       match_type: 'advanced_keyword',
       match_reason: `Matched after removing common prefixes/suffixes`,
       status: 'matched',
@@ -193,6 +202,11 @@ export async function processPSGCMatching(job: BackgroundJob): Promise<PSGCMatch
 
   logger.info('psgc-job', `Starting PSGC matching job ${job.id} (dry_run: ${dry_run})`);
 
+  // Load all PSGC data once at the beginning
+  logger.info('psgc-job', 'Loading all PSGC data...');
+  const psgcData = await getAllPSGCData();
+  logger.info('psgc-job', `Loaded ${psgcData.length} PSGC records`);
+
   // Get total clients to process
   const totalClients = await countClientsWithoutPSGC();
   logger.info('psgc-job', `Found ${totalClients} clients without PSGC ID`);
@@ -206,10 +220,10 @@ export async function processPSGCMatching(job: BackgroundJob): Promise<PSGCMatch
 
     for (const client of clients) {
       try {
-        const matchResult = await matchClientToPSGC(client);
+        const matchResult = matchClientToPSGC(client, psgcData);
 
         if (!dry_run && matchResult.status === 'matched' && matchResult.psgc_id) {
-          // PSGC ID was already updated in matchClientToPSGC
+          await updateClientPSGC(client.id, matchResult.psgc_id);
         }
 
         results.push(matchResult);
