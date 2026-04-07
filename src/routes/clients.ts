@@ -364,7 +364,10 @@ clients.get('/', authMiddleware, async (c) => {
     let groupScoreFilter = '';
     let useGroupedCTEs = false;
 
-    if (touchpointStatus) {
+    // IMPORTANT: Create touchpoint_with_score CTE when touchpointStatus is provided OR when sortBy is touchpoint_status
+    const needsGroupScoreCTE = touchpointStatus || sortBy === 'touchpoint_status';
+
+    if (needsGroupScoreCTE) {
       // For Tele role: Use separate CTEs for each group to ensure proper ordering
       // callable (Group 1) will ALWAYS be first in the result set
       if (user.role === 'tele') {
@@ -418,7 +421,7 @@ clients.get('/', authMiddleware, async (c) => {
           'no_progress': 5
         };
 
-        const targetScore = statusToScoreMap[touchpointStatus];
+        const targetScore = statusToScoreMap[touchpointStatus as string];
         if (targetScore !== undefined) {
           const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
           const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
@@ -435,16 +438,9 @@ clients.get('/', authMiddleware, async (c) => {
           canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
         }
 
-        // Map touchpoint_status to group score
-        const statusToScoreMap: Record<string, number> = {
-          'callable': 1,
-          'completed': 2,
-          'has_progress': 3,
-          'no_progress': 4
-        };
-
-        const targetScore = statusToScoreMap[touchpointStatus];
-        if (targetScore !== undefined) {
+        // IMPORTANT: Always create touchpoint_with_score CTE when sortBy is touchpoint_status
+        // This ensures the group_score column is available for sorting
+        if (sortBy === 'touchpoint_status' || touchpointStatus) {
           withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
             SELECT *,
               CASE
@@ -455,7 +451,18 @@ clients.get('/', authMiddleware, async (c) => {
               END as group_score
             FROM touchpoint_info
           )`;
+        }
 
+        // Map touchpoint_status to group score for filtering
+        const statusToScoreMap: Record<string, number> = {
+          'callable': 1,
+          'completed': 2,
+          'has_progress': 3,
+          'no_progress': 4
+        };
+
+        const targetScore = statusToScoreMap[touchpointStatus as string];
+        if (targetScore !== undefined) {
           const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
           const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
           groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
@@ -466,11 +473,17 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     // Get total count using CTE
+    // Check if touchpoint_with_score CTE is created (for both count and main queries)
+    const usesTouchpointWithScore = withGroupScoreCTE.includes('touchpoint_with_score');
+    const touchpointInfoJoinForCount = usesTouchpointWithScore
+      ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id'
+      : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
+
     const countQuery = `
       ${withGroupScoreCTE}
       SELECT COUNT(DISTINCT c.id) as count
       FROM clients c
-      ${touchpointStatus ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id' : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id'}
+      ${touchpointInfoJoinForCount}
       ${baseWhereClause}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
@@ -484,14 +497,15 @@ clients.get('/', authMiddleware, async (c) => {
 
     // Get paginated results using CTEs
     // The CTEs filter ALL clients first, then we paginate
-    // When touchpointStatus is provided, use tws (touchpoint_with_score) instead of tp (touchpoint_info)
-    const touchpointInfoAlias = touchpointStatus ? 'tws' : 'tp';
-    const touchpointInfoJoin = touchpointStatus
+    // When touchpoint_with_score CTE is created, use it instead of touchpoint_info
+    // Reuse usesTouchpointWithScore from count query above
+    const touchpointInfoAlias = usesTouchpointWithScore ? 'tws' : 'tp';
+    const touchpointInfoJoin = usesTouchpointWithScore
       ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id'
       : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
 
-    // For grouped CTEs approach (Tele role), include group_score in SELECT
-    const groupScoreSelect = (touchpointStatus && user.role === 'tele')
+    // For grouped CTEs approach (Tele role OR touchpointStatus filter), include group_score in SELECT
+    const groupScoreSelect = (touchpointStatus && user.role === 'tele') || (sortBy === 'touchpoint_status' && groupScoreCase !== '')
       ? ', ${touchpointInfoAlias}.group_score'
       : '';
 
@@ -523,7 +537,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${baseWhereClause}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? ', tws.group_score' : ''}, lt.first_name, lt.last_name
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
       ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
@@ -594,7 +608,11 @@ clients.get('/', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch clients error:', error);
-    throw new Error();
+    // Preserve the actual error message for debugging
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Fetch clients error details:', errorMessage);
+    console.error('Fetch clients error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    throw new Error(`Failed to fetch clients: ${errorMessage}`);
   }
 });
 
@@ -929,7 +947,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
     });
   } catch (error) {
     console.error('Fetch assigned clients error:', error);
-    throw new Error();
+    // Preserve the actual error message for debugging
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Fetch assigned clients error details:', errorMessage);
+    console.error('Fetch assigned clients error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    throw new Error(`Failed to fetch assigned clients: ${errorMessage}`);
   }
 });
 
