@@ -293,8 +293,10 @@ clients.get('/', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
-    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
-    const baseWhereClause = baseWhereConditions.length > 0 ? `AND ${baseWhereConditions.join(' AND ')}` : '';
+    // Build WHERE clause for main query
+    // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
+    // This will be handled differently in each endpoint
+    const baseWhereConditionsJoined = baseWhereConditions.length > 0 ? baseWhereConditions.join(' AND ') : '';
 
     // Build CTE-based query for proper filter-then-paginate behavior
     // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
@@ -407,7 +409,7 @@ clients.get('/', authMiddleware, async (c) => {
 
         const targetScore = statusToScoreMap[touchpointStatus as string];
         if (targetScore !== undefined) {
-          const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+          const hasExistingWhere = baseWhereConditionsJoined || areaFilterWhereClause;
           const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
           groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
           baseParams.push(targetScore);
@@ -447,7 +449,7 @@ clients.get('/', authMiddleware, async (c) => {
 
         const targetScore = statusToScoreMap[touchpointStatus as string];
         if (targetScore !== undefined) {
-          const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+          const hasExistingWhere = baseWhereConditionsJoined || areaFilterWhereClause;
           const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
           groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
           baseParams.push(targetScore);
@@ -468,7 +470,7 @@ clients.get('/', authMiddleware, async (c) => {
       SELECT COUNT(DISTINCT c.id) as count
       FROM clients c
       ${touchpointInfoJoinForCount}
-      ${baseWhereClause}
+      ${baseWhereConditionsJoined ? `WHERE ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
     `;
@@ -518,7 +520,7 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN phone_numbers p ON p.client_id = c.id
       ${touchpointInfoJoin}
       LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
-      ${baseWhereClause}
+      ${baseWhereConditionsJoined ? `WHERE ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
@@ -692,8 +694,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
-    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
-    const baseWhereClause = baseWhereConditions.length > 0 ? `AND ${baseWhereConditions.join(' AND ')}` : '';
+    // Build WHERE clause for main query
+    // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
+    // This will be handled differently in each endpoint
+    const baseWhereConditionsJoined = baseWhereConditions.length > 0 ? baseWhereConditions.join(' AND ') : '';
 
     // Build CTE-based query for proper filter-then-paginate behavior
     // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
@@ -852,7 +856,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       LEFT JOIN phone_numbers p ON p.client_id = c.id
       LEFT JOIN users lt ON lt.id = acl.last_touchpoint_user_id
       WHERE c.deleted_at IS NULL
-      ${baseWhereClause}
+      ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, acl.completed_count, acl.next_touchpoint_type, acl.last_touchpoint_type, acl.last_touchpoint_user_id, lt.first_name, lt.last_name, acl.group_score
       ORDER BY
