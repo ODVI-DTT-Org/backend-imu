@@ -1862,4 +1862,339 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
   }
 });
 
+// POST /api/clients/:id/psgc - Assign PSGC to a single client (complete with barangay)
+clients.post(
+  '/:id/psgc',
+  authMiddleware,
+  requirePermission('clients', 'update'),
+  async (c) => {
+    try {
+      const user = c.get('user');
+      const clientId = c.req.param('id');
+
+      // Validation schema for single PSGC assignment (with barangay)
+      const singlePsgcSchema = z.object({
+        psgc_id: z.number().int().positive(),
+        region: z.string().optional(),
+        province: z.string().optional(),
+        municipality: z.string().optional(),
+        barangay: z.string().optional(),
+      });
+
+      const body = await c.req.json();
+      const validated = singlePsgcSchema.parse(body);
+
+      // Verify PSGC exists in PSGC table
+      const psgcCheck = await pool.query(
+        'SELECT id, region, province, mun_city, barangay FROM psgc WHERE id = $1',
+        [validated.psgc_id]
+      );
+
+      if (psgcCheck.rows.length === 0) {
+        throw new NotFoundError('PSGC record not found');
+      }
+
+      const psgc = psgcCheck.rows[0];
+
+      // Update client with complete PSGC information (including barangay)
+      const result = await pool.query(
+        `UPDATE clients
+         SET psgc_id = $1,
+             psgc_region = $2,
+             psgc_province = $3,
+             psgc_municipality = $4,
+             psgc_barangay = $5,
+             region = COALESCE($6, region),
+             province = COALESCE($7, province),
+             municipality = COALESCE($8, municipality),
+             barangay = COALESCE($9, barangay),
+             updated_at = NOW()
+         WHERE id = $10
+         RETURNING *`,
+        [
+          validated.psgc_id,
+          psgc.region,
+          psgc.province,
+          psgc.mun_city,
+          psgc.barangay,
+          validated.region || psgc.region,
+          validated.province || psgc.province,
+          validated.municipality || psgc.mun_city,
+          validated.barangay || psgc.barangay,
+          clientId,
+        ]
+      );
+
+      if (result.rows.length === 0) {
+        throw new NotFoundError('Client not found');
+      }
+
+      // Log assignment for audit trail
+      await pool.query(
+        `INSERT INTO audit_log (user_id, action, entity_type, entity_id, details)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          user.sub,
+          'psgc_assigned',
+          'client',
+          clientId,
+          JSON.stringify({
+            psgc_id: validated.psgc_id,
+            region: psgc.region,
+            province: psgc.province,
+            municipality: psgc.mun_city,
+            barangay: psgc.barangay,
+          }),
+        ]
+      );
+
+      return c.json({
+        success: true,
+        message: 'PSGC assigned successfully',
+        client: mapRowToClient(result.rows[0]),
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new ValidationError('Invalid request body', error.errors);
+      }
+      throw error;
+    }
+  }
+);
+
+// POST /api/clients/psgc/batch - Batch assign municipality (without barangay/PSGC ID)
+clients.post(
+  '/psgc/batch',
+  authMiddleware,
+  requirePermission('clients', 'update'),
+  async (c) => {
+    try {
+      const user = c.get('user');
+
+      // Validation schema for batch PSGC assignment (municipality only, no barangay)
+      const batchPsgcSchema = z.object({
+        assignments: z
+          .array(
+            z.object({
+              client_id: z.string().uuid(),
+              region: z.string(),
+              province: z.string(),
+              municipality: z.string(),
+            })
+          )
+          .min(1)
+          .max(100), // Max 100 assignments per batch
+      });
+
+      const body = await c.req.json();
+      const validated = batchPsgcSchema.parse(body);
+
+      const results = {
+        success: [] as string[],
+        failed: [] as { client_id: string; error: string }[],
+      };
+
+      // Process each assignment
+      for (const assignment of validated.assignments) {
+        try {
+          // Update client with municipality information only (no barangay, no PSGC ID)
+          await pool.query(
+            `UPDATE clients
+             SET psgc_region = $1,
+                 psgc_province = $2,
+                 psgc_municipality = $3,
+                 region = COALESCE($4, region),
+                 province = COALESCE($5, province),
+                 municipality = COALESCE($6, municipality),
+                 psgc_id = NULL,  -- Explicitly set to NULL (barangay required for PSGC ID)
+                 updated_at = NOW()
+             WHERE id = $7`,
+            [
+              assignment.region,
+              assignment.province,
+              assignment.municipality,
+              assignment.region,
+              assignment.province,
+              assignment.municipality,
+              assignment.client_id,
+            ]
+          );
+
+          results.success.push(assignment.client_id);
+        } catch (error) {
+          results.failed.push({
+            client_id: assignment.client_id,
+            error: error instanceof Error ? error.message : 'Unknown error',
+          });
+        }
+      }
+
+      // Log batch assignment for audit trail
+      await pool.query(
+        `INSERT INTO audit_log (user_id, action, entity_type, details)
+         VALUES ($1, $2, $3, $4)`,
+        [
+          user.sub,
+          'psgc_batch_municipality_assigned',
+          'client',
+          JSON.stringify({
+            total: validated.assignments.length,
+            successful: results.success.length,
+            failed: results.failed.length,
+          }),
+        ]
+      );
+
+      return c.json({
+        success: true,
+        message: `Municipality assignment completed: ${results.success.length} successful, ${results.failed.length} failed`,
+        results,
+        note: results.success.length > 0
+          ? 'Individual barangay assignment will be required for complete PSGC matching.'
+          : undefined,
+      });
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        throw new ValidationError('Invalid request body', error.errors);
+      }
+      throw error;
+    }
+  }
+);
+
+// POST /api/clients/bulk-create - Bulk create clients from CSV upload
+clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'create'), auditMiddleware('client'), async (c) => {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const user = c.get('user');
+    const body = await c.req.json();
+
+    // Validate request structure
+    const bulkCreateSchema = z.object({
+      clients: z.array(z.object({
+        first_name: z.string().min(1).max(255),
+        last_name: z.string().min(1).max(255),
+        middle_name: z.string().max(255).optional(),
+        birth_date: z.string().max(50).optional(),
+        email: z.string().email().max(255).optional().nullable(),
+        phone: z.string().max(50).optional(),
+        agency_name: z.string().max(255).optional(),
+        department: z.string().max(255).optional(),
+        position: z.string().max(255).optional(),
+        employment_status: z.string().max(50).optional(),
+        payroll_date: z.string().max(50).optional(),
+        tenure: z.number().optional(),
+        client_type: z.enum(['POTENTIAL', 'EXISTING']).default('POTENTIAL'),
+        product_type: z.string().max(100).optional(),
+        market_type: z.string().max(100).optional(),
+        pension_type: z.string().max(100).optional(),
+        pan: z.string().max(50).optional(),
+        facebook_link: z.string().max(500).optional(),
+        remarks: z.string().max(1000).optional(),
+        barangay: z.string().max(255).optional(), // For address parsing
+        province: z.string().max(255).optional(),
+        municipality: z.string().max(255).optional(),
+      }))
+    });
+
+    const validated = bulkCreateSchema.parse(body);
+
+    let successful = 0;
+    let failed = 0;
+    const errors: Array<{ client: string; error: string }> = [];
+
+    // Process each client
+    for (const clientData of validated.clients) {
+      try {
+        // Validate individual client
+        const validatedClient = createClientSchema.parse(clientData);
+
+        // For Tele and Caravan users, create approval request instead of inserting directly
+        if (user.role === 'tele' || user.role === 'caravan') {
+          // Store client data as JSON in notes field
+          const clientDataJson = JSON.stringify(validatedClient);
+
+          // Create approval request for client creation
+          await client.query(
+            `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+               VALUES (gen_random_uuid(), $1, NULL, $2, $3, $4, $5, 'pending')`,
+            ['client', user.sub, user.role, 'Bulk Client Creation Request', clientDataJson]
+          );
+
+          successful++;
+        } else {
+          // For Admin users, create directly
+          await client.query(
+            `INSERT INTO clients (
+              id, first_name, last_name, middle_name, birth_date, email, phone,
+              agency_name, department, position, employment_status, payroll_date, tenure,
+              client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
+              province, municipality, barangay, is_starred
+            ) VALUES (
+              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, false
+            )`,
+            [
+              validatedClient.first_name,
+              validatedClient.last_name,
+              validatedClient.middle_name || null,
+              validatedClient.birth_date || null,
+              validatedClient.email || null,
+              validatedClient.phone || null,
+              validatedClient.agency_name || null,
+              validatedClient.department || null,
+              validatedClient.position || null,
+              validatedClient.employment_status || null,
+              validatedClient.payroll_date || null,
+              validatedClient.tenure || null,
+              validatedClient.client_type,
+              validatedClient.product_type || null,
+              validatedClient.market_type || null,
+              validatedClient.pension_type || null,
+              validatedClient.pan || null,
+              validatedClient.facebook_link || null,
+              validatedClient.remarks || null,
+              validatedClient.province || null,
+              validatedClient.municipality || null,
+              validatedClient.barangay || null,
+            ]
+          );
+
+          successful++;
+        }
+      } catch (error) {
+        failed++;
+        const clientName = `${clientData.first_name} ${clientData.last_name}`;
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        errors.push({ client: clientName, error: errorMsg });
+
+        // Log individual client error for debugging
+        console.error(`[Bulk Create] Failed to create client ${clientName}:`, errorMsg);
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return c.json({
+      successful,
+      failed,
+      errors,
+      message: `Bulk import completed: ${successful} successful, ${failed} failed`,
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Validation failed', error.errors);
+      throw validationError;
+    }
+
+    console.error('Bulk create clients error:', error);
+    throw new Error('Failed to bulk create clients');
+  } finally {
+    client.release();
+  }
+});
+
 export default clients;
