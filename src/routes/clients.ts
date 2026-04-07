@@ -473,24 +473,24 @@ clients.get('/', authMiddleware, async (c) => {
       : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
 
     // Build combined WHERE clause properly
-    // We need to handle the case where areaFilterWhereClause starts with "AND" but there's no WHERE clause yet
-    let combinedWhereClause = '';
-    if (baseWhereConditionsJoined || areaFilterWhereClause || groupScoreFilter) {
-      combinedWhereClause = 'WHERE ';
-      const conditions: string[] = [];
-      if (baseWhereConditionsJoined) {
-        conditions.push(baseWhereConditionsJoined);
-      }
-      if (areaFilterWhereClause) {
-        // Remove "AND " or "WHERE " prefix from area filter
-        conditions.push(areaFilterWhereClause.replace(/^(AND |WHERE )/, ''));
-      }
-      if (groupScoreFilter) {
-        // Remove "AND " or "WHERE " prefix from group filter
-        conditions.push(groupScoreFilter.replace(/^(AND |WHERE )/, ''));
-      }
-      combinedWhereClause += conditions.join(' AND ');
+    // Collect all conditions first, then build WHERE clause
+    const allConditions: string[] = [];
+
+    if (baseWhereConditionsJoined) {
+      allConditions.push(baseWhereConditionsJoined);
     }
+
+    if (areaFilterWhereClause) {
+      // Remove "AND " or "WHERE " prefix from area filter
+      allConditions.push(areaFilterWhereClause.replace(/^(AND |WHERE )/, ''));
+    }
+
+    if (groupScoreFilter) {
+      // Remove "AND " or "WHERE " prefix from group filter, but keep the parameter placeholder
+      allConditions.push(groupScoreFilter.replace(/^(AND |WHERE )/, ''));
+    }
+
+    const combinedWhereClause = allConditions.length > 0 ? `WHERE ${allConditions.join(' AND ')}` : '';
 
     const countQuery = `
       ${withGroupScoreCTE}
