@@ -3,8 +3,11 @@
 -- ============================================================
 -- This script creates the complete IMU database schema
 -- including all tables, indexes, triggers, and views
--- Version: 1.3 (as of 2026-04-07)
+-- Version: 1.4 (as of 2026-04-08)
 -- Changes:
+-- - Added deleted_at column to clients table for soft deletes
+-- - Added index on clients.deleted_at for performance
+-- Previous changes (v1.3):
 -- - Added dashboard tables: targets, action_items, feature_flags
 -- - Added dashboard performance indexes for < 100-200ms queries
 -- - Added dashboard, approvals, error_logs RBAC permissions
@@ -109,7 +112,8 @@ CREATE TABLE IF NOT EXISTS clients (
     loan_released_at TIMESTAMP,
 
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    deleted_at TIMESTAMPTZ
 );
 
 -- Addresses table
@@ -386,6 +390,7 @@ CREATE INDEX IF NOT EXISTS idx_clients_agency_id ON clients(agency_id);
 CREATE INDEX IF NOT EXISTS idx_clients_client_type ON clients(client_type);
 CREATE INDEX IF NOT EXISTS idx_clients_is_starred ON clients(is_starred) WHERE is_starred = true;
 CREATE INDEX IF NOT EXISTS idx_clients_updated_at ON clients(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_clients_deleted_at ON clients(deleted_at) WHERE deleted_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_clients_municipality ON clients(municipality);
 CREATE INDEX IF NOT EXISTS idx_clients_udi ON clients(udi);
 CREATE INDEX IF NOT EXISTS idx_clients_loan_released ON clients(loan_released);

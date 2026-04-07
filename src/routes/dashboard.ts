@@ -103,7 +103,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         'itinerary' as type, i.id, i.created_at as date,
         c.first_name || ' ' || c.last_name as client_name
        FROM itineraries i
-       JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
+       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        WHERE i.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 'i.user_id')}
        ORDER BY date DESC
        LIMIT 10`,
@@ -481,29 +481,50 @@ dashboard.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), 
     const existing = parseInt(conversionResult.rows[0].existing) || 0;
     const conversionRate = potential > 0 ? Math.round((existing / potential) * 100) : 0;
 
-    // Get active caravans
-    const activeCaravansResult = await pool.query(
-      `SELECT COUNT(*) as count
-       FROM users
-       WHERE role = 'caravan' AND is_active = true`
-    );
-    const activeCaravans = parseInt(activeCaravansResult.rows[0].count);
+    // Get active caravans (check if is_active column exists first)
+    let activeCaravans = 0;
+    try {
+      const activeCaravansResult = await pool.query(
+        `SELECT COUNT(*) as count
+         FROM users
+         WHERE role = 'caravan' AND (is_active IS NULL OR is_active = true)`
+      );
+      activeCaravans = parseInt(activeCaravansResult.rows[0].count);
+    } catch (error) {
+      // Fallback if is_active column doesn't exist
+      const activeCaravansResult = await pool.query(
+        `SELECT COUNT(*) as count
+         FROM users
+         WHERE role = 'caravan'`
+      );
+      activeCaravans = parseInt(activeCaravansResult.rows[0].count);
+    }
 
-    // Get total agents (caravans + teles)
-    const totalAgentsResult = await pool.query(
-      `SELECT COUNT(*) as count
-       FROM users
-       WHERE role IN ('caravan', 'tele') AND is_active = true`
-    );
-    const totalAgents = parseInt(totalAgentsResult.rows[0].count);
+    // Get total agents (caravans + teles) with backwards compatibility
+    let totalAgents = 0;
+    try {
+      const totalAgentsResult = await pool.query(
+        `SELECT COUNT(*) as count
+         FROM users
+         WHERE role IN ('caravan', 'tele') AND (is_active IS NULL OR is_active = true)`
+      );
+      totalAgents = parseInt(totalAgentsResult.rows[0].count);
+    } catch (error) {
+      // Fallback if is_active column doesn't exist
+      const totalAgentsResult = await pool.query(
+        `SELECT COUNT(*) as count
+         FROM users
+         WHERE role IN ('caravan', 'tele')`
+      );
+      totalAgents = parseInt(totalAgentsResult.rows[0].count);
+    }
 
     // Get today's visits
     const todayVisitsResult = await pool.query(
       `SELECT COUNT(*) as count
        FROM itineraries
        WHERE scheduled_date = CURRENT_DATE
-         AND status IN ('pending', 'in_progress')
-         AND deleted_at IS NULL`
+         AND status IN ('pending', 'in_progress')`
     );
     const todayVisits = parseInt(todayVisitsResult.rows[0].count);
 
