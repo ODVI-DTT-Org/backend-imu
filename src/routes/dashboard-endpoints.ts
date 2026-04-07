@@ -137,7 +137,6 @@ export async function getTeamPerformance(params: {
         u.first_name,
         u.last_name,
         u.role,
-        u.status,
         COUNT(DISTINCT CASE WHEN c.client_type = 'EXISTING' THEN c.id END) as clientsCompleted,
         COUNT(t.id) as touchpointsCompleted,
         COALESCE(SUM(targ.target_clients), 0) as clientsTarget,
@@ -153,8 +152,8 @@ export async function getTeamPerformance(params: {
         AND targ.month = EXTRACT(MONTH FROM $1::date)
       WHERE u.role IN ('caravan', 'tele')
         AND (${whereClause})
-        AND u.status = 'active'
-      GROUP BY u.id, u.first_name, u.last_name, u.role, u.status
+        AND u.is_active = true
+      GROUP BY u.id, u.first_name, u.last_name, u.role
     )
     SELECT * FROM agent_stats
     ORDER BY

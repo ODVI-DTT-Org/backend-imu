@@ -464,8 +464,7 @@ dashboard.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), 
       `SELECT
          COUNT(*) as total_touchpoints,
          COUNT(*) FILTER (WHERE status = 'Completed') as completed_touchpoints
-       FROM touchpoints
-       WHERE deleted_at IS NULL`
+       FROM touchpoints`
     );
     const totalTouchpoints = parseInt(touchpointStatsResult.rows[0].total_touchpoints);
     const completedTouchpoints = parseInt(touchpointStatsResult.rows[0].completed_touchpoints);
@@ -562,7 +561,7 @@ dashboard.get('/recent-activities', authMiddleware, requirePermission('dashboard
         FROM touchpoints t
         LEFT JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
         LEFT JOIN users u ON u.id = t.user_id
-        WHERE t.created_at >= NOW() - INTERVAL '7 days' AND t.deleted_at IS NULL
+        WHERE t.created_at >= NOW() - INTERVAL '7 days'
 
         UNION ALL
 
@@ -681,7 +680,7 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
         COUNT(*) FILTER (WHERE type = 'Visit') as visits,
         COUNT(*) FILTER (WHERE type = 'Call') as calls
       FROM touchpoints
-      WHERE date >= $1 AND date <= $2 AND deleted_at IS NULL
+      WHERE date >= $1 AND date <= $2
       GROUP BY DATE(created_at)
       ORDER BY date
       `,
@@ -714,7 +713,7 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
           COUNT(t.id) FILTER (WHERE t.type = 'Call' AND t.date >= $1 AND t.date <= $2) as calls,
           COUNT(t.id) FILTER (WHERE t.date >= $1 AND t.date <= $2) as total_touchpoints
         FROM users u
-        LEFT JOIN touchpoints t ON t.user_id = u.id AND t.deleted_at IS NULL
+        LEFT JOIN touchpoints t ON t.user_id = u.id
         WHERE u.role IN ('caravan', 'tele') AND u.is_active = true
         GROUP BY u.id, u.first_name, u.last_name, u.role
         ORDER BY total_touchpoints DESC
@@ -762,7 +761,7 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
       SELECT
         AVG(EXTRACT(EPOCH FROM (t.created_at - c.created_at)) / 3600) as avg_hours
       FROM clients c
-      LEFT JOIN touchpoints t ON t.client_id = c.id AND t.touchpoint_number = 1 AND t.deleted_at IS NULL
+      LEFT JOIN touchpoints t ON t.client_id = c.id AND t.touchpoint_number = 1
       WHERE c.created_at >= $1 AND c.created_at <= $2
         AND c.deleted_at IS NULL
         AND t.id IS NOT NULL
@@ -782,7 +781,7 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
         end: endDateStr,
       },
       totalClients: parseInt((await pool.query('SELECT COUNT(*) as count FROM clients WHERE created_at >= $1 AND created_at <= $2 AND deleted_at IS NULL', [startDateStr, endDateStr])).rows[0].count),
-      totalTouchpoints: parseInt((await pool.query('SELECT COUNT(*) as count FROM touchpoints WHERE date >= $1 AND date <= $2 AND deleted_at IS NULL', [startDateStr, endDateStr])).rows[0].count),
+      totalTouchpoints: parseInt((await pool.query('SELECT COUNT(*) as count FROM touchpoints WHERE date >= $1 AND date <= $2', [startDateStr, endDateStr])).rows[0].count),
       conversionRate: conversionRate.rate,
       averageResponseTime,
     };
