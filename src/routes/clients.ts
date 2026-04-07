@@ -220,41 +220,39 @@ clients.get('/', authMiddleware, async (c) => {
     let groupScoreCase = '';
 
     if (sortBy === 'touchpoint_status') {
-      // Calculate group score for sorting
-      // Group scores: 1=callable, 2=completed, 3=has_progress, 4=no_progress
-      const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-
-      // Determine if current user can create the next touchpoint
-      // Note: Column names used directly (no table prefix) for CTE context
-      let canCreateCondition = '';
-      if (user.role === 'tele') {
-        // Tele can create Call touchpoints (2, 3, 5, 6)
-        // Assigned clients = callable (next is Call) OR no touchpoints yet (can start with Call)
-        canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
-      } else if (user.role === 'caravan') {
-        // Caravan can create Visit touchpoints (1, 4, 7)
-        canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+      // For Tele role with grouped CTEs: use pre-calculated group_score directly
+      if (user.role === 'tele' && touchpointStatus) {
+        // Tele uses grouped CTEs with pre-calculated group_score
+        // Order by group_score ASC, then by completed_count DESC, then by created_at DESC
+        orderByClause = `ORDER BY
+          tws.group_score ASC,
+          tws.completed_count DESC,
+          c.created_at DESC`;
       } else {
-        // Admin/Manager can create any touchpoint
-        canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
+        // For Caravan/Admin or when no touchpointStatus filter: use CASE expression
+        const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
+
+        // Determine if current user can create the next touchpoint
+        let canCreateCondition = '';
+        if (user.role === 'caravan') {
+          canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+        } else {
+          canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
+        }
+
+        // Group score CASE expression
+        groupScoreCase = `CASE
+          WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT c.loan_released THEN 1
+          WHEN completed_count >= 7 OR c.loan_released THEN 2
+          WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+          ELSE 4
+        END`;
+
+        orderByClause = `ORDER BY
+          ${groupScoreCase} ASC,
+          {touchpoint_alias}.completed_count DESC,
+          c.created_at DESC`;
       }
-
-      // Group score CASE expression
-      // Note: Column names used directly (no table prefix) for CTE context
-      // Use c.loan_released to avoid ambiguity when used in ORDER BY
-      groupScoreCase = `CASE
-        WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT c.loan_released THEN 1
-        WHEN completed_count >= 7 OR c.loan_released THEN 2
-        WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
-        ELSE 4
-      END`;
-
-      // Sort by group score, then by completed count (more progress first)
-      // Note: {touchpoint_alias}.completed_count will be replaced with dynamic alias in mainQuery
-      orderByClause = `ORDER BY
-        ${groupScoreCase} ASC,
-        {touchpoint_alias}.completed_count DESC,
-        c.created_at DESC`;
     }
 
     // Build WHERE clause conditions for basic client filtering
@@ -350,55 +348,106 @@ clients.get('/', authMiddleware, async (c) => {
       console.log('[clients] CTE without area filter:', withGroupScoreCTE.substring(0, 200) + '...');
     }
     let groupScoreFilter = '';
+    let useGroupedCTEs = false;
 
     if (touchpointStatus) {
-      // Determine if current user can create the next touchpoint
-      let canCreateCondition = '';
+      // For Tele role: Use separate CTEs for each group to ensure proper ordering
+      // callable (Group 1) will ALWAYS be first in the result set
       if (user.role === 'tele') {
-        // Tele can create Call touchpoints (2, 3, 5, 6)
-        // Assigned clients = callable (next is Call) OR no touchpoints yet (can start with Call)
-        canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
-      } else if (user.role === 'caravan') {
-        canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+        useGroupedCTEs = true;
+
+        // Tele-specific 5-group scoring with separate CTEs
+        withGroupScoreCTE = `${withGroupScoreCTE},
+          callable_group AS (
+            SELECT ti.*, 1 as group_score
+            FROM touchpoint_info ti
+            WHERE ti.next_touchpoint_type = 'Call' AND ti.completed_count < 7 AND NOT ti.loan_released
+          ),
+          waiting_for_caravan_group AS (
+            SELECT ti.*, 2 as group_score
+            FROM touchpoint_info ti
+            WHERE ti.next_touchpoint_type = 'Visit' AND ti.completed_count < 7 AND NOT ti.loan_released
+          ),
+          completed_group AS (
+            SELECT ti.*, 3 as group_score
+            FROM touchpoint_info ti
+            WHERE ti.completed_count >= 7 AND NOT ti.loan_released
+          ),
+          loan_released_group AS (
+            SELECT ti.*, 4 as group_score
+            FROM touchpoint_info ti
+            WHERE ti.loan_released
+          ),
+          no_progress_group AS (
+            SELECT ti.*, 5 as group_score
+            FROM touchpoint_info ti
+            WHERE ti.completed_count = 0
+          ),
+          touchpoint_with_score AS (
+            SELECT * FROM callable_group
+            UNION ALL
+            SELECT * FROM waiting_for_caravan_group
+            UNION ALL
+            SELECT * FROM completed_group
+            UNION ALL
+            SELECT * FROM loan_released_group
+            UNION ALL
+            SELECT * FROM no_progress_group
+          )`;
+
+        // Map touchpoint_status to group score for Tele
+        const statusToScoreMap: Record<string, number> = {
+          'callable': 1,
+          'waiting_for_caravan': 2,
+          'completed': 3,
+          'loan_released': 4,
+          'no_progress': 5
+        };
+
+        const targetScore = statusToScoreMap[touchpointStatus];
+        if (targetScore !== undefined) {
+          const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+          const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+          groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+          baseParams.push(targetScore);
+          baseParamIndex++;
+        }
       } else {
-        canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
-      }
+        // For Caravan/Admin: Use original CASE expression approach
+        let canCreateCondition = '';
+        if (user.role === 'caravan') {
+          canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+        } else {
+          canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
+        }
 
-      // Map touchpoint_status to group score
-      const statusToScoreMap: Record<string, number> = {
-        'callable': 1,
-        'completed': 2,
-        'has_progress': 3,
-        'no_progress': 4
-      };
+        // Map touchpoint_status to group score
+        const statusToScoreMap: Record<string, number> = {
+          'callable': 1,
+          'completed': 2,
+          'has_progress': 3,
+          'no_progress': 4
+        };
 
-      const targetScore = statusToScoreMap[touchpointStatus];
-      if (targetScore !== undefined) {
-        // Add group score calculation to CTE
-        // CRITICAL: loan_released clients should NEVER be callable (group 1)
-        // They should always be in group 2 (completed) regardless of touchpoint count
-        withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
-          SELECT *,
-            CASE
-              -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-              WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
-              -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
-              WHEN completed_count >= 7 OR loan_released THEN 2
-              -- Group 3 (has_progress): 1-6 touchpoints but user cannot create next
-              WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
-              -- Group 4 (no_progress): 0 touchpoints
-              ELSE 4
-            END as group_score
-          FROM touchpoint_info
-        )`;
+        const targetScore = statusToScoreMap[touchpointStatus];
+        if (targetScore !== undefined) {
+          withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
+            SELECT *,
+              CASE
+                WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
+                WHEN completed_count >= 7 OR loan_released THEN 2
+                WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+                ELSE 4
+              END as group_score
+            FROM touchpoint_info
+          )`;
 
-        // Filter by group score in WHERE clause
-        // Use WHERE or AND depending on whether any WHERE clause exists (baseWhereClause or areaFilterWhereClause)
-        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
-        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-        groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-        baseParams.push(targetScore);
-        baseParamIndex++;
+          const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+          const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+          groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+          baseParams.push(targetScore);
+          baseParamIndex++;
+        }
       }
     }
 
@@ -427,6 +476,11 @@ clients.get('/', authMiddleware, async (c) => {
       ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id'
       : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
 
+    // For grouped CTEs approach (Tele role), include group_score in SELECT
+    const groupScoreSelect = (touchpointStatus && user.role === 'tele')
+      ? ', ${touchpointInfoAlias}.group_score'
+      : '';
+
     const mainQuery = `
       ${withGroupScoreCTE}
       SELECT c.*,
@@ -443,7 +497,7 @@ clients.get('/', authMiddleware, async (c) => {
         COALESCE(${touchpointInfoAlias}.completed_count, 0) as completed_touchpoints,
         ${touchpointInfoAlias}.next_touchpoint_type,
         ${touchpointInfoAlias}.last_touchpoint_type,
-        ${touchpointInfoAlias}.last_touchpoint_user_id,
+        ${touchpointInfoAlias}.last_touchpoint_user_id${groupScoreSelect},
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name
       FROM clients c
@@ -455,7 +509,7 @@ clients.get('/', authMiddleware, async (c) => {
       ${baseWhereClause}
       ${areaFilterWhereClause}
       ${groupScoreFilter}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, lt.first_name, lt.last_name
+      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id${groupScoreSelect !== '' ? ', tws.group_score' : ''}, lt.first_name, lt.last_name
       ${orderByClause.replace('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
