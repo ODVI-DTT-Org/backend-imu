@@ -220,15 +220,16 @@ clients.get('/', authMiddleware, async (c) => {
     let groupScoreCase = '';
 
     if (sortBy === 'touchpoint_status') {
-      // Calculate group score for sorting
-      // Group scores: 1=callable, 2=waiting_for_caravan, 3=completed, 4=loan_released, 5=no_progress
+      // Calculate group score for sorting based on role
+      // Touchpoint sequence: Visit(1) → Call(2) → Call(3) → Visit(4) → Call(5) → Call(6) → Visit(7)
       const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
-      // Group score CASE expression - separate Tele logic from Caravan/Manager
-      // Note: Column names used directly (no table prefix) for CTE context
-      // Use c.loan_released to avoid ambiguity when used in ORDER BY
+      // Role-based group scoring: consistent 5-group pattern for both Tele and Caravan
+      // Tele: callable=Call(1), waiting_for_caravan=Visit(2), completed(3), loan_released(4), no_progress(5)
+      // Caravan: callable=Visit(1), waiting_for_tele=Call(2), completed(3), loan_released(4), no_progress(5)
+      // Admin/Manager: callable=any(1), has_progress(2), completed(3), loan_released(4), no_progress(5)
       if (user.role === 'tele') {
-        // Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
+        // Tele can only create Call touchpoints (2, 3, 5, 6)
         groupScoreCase = `CASE
           -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
           WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT c.loan_released THEN 1
@@ -241,19 +242,30 @@ clients.get('/', authMiddleware, async (c) => {
           -- Group 5 (no progress): 0 touchpoints
           ELSE 5
         END`;
-      } else {
-        // Caravan/Manager scoring
-        let canCreateCondition = '';
-        if (user.role === 'caravan') {
-          canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
-        } else {
-          canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
-        }
-
+      } else if (user.role === 'caravan') {
+        // Caravan can only create Visit touchpoints (1, 4, 7)
         groupScoreCase = `CASE
-          WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT c.loan_released THEN 1
-          WHEN completed_count >= 7 OR c.loan_released THEN 2
-          WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+          -- Group 1 (callable): Next is Visit AND < 7 touchpoints AND loan NOT released
+          WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT c.loan_released THEN 1
+          -- Group 2 (waiting for tele): Next is Call AND < 7 touchpoints AND loan NOT released
+          WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT c.loan_released THEN 2
+          -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
+          WHEN completed_count >= 7 AND NOT c.loan_released THEN 3
+          -- Group 4 (loan released): Loan already released
+          WHEN c.loan_released THEN 4
+          -- Group 5 (no progress): 0 touchpoints
+          ELSE 5
+        END`;
+      } else {
+        // Admin/Manager can create any touchpoint
+        groupScoreCase = `CASE
+          -- Group 1 (callable): Has next touchpoint AND < 7 touchpoints AND loan NOT released
+          WHEN next_touchpoint_type IS NOT NULL AND completed_count < 7 AND NOT c.loan_released THEN 1
+          -- Group 2 (completed): 7/7 touchpoints AND loan NOT released
+          WHEN completed_count >= 7 AND NOT c.loan_released THEN 2
+          -- Group 3 (loan released): Loan already released
+          WHEN c.loan_released THEN 3
+          -- Group 4 (no progress): 0 touchpoints
           ELSE 4
         END`;
       }
@@ -361,32 +373,37 @@ clients.get('/', authMiddleware, async (c) => {
     let groupScoreFilter = '';
 
     if (touchpointStatus) {
-      // Map touchpoint_status to group score
-      // For Tele: 1=callable, 2=waiting_for_caravan, 3=completed, 4=loan_released, 5=no_progress
-      // For others: 1=callable, 2=has_progress, 3=completed, 4=loan_released, 5=no_progress
+      // Map touchpoint_status to group score based on role
+      // Tele: 1=callable(Call), 2=waiting_for_caravan(Visit), 3=completed, 4=loan_released, 5=no_progress
+      // Caravan: 1=callable(Visit), 2=waiting_for_tele(Call), 3=completed, 4=loan_released, 5=no_progress
+      // Admin/Manager: 1=callable(any), 2=completed, 3=loan_released, 4=no_progress
       const statusToScoreMap: Record<string, number> = user.role === 'tele' ? {
         'callable': 1,
         'waiting_for_caravan': 2,
         'completed': 3,
         'loan_released': 4,
         'no_progress': 5
-      } : {
+      } : user.role === 'caravan' ? {
         'callable': 1,
-        'has_progress': 2,
+        'waiting_for_tele': 2,
         'completed': 3,
         'loan_released': 4,
         'no_progress': 5
+      } : {
+        'callable': 1,
+        'completed': 2,
+        'loan_released': 3,
+        'no_progress': 4
       };
 
       const targetScore = statusToScoreMap[touchpointStatus];
       if (targetScore !== undefined) {
         // Add group score calculation to CTE with role-specific logic
-        // CRITICAL: Tele users need separate groups for callable (Call) vs waiting_for_caravan (Visit)
         withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
           SELECT *,
             CASE
               ${user.role === 'tele' ? `
-              -- Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
+              -- Tele can only create Call touchpoints (2, 3, 5, 6)
               -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
               WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 1
               -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
@@ -396,18 +413,27 @@ clients.get('/', authMiddleware, async (c) => {
               -- Group 4 (loan released): Loan already released
               WHEN loan_released THEN 4
               -- Group 5 (no progress): 0 touchpoints
-              ELSE 5` : `
-              -- Caravan/Manager scoring: all callable clients in group 1
-              -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-              WHEN next_touchpoint_type IS NOT NULL AND completed_count < 7 AND NOT loan_released THEN 1
-              -- Group 2 (has_progress): 1-6 touchpoints but user cannot create next
-              WHEN completed_count > 0 AND completed_count < 7 AND NOT loan_released THEN 2
+              ELSE 5` : user.role === 'caravan' ? `
+              -- Caravan can only create Visit touchpoints (1, 4, 7)
+              -- Group 1 (callable): Next is Visit AND < 7 touchpoints AND loan NOT released
+              WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT loan_released THEN 1
+              -- Group 2 (waiting for tele): Next is Call AND < 7 touchpoints AND loan NOT released
+              WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 2
               -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
               WHEN completed_count >= 7 AND NOT loan_released THEN 3
               -- Group 4 (loan released): Loan already released
               WHEN loan_released THEN 4
               -- Group 5 (no progress): 0 touchpoints
-              ELSE 5`}
+              ELSE 5` : `
+              -- Admin/Manager can create any touchpoint
+              -- Group 1 (callable): Has next touchpoint AND < 7 touchpoints AND loan NOT released
+              WHEN next_touchpoint_type IS NOT NULL AND completed_count < 7 AND NOT loan_released THEN 1
+              -- Group 2 (completed): 7/7 touchpoints AND loan NOT released
+              WHEN completed_count >= 7 AND NOT loan_released THEN 2
+              -- Group 3 (loan released): Loan already released
+              WHEN loan_released THEN 3
+              -- Group 4 (no progress): 0 touchpoints
+              ELSE 4`}
             END as group_score
           FROM touchpoint_info
         )`;
@@ -691,24 +717,37 @@ clients.get('/assigned', authMiddleware, async (c) => {
     }
 
     // Always filter by touchpoint status for assigned endpoint (default: callable)
-    // Map touchpoint_status to group score
-    const statusToScoreMap: Record<string, number> = {
+    // Map touchpoint_status to group score based on role
+    // Tele: 1=callable(Call), 2=waiting_for_caravan(Visit), 3=completed, 4=loan_released, 5=no_progress
+    // Caravan: 1=callable(Visit), 2=waiting_for_tele(Call), 3=completed, 4=loan_released, 5=no_progress
+    // Admin/Manager: 1=callable(any), 2=completed, 3=loan_released, 4=no_progress
+    const statusToScoreMap: Record<string, number> = user.role === 'tele' ? {
       'callable': 1,
-      'waiting_for_caravan': 2,  // For Tele: next is Visit (need caravan)
+      'waiting_for_caravan': 2,
       'completed': 3,
       'loan_released': 4,
       'no_progress': 5
+    } : user.role === 'caravan' ? {
+      'callable': 1,
+      'waiting_for_tele': 2,
+      'completed': 3,
+      'loan_released': 4,
+      'no_progress': 5
+    } : {
+      'callable': 1,
+      'completed': 2,
+      'loan_released': 3,
+      'no_progress': 4
     };
 
     const targetScore = statusToScoreMap[effectiveTouchpointStatus];
     if (targetScore !== undefined) {
-      // Add group score calculation to CTE
-      // IMPORTANT: For Tele users, separate callable (Call) from waiting for caravan (Visit)
+      // Add group score calculation to CTE with role-specific logic
       withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
         SELECT *,
           CASE
             ${user.role === 'tele' ? `
-            -- Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
+            -- Tele can only create Call touchpoints (2, 3, 5, 6)
             -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
             WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 1
             -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
@@ -718,15 +757,27 @@ clients.get('/assigned', authMiddleware, async (c) => {
             -- Group 4 (loan released): Loan already released
             WHEN loan_released THEN 4
             -- Group 5 (no progress): 0 touchpoints
+            ELSE 5` : user.role === 'caravan' ? `
+            -- Caravan can only create Visit touchpoints (1, 4, 7)
+            -- Group 1 (callable): Next is Visit AND < 7 touchpoints AND loan NOT released
+            WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT loan_released THEN 1
+            -- Group 2 (waiting for tele): Next is Call AND < 7 touchpoints AND loan NOT released
+            WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 2
+            -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
+            WHEN completed_count >= 7 AND NOT loan_released THEN 3
+            -- Group 4 (loan released): Loan already released
+            WHEN loan_released THEN 4
+            -- Group 5 (no progress): 0 touchpoints
             ELSE 5` : `
-            -- Caravan/Manager scoring
-            -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-            WHEN (next_touchpoint_type IS NOT NULL OR completed_count = 0) AND completed_count < 7 AND NOT loan_released THEN 1
-            -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
-            WHEN completed_count >= 7 OR loan_released THEN 2
-            -- Group 3 (no_progress): Should not happen with caravan logic above, but kept for safety
-            ELSE 3
-            `}
+            -- Admin/Manager can create any touchpoint
+            -- Group 1 (callable): Has next touchpoint AND < 7 touchpoints AND loan NOT released
+            WHEN next_touchpoint_type IS NOT NULL AND completed_count < 7 AND NOT loan_released THEN 1
+            -- Group 2 (completed): 7/7 touchpoints AND loan NOT released
+            WHEN completed_count >= 7 AND NOT loan_released THEN 2
+            -- Group 3 (loan released): Loan already released
+            WHEN loan_released THEN 3
+            -- Group 4 (no progress): 0 touchpoints
+            ELSE 4`}
           END as group_score
         FROM touchpoint_info
       )`;
