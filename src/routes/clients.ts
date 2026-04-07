@@ -1955,7 +1955,9 @@ clients.post(
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        throw new ValidationError('Invalid request body', error.errors);
+        const validationError = new ValidationError('Invalid request body');
+        validationError.addDetail('errors', error.errors);
+        throw validationError;
       }
       throw error;
     }
@@ -2055,7 +2057,9 @@ clients.post(
       });
     } catch (error) {
       if (error instanceof z.ZodError) {
-        throw new ValidationError('Invalid request body', error.errors);
+        const validationError = new ValidationError('Invalid request body');
+        validationError.addDetail('errors', error.errors);
+        throw validationError;
       }
       throw error;
     }
@@ -2155,9 +2159,6 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
               validatedClient.pan || null,
               validatedClient.facebook_link || null,
               validatedClient.remarks || null,
-              validatedClient.province || null,
-              validatedClient.municipality || null,
-              validatedClient.barangay || null,
             ]
           );
 
@@ -2186,7 +2187,8 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
     await client.query('ROLLBACK');
 
     if (error instanceof z.ZodError) {
-      const validationError = new ValidationError('Validation failed', error.errors);
+      const validationError = new ValidationError('Validation failed');
+      validationError.addDetail('errors', error.errors);
       throw validationError;
     }
 

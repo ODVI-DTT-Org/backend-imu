@@ -325,7 +325,7 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
         // Record error but continue with other clients
         errors.push({
           client_id: clientId,
-          error: err.message || 'Unknown error'
+          error: err instanceof Error ? err.message : 'Unknown error'
         });
       }
     }
