@@ -671,42 +671,39 @@ clients.get('/assigned', authMiddleware, async (c) => {
     }
 
     // Always filter by touchpoint status for assigned endpoint (default: callable)
+    // Determine if current user can create the next touchpoint
+    let canCreateCondition = '';
+    if (user.role === 'tele') {
+      // Tele can create Call touchpoints (2, 3, 5, 6)
+      canCreateCondition = `next_touchpoint_type = 'Call' OR completed_count = 0`;
+    } else if (user.role === 'caravan') {
+      canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
+    } else {
+      canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
+    }
+
     // Map touchpoint_status to group score
     const statusToScoreMap: Record<string, number> = {
       'callable': 1,
-      'waiting_for_caravan': 2,  // For Tele: next is Visit (need caravan)
-      'completed': 3,
-      'loan_released': 4,
-      'no_progress': 5
+      'completed': 2,
+      'has_progress': 3,
+      'no_progress': 4
     };
 
     const targetScore = statusToScoreMap[effectiveTouchpointStatus];
     if (targetScore !== undefined) {
       // Add group score calculation to CTE
-      // IMPORTANT: For Tele users, separate callable (Call) from waiting for caravan (Visit)
       withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
         SELECT *,
           CASE
-            ${user.role === 'tele' ? `
-            -- Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
-            -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
-            WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 1
-            -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
-            WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT loan_released THEN 2
-            -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
-            WHEN completed_count >= 7 AND NOT loan_released THEN 3
-            -- Group 4 (loan released): Loan already released
-            WHEN loan_released THEN 4
-            -- Group 5 (no progress): 0 touchpoints
-            ELSE 5` : `
-            -- Caravan/Manager scoring
             -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-            WHEN (next_touchpoint_type IS NOT NULL OR completed_count = 0) AND completed_count < 7 AND NOT loan_released THEN 1
+            WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
             -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
             WHEN completed_count >= 7 OR loan_released THEN 2
-            -- Group 3 (no_progress): Should not happen with caravan logic above, but kept for safety
-            ELSE 3
-            `}
+            -- Group 3 (has_progress): 1-6 touchpoints but user cannot create next
+            WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
+            -- Group 4 (no_progress): 0 touchpoints
+            ELSE 4
           END as group_score
         FROM touchpoint_info
       )`;
@@ -765,15 +762,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${baseWhereClause}
       ${areaFilterWhereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, tws.completed_count, tws.next_touchpoint_type, tws.last_touchpoint_type, tws.last_touchpoint_user_id, lt.first_name, lt.last_name, tws.group_score
-      ORDER BY
-        -- Primary sort: group_score (1=callable, 2=waiting, 3=completed, 4=loan_released, 5=no_progress)
-        COALESCE(tws.group_score, 5) ASC,
-        -- Secondary sort: most recent activity first within groups
-        (SELECT MAX(t.date) FROM touchpoints t WHERE t.client_id = c.id) DESC NULLS LAST,
-        -- Tertiary sort: completed count descending
-        COALESCE(tws.completed_count, 0) DESC,
-        -- Final sort: client creation date (newest first)
-        c.created_at DESC
+      ORDER BY tws.group_score ASC, tws.completed_count DESC, c.created_at DESC
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
