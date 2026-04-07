@@ -356,7 +356,7 @@ clients.get('/', authMiddleware, async (c) => {
     const needsGroupScore = user.role === 'tele' || user.role === 'caravan' || user.role === 'admin' || user.role === 'area_manager' || user.role === 'assistant_area_manager';
 
     // Build role-specific group score calculation
-    const groupScoreCase = user.role === 'tele' ? `
+    const groupScoreCalc = user.role === 'tele' ? `
     CASE
       -- Tele can only create Call touchpoints (2, 3, 5, 6)
       -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
@@ -716,7 +716,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
     // Build WITH clause with user_areas CTE if needed
     // IMPORTANT: Always use touchpoint_with_score CTE for consistent group scoring
-    const groupScoreCase = user.role === 'tele' ? `
+    const groupScoreCalc = user.role === 'tele' ? `
     CASE
       -- Tele can only create Call touchpoints (2, 3, 5, 6)
       -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
@@ -762,12 +762,12 @@ clients.get('/assigned', authMiddleware, async (c) => {
         FROM user_locations
         WHERE user_id = '${user.sub}' AND deleted_at IS NULL
       ), ${touchpointInfoCTE}, touchpoint_with_score AS (
-        SELECT ti.*, ${groupScoreCase} as group_score
+        SELECT ti.*, ${groupScoreCalc} as group_score
         FROM touchpoint_info ti
       )`;
     } else {
       withGroupScoreCTE = `WITH ${touchpointInfoCTE}, touchpoint_with_score AS (
-        SELECT ti.*, ${groupScoreCase} as group_score
+        SELECT ti.*, ${groupScoreCalc} as group_score
         FROM touchpoint_info ti
       )`;
     }
