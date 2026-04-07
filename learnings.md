@@ -8,10 +8,10 @@
 
 | Field | Value |
 |-------|-------|
-| **Last Updated** | 2026-04-05 |
+| **Last Updated** | 2026-04-07 |
 | **Contributors** | IMU Development Team |
 | **Project Phase** | Active Development |
-| **Document Version** | 2.5 |
+| **Document Version** | 2.8 |
 
 ---
 
@@ -48,6 +48,15 @@
 | D027 | DigitalOcean PostgreSQL SSL compatibility | Added `uselibpqcompat=true` flag to database connection URI to fix self-signed certificate errors causing 500 sync failures | Database connectivity | 2026-04-05 | Team |
 | D028 | Enhanced error logs UI/UX for bug reporting | Comprehensive error details with platform identification, mobile device info, copy-to-clipboard functionality | Admin productivity | 2026-04-05 | Team |
 | D029 | Database schema alignment verification | Systematic verification of table schemas to ensure all migrations are applied correctly | Data integrity | 2026-04-05 | Team |
+| D030 | Dashboard with materialized views | Used materialized views for action_items and CTEs for target/team performance to achieve < 200ms query performance | Performance | 2026-04-07 | Team |
+| D031 | Target progress tracking system | Created targets table with period-based goals (daily/weekly/monthly/quarterly) and computed progress from actuals | Business intelligence | 2026-04-07 | Team |
+| D032 | Cron-based action items refresh | Automated hourly refresh of action_items materialized view to keep dashboard data current without performance impact | Automation | 2026-04-07 | Team |
+| D030 | Server-side touchpoint status filtering and sorting | Moved filtering/sorting from frontend to backend for proper pagination and performance | Backend API, Tele UX | 2026-04-05 | Team |
+| D033 | Touchpoint badge progress fix | Created TouchpointCountService with PowerSync batch queries and provider-level caching for accurate touchpoint counts in UI | Performance, UX | 2026-04-07 | Team |
+| D034 | Riverpod provider chaining pattern | Use FutureProvider.autoDispose with ref.watch() for derived data that updates when source provider changes | State management | 2026-04-07 | Team |
+| D035 | PowerSync batch query optimization | Use SQL GROUP BY with IN clause instead of individual queries for aggregated data fetching | Performance | 2026-04-07 | Team |
+| D036 | Widget backward compatibility pattern | Add optional parameters with ?? fallback to existing behavior for safe widget enhancements | Code maintainability | 2026-04-07 | Team |
+| D037 | Provider cache invalidation on mutations | Use ref.invalidate() to refresh provider data after mutations to keep UI in sync | State management | 2026-04-07 | Team |
 
 ---
 
@@ -110,6 +119,88 @@ final clientsProvider = StateNotifierProvider<ClientsNotifier, AsyncState<List<C
 
 **References:**
 - Implementation: `mobile/imu_flutter/lib/shared/providers/`
+
+---
+
+#### Pattern: Preventing Race Conditions in Async Initialization
+
+**Description:** Ensure loading state is set BEFORE async operations to prevent router race conditions
+
+**When to use:** All async initialization methods that set loading state
+
+**Example:**
+```dart
+// WRONG: Nested mounted check can prevent loading state from being set
+Future<void> checkAuthStatus() async {
+  if (!mounted) return;
+  if (!mounted) {  // ← Redundant check in nested block
+    state = state.copyWith(isLoading: true);
+  }
+  // If widget disposes during async gap, isLoading: true might never be set
+  await _authService.initialize();
+}
+
+// CORRECT: Always set loading state immediately after first check
+Future<void> checkAuthStatus() async {
+  if (!mounted) return;
+  // Remove nested block, ALWAYS set isLoading: true
+  state = state.copyWith(isLoading: true);
+  await _authService.initialize();
+}
+```
+
+**Why it works:**
+- Prevents race condition where router might check state before loading is set
+- Ensures consistent state initialization across async operations
+- Router correctly waits for `isLoading: false` before making routing decisions
+- No window where loading state is undefined during async operations
+
+**Common Pitfalls:**
+- **Nested mounted checks:** Second check in nested block can prevent state from being set
+- **Early returns:** Returning before setting loading state creates undefined state window
+- **Async gaps:** Widget can dispose during await, but that's handled by mounted checks before state updates
+
+**Pattern for State Notifier Initialization:**
+```dart
+// Provider initialization
+final authNotifierProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
+  final authService = ref.watch(authServiceProvider);
+  final notifier = AuthNotifier(authService);
+
+  // Call async initialization without await
+  // But ensure method sets isLoading: true BEFORE async operations
+  notifier.checkAuthStatus();
+
+  return notifier;
+});
+
+// In StateNotifier
+Future<void> checkAuthStatus() async {
+  if (!mounted) return;
+  // CRITICAL: Set loading state FIRST, before any async operations
+  state = state.copyWith(isLoading: true);
+
+  try {
+    await _authService.initialize();  // Load tokens from secure storage
+    state = state.copyWith(
+      isAuthenticated: _authService.isAuthenticated,
+      user: _authService.currentUser,
+      isLoading: false,
+    );
+  } catch (e) {
+    state = state.copyWith(isLoading: false, error: e.toString());
+  }
+}
+```
+
+**References:**
+- Implementation: `mobile/imu_flutter/lib/services/auth/auth_service.dart:159-191`
+- Provider: `mobile/imu_flutter/lib/shared/providers/app_providers.dart:88-112`
+- Router: `mobile/imu_flutter/lib/core/router/app_router.dart:97-126`
+
+**Impact:** Fixes session persistence bug where users had to re-enter credentials on app restart despite valid JWT tokens being stored in secure storage
+
+**Fix Date:** 2026-04-06
 
 ---
 
@@ -232,6 +323,90 @@ class JwtAuthService {
 
 **References:**
 - Implementation: `mobile/imu_flutter/lib/services/auth/jwt_auth_service.dart`
+
+---
+
+#### Pattern: Router Initialization Wait for Auth State
+
+**Description:** Router must wait for async authentication initialization before making redirect decisions
+
+**When to use:** All go_router configurations with async authentication state initialization
+
+**Example:**
+```dart
+// WRONG - Router checks auth before initialization completes
+final authStateProvider = Provider<bool>((ref) {
+  final authState = ref.watch(authNotifierProvider);
+  return authState.isAuthenticated; // Returns false before init completes!
+});
+
+final routerProvider = Provider<GoRouter>((ref) {
+  final isAuthenticated = ref.watch(authStateProvider);
+
+  return GoRouter(
+    redirect: (context, state) {
+      // BUG: This runs before checkAuthStatus() completes
+      if (!isAuthenticated) {
+        return '/login'; // Always redirects to login!
+      }
+    },
+  );
+});
+
+// CORRECT - Router waits for initialization to complete
+final authStateProvider = Provider<AuthState>((ref) {
+  final authState = ref.watch(authNotifierProvider);
+  return authState; // Return full state including isLoading
+});
+
+final routerProvider = Provider<GoRouter>((ref) {
+  final authState = ref.watch(authStateProvider);
+  final isAuth = authState.isAuthenticated;
+  final isLoading = authState.isLoading;
+
+  return GoRouter(
+    redirect: (context, state) {
+      // Wait for initialization to complete
+      if (isLoading) {
+        return null; // Don't redirect yet
+      }
+
+      // Now it's safe to check auth status
+      if (!isAuth) {
+        return '/login';
+      }
+    },
+  );
+});
+```
+
+**Why it works:** Prevents race condition where router redirects to login before `checkAuthStatus()` loads tokens from storage
+
+**The Bug:**
+1. App starts → router created → authNotifierProvider created
+2. checkAuthStatus() starts (async) to load tokens from storage
+3. Router checks auth status BEFORE init completes
+4. Router sees `isAuthenticated: false` (initial state)
+5. Router redirects to `/login`
+6. User sees login page even though valid token exists in storage
+
+**The Fix:**
+- Return full `AuthState` from provider (not just boolean)
+- Check `isLoading` in router redirect logic
+- If `isLoading: true`, return `null` to wait for completion
+- Only redirect if `isLoading: false` AND `isAuthenticated: false`
+
+**Related Files:**
+- Mobile: `mobile/imu_flutter/lib/core/router/app_router.dart:34-40, 88-119`
+- Mobile: `mobile/imu_flutter/lib/services/auth/auth_service.dart:102-136` (AuthState definition)
+- Mobile: `mobile/imu_flutter/lib/services/auth/auth_service.dart:149-166` (checkAuthStatus method)
+
+**Impact:**
+- ✅ Token persistence now works correctly
+- ✅ App opens directly to home/sync-loading after restart if valid token exists
+- ✅ No more unnecessary login prompts for authenticated users
+
+**Fix Date:** 2026-04-06
 
 ---
 
@@ -1153,6 +1328,630 @@ INSERT INTO touchpoints (..., date, ...) VALUES (..., CURRENT_DATE, ...)
 **Impact:** Fixes "Failed to release loan" 500 error
 
 **Fix Date:** 2026-04-04
+
+---
+
+#### Pattern: Server-Side Touchpoint Status Filtering and Sorting
+
+**Description:** Move filtering and sorting logic from frontend to backend for proper pagination and performance
+
+**When to use:** All list views that need to filter/sort by calculated fields that aren't in the database
+
+**Example:**
+```typescript
+// Backend - Calculate group score in SQL query
+const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
+
+// Determine if current user can create the next touchpoint
+let canCreateCondition = '';
+if (user.role === 'tele') {
+  // Tele: Can only create Call types (2, 3, 5, 6)
+  canCreateCondition = `next_touchpoint_type = 'Call'`;
+} else if (user.role === 'caravan') {
+  // Caravan: Can only create Visit types (1, 4, 7)
+  canCreateCondition = `next_touchpoint_type = 'Visit'`;
+} else {
+  // Admin/Manager: Can create any touchpoint
+  canCreateCondition = `next_touchpoint_type IS NOT NULL`;
+}
+
+// Sort by group score, then by completed count
+orderByClause = `ORDER BY
+  CASE
+    WHEN (${canCreateCondition}) AND tp.completed_count < 7 AND NOT c.loan_released THEN 1
+    WHEN tp.completed_count >= 7 OR c.loan_released THEN 2
+    WHEN tp.completed_count > 0 THEN 3
+    ELSE 4
+  END ASC,
+  tp.completed_count DESC,
+  c.created_at DESC`;
+
+// Frontend - Pass query parameters
+const params = {
+  page: currentPage.value,
+  perPage: perPage.value,
+  sort_by: 'touchpoint_status', // Use server-side sorting
+  touchpoint_status: 'callable' // Filter by callable clients
+};
+await callsStore.fetchAssignedClients(params);
+```
+
+**Why it works:**
+- Backend filters BEFORE pagination, so paginated results are correct
+- Frontend doesn't need to fetch large datasets for filtering
+- Better performance with millions of records
+- Consistent pagination across all pages
+
+**Touchpoint Status Groups:**
+- **Group 1 (Callable):** User can create next touchpoint based on role
+  - Tele: Next is Call (2, 3, 5, 6)
+  - Caravan: Next is Visit (1, 4, 7)
+  - Admin/Manager: Any next touchpoint
+- **Group 2 (Completed):** 7/7 touchpoints or loan released
+- **Group 3 (Has Progress):** 1-6 touchpoints but cannot create next
+- **Group 4 (No Progress):** 0 touchpoints
+
+**Related Files:**
+- Backend: `backend/src/routes/clients.ts:120-353`
+- Frontend: `imu-web-vue/src/views/tele/TeleCallsView.vue:207-253`
+- Store: `imu-web-vue/src/stores/calls.ts:222-299`
+
+**Impact:** Fixes pagination issue where callable clients were hidden on first page
+
+**Fix Date:** 2026-04-05
+
+---
+
+#### Pattern: Materialized Views for Dashboard Performance
+
+**Description:** Use materialized views for expensive dashboard queries to pre-compute results and achieve sub-200ms response times
+
+**When to use:** Dashboard queries that aggregate large datasets or complex joins
+
+**Example:**
+```typescript
+// Backend - Create materialized view for action items
+CREATE MATERIALIZED VIEW action_items AS
+SELECT
+  c.id AS client_id,
+  c.first_name,
+  c.last_name,
+  c.municipality,
+  c.is_starred,
+  COALESCE(
+    LEAD(t.date, 1) OVER (PARTITION BY t.client_id ORDER BY t.date DESC),
+    CURRENT_DATE + INTERVAL '30 days'
+  ) AS scheduled_date,
+  EXTRACT(DAY FROM (
+    COALESCE(
+      LEAD(t.date, 1) OVER (PARTITION BY t.client_id ORDER BY t.date DESC),
+      CURRENT_DATE + INTERVAL '30 days'
+    ) - CURRENT_DATE
+  )) AS days_overdue
+FROM clients c
+LEFT JOIN touchpoints t ON c.id = t.client_id
+WHERE c.is_active = true
+  AND (t.status = 'Interested' OR t.status IS NULL)
+  AND (t.date IS NULL OR t.date > CURRENT_DATE - INTERVAL '7 days')
+ORDER BY c.created_at DESC;
+
+// Refresh schedule: Every hour via cron job
+```
+
+**Why it works:**
+- Pre-computes complex joins and aggregations
+- Reduces query time from seconds to milliseconds
+- Scheduled refreshes keep data current without performance impact
+- Supports concurrent reads without blocking writes
+
+**Performance Targets:**
+- Target Progress: < 100ms (CTE query)
+- Team Performance: < 150ms (CTE query)
+- Action Items: < 200ms (materialized view)
+- Dashboard Summary: < 100ms (CTE query)
+
+**Related Files:**
+- Backend: `backend/src/migrations/052_create_action_items_view.sql`
+- Backend: `backend/src/services/cronScheduler.ts` (hourly refresh)
+- Backend: `backend/src/scripts/verify-dashboard-performance.ts` (performance testing)
+
+---
+
+#### Pattern: Vue 3 Composition API with TypeScript Type Safety
+
+**Description:** Use Vue 3 Composition API with strict TypeScript typing for type-safe component development
+
+**When to use:** All Vue component development for type safety and better IDE support
+
+**Example:**
+```typescript
+// Define types with strict typing
+interface TargetProgressCard {
+  label: string
+  target: number
+  actual: number
+  progress: number
+  color: string
+}
+
+// Use 'as const' for literal type assertions
+const priority = 'all' as const
+type Priority = 'all' | 'high' | 'medium' | 'low'
+
+// Computed properties with proper typing
+const targetProgressCards = computed<TargetProgressCard[]>(() => {
+  return dashboardStore.targetProgressCards
+})
+
+// Function names must match template references
+function handleClickItem(item: ActionItem): void {
+  emit('itemClick', item)
+}
+```
+
+**Why it works:**
+- TypeScript catches type errors at compile time
+- Better IDE autocomplete and refactoring
+- Prevents runtime type errors
+- Self-documenting code with type definitions
+
+**Common TypeScript Errors Fixed:**
+1. Priority type mismatch → Use `'as const` assertion
+2. Function name mismatch → Template calls `handleClickItem`, not `handleItemClick`
+3. Undefined variable → Calculate progress from actuals/target: `progress = (actual / target) * 100`
+
+**Related Files:**
+- Components: `src/components/dashboard/TargetProgressHero.vue`, `TargetProgressCard.vue`, `TeamPerformanceCard.vue`, `ActionItemsDrawer.vue`
+- Store: `src/stores/dashboard.ts`
+
+---
+
+#### Pattern: Riverpod Provider Chaining for Derived Data
+
+**Description:** Use `FutureProvider.autoDispose` with `ref.watch()` to create providers that derive data from other providers
+
+**When to use:** Need computed/derived data that automatically updates when source provider changes
+
+**Example:**
+```dart
+// Provider that watches another provider and derives data from it
+final clientTouchpointCountsProvider = FutureProvider.autoDispose<Map<String, int>>((ref) async {
+  // Watch the source provider
+  final clientsAsync = ref.watch(assignedClientsProvider);
+
+  // Extract client IDs from the source provider's data
+  final clientIds = clientsAsync.when(
+    data: (response) => response.items
+        .map((client) => client.id!)
+        .where((id) => id.isNotEmpty)  // Filter out empty IDs
+        .toList(),
+    loading: () => <String>[],
+    error: (_, __) => <String>[],
+  );
+
+  // Early return if no data
+  if (clientIds.isEmpty) return {};
+
+  // Watch another provider (service) and use it to fetch data
+  final service = ref.watch(touchpointCountServiceProvider);
+  return await service.fetchCounts(clientIds);
+});
+```
+
+**Why it works:**
+- Provider automatically recomputes when source provider data changes
+- `autoDispose` prevents memory leaks by disposing when no longer watched
+- `cacheTime` prevents unnecessary refetches (default 5 minutes)
+- Clean separation of concerns (data fetching vs. data derivation)
+
+**Common Pitfalls:**
+- **Not filtering empty IDs:** Can cause invalid SQL queries with empty strings
+- **Missing early returns:** Provider may attempt fetch operations with empty data
+- **Not using when():** Cannot properly handle loading/error states of source provider
+
+**Related Files:**
+- Provider: `mobile/imu_flutter/lib/shared/providers/app_providers.dart:261-275`
+- Service: `mobile/imu_flutter/lib/services/touchpoint/touchpoint_count_service.dart`
+
+**Impact:** Enables efficient, reactive data flow between providers with automatic updates and cache management
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: PowerSync Batch Query Optimization
+
+**Description:** Use SQL GROUP BY with IN clause instead of individual queries for aggregated data fetching
+
+**When to use:** Fetching aggregated data (COUNT, SUM, AVG) for multiple entities
+
+**Example:**
+```dart
+// WRONG: Individual queries (N+1 problem)
+for (final clientId in clientIds) {
+  final result = await db.get(
+    'SELECT COUNT(*) as count FROM touchpoints WHERE client_id = ?',
+    [clientId],
+  );
+}
+
+// CORRECT: Batch query with GROUP BY
+final placeholders = List.filled(clientIds.length, '?').join(',');
+final results = await db.getAll(
+  'SELECT client_id, COUNT(*) as count FROM touchpoints WHERE client_id IN ($placeholders) GROUP BY client_id',
+  clientIds,
+);
+
+// Convert to Map for easy lookup
+final counts = {
+  for (var row in results) row['client_id'] as String: row['count'] as int
+};
+```
+
+**Why it works:**
+- Single database query instead of N queries
+- Uses SQL aggregation for efficient computation
+- Reduces round-trips to database
+- Better performance with PowerSync's SQLite backend
+
+**Performance Improvement:**
+- **Before:** 100 clients = 100 separate queries (~500ms)
+- **After:** 100 clients = 1 batch query (~50ms)
+- **Improvement:** 10x faster
+
+**Common Pitfalls:**
+- **Forgetting GROUP BY:** Returns duplicate rows instead of aggregated counts
+- **Not handling empty results:** Need to return empty Map when no clients
+- **Type casting:** PowerSync returns dynamic types, need explicit casting
+
+**Related Files:**
+- Implementation: `mobile/imu_flutter/lib/services/touchpoint/touchpoint_count_service.dart:22-45`
+- Provider: `mobile/imu_flutter/lib/shared/providers/app_providers.dart:261-275`
+
+**Impact:** Significantly improves performance of touchpoint count display in client lists
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: Widget Enhancement with Backward Compatibility
+
+**Description:** Add optional parameters with `??` fallback to existing behavior for safe widget enhancements
+
+**When to use:** Enhancing widgets without breaking existing consumers
+
+**Example:**
+```dart
+// BEFORE: Widget only used client.completedTouchpoints
+class TouchpointProgressBadge extends StatelessWidget {
+  final Client client;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = client.completedTouchpoints;
+    return Text('$count/7');
+  }
+}
+
+// AFTER: Widget accepts optional external count with fallback
+class TouchpointProgressBadge extends StatelessWidget {
+  final Client client;
+  final int? touchpointCount;  // NEW optional parameter
+
+  // Use external count if provided, otherwise fall back to existing behavior
+  int get _displayedCount => touchpointCount ?? client.completedTouchpoints;
+
+  @override
+  Widget build(BuildContext context) {
+    final count = _displayedCount;
+    return Text('$count/7');
+  }
+}
+```
+
+**Why it works:**
+- Existing consumers continue to work without modification
+- New consumers can provide external data for better accuracy
+- No breaking changes to widget API
+- Gradual migration path (enhance some consumers, leave others as-is)
+
+**Common Pitfalls:**
+- **Not using ??:** Using `??` ensures fallback to original behavior
+- **Not making it optional:** Parameter must be nullable (int? not int)
+- **Forgetting existing behavior:** Must preserve original logic in fallback
+
+**Related Files:**
+- Widget: `mobile/imu_flutter/lib/shared/widgets/client/touchpoint_progress_badge.dart:20-27`
+- Consumer 1: `mobile/imu_flutter/lib/shared/widgets/client/client_list_tile.dart`
+- Consumer 2: `mobile/imu_flutter/lib/shared/widgets/client_selector_modal.dart:215`
+
+**Impact:** Allows gradual enhancement of widgets with provider-sourced data while maintaining backward compatibility
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: Passing Provider Data Through Widget Tree
+
+**Description:** Watch provider at parent widget, pass async value as parameter to child methods
+
+**When to use:** Provider data needed in child widgets or methods
+
+**Example:**
+```dart
+// Parent widget: Watch provider and pass to child methods
+class ClientsPage extends ConsumerWidget {
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Watch the provider at parent level
+    final touchpointCountsAsync = ref.watch(clientTouchpointCountsProvider);
+
+    return touchpointCountsAsync.when(
+      data: (counts) {
+        // Pass the data (not AsyncValue) to child method
+        return _buildClientCard(client, counts);
+      },
+      loading: () => CircularProgressIndicator(),
+      error: (_, __) => ErrorText('Failed to load touchpoint counts'),
+    );
+  }
+
+  // Child method signature accepts the data type (not AsyncValue)
+  Widget _buildClientCard(Client client, Map<String, int> touchpointCounts) {
+    final count = touchpointCounts[client.id] ?? 0;
+    return ClientListTile(
+      client: client,
+      touchpointCount: count,  // Pass pre-extracted value
+    );
+  }
+}
+```
+
+**Why it works:**
+- Clean separation: Parent handles async state, children handle display
+- Type-safe: Children receive concrete types, not AsyncValue wrapper
+- Testable: Children can be tested with mock data without provider setup
+- Performance: Async state handled once at parent, not re-computed for each child
+
+**Common Pitfalls:**
+- **Passing AsyncValue to children:** Children must handle loading/error states repeatedly
+- **Watching provider in children:** Causes multiple provider watches (inefficient)
+- **Not handling null data:** Need to provide default values when data missing
+
+**Related Files:**
+- Parent 1: `mobile/imu_flutter/lib/shared/widgets/client_selector_modal.dart:177-217`
+- Parent 2: `mobile/imu_flutter/lib/features/clients/presentation/pages/clients_page.dart:156-197`
+- Child Widget: `mobile/imu_flutter/lib/shared/widgets/client/client_list_tile.dart`
+
+**Impact:** Enables efficient provider data propagation through widget tree with clean separation of concerns
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: Provider Cache Invalidation After Mutations
+
+**Description:** Use `ref.invalidate()` to refresh provider data after mutations to keep UI in sync
+
+**When to use:** Provider data becomes stale after create/update/delete operations
+
+**Example:**
+```dart
+// Create a touchpoint (mutation)
+await ref.read(createMyDayVisitProvider(clientId).notifier).createVisit(visitData);
+
+// Invalidate the touchpoint counts provider to refresh data
+ref.invalidate(clientTouchpointCountsProvider);
+
+// Now the UI will automatically rebuild with updated touchpoint counts
+```
+
+**Why it works:**
+- Forces provider to re-fetch data from source
+- All widgets watching the provider automatically rebuild
+- Ensures UI reflects latest data after mutations
+- Works with `cacheTime` to prevent excessive refetches
+
+**When to Invalidate:**
+- After creating touchpoints (increases count)
+- After deleting touchpoints (decreases count)
+- After bulk operations (affects multiple counts)
+- After sync operations (data may have changed)
+
+**Common Pitfalls:**
+- **Not invalidating after mutations:** UI shows stale data
+- **Invalidating too frequently:** Causes unnecessary refetches
+- **Forgetting cacheTime:** Provider may refetch immediately (inefficient)
+
+**Related Files:**
+- Invalidation 1: `mobile/imu_flutter/lib/shared/widgets/client_selector_modal.dart:272`
+- Invalidation 2: `mobile/imu_flutter/lib/features/clients/presentation/pages/clients_page.dart:239`
+- Provider: `mobile/imu_flutter/lib/shared/providers/app_providers.dart:261-275`
+
+**Impact:** Ensures UI always displays accurate touchpoint counts after user actions
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: Touchpoint Badge Display Format
+
+**Description:** Touchpoint progress badges display "X/7 • type" format with lowercase next touchpoint type
+
+**When to use:** Displaying touchpoint progress in UI components
+
+**Example:**
+```dart
+final next = TouchpointPattern.types[count];  // null if count >= 7
+final label = next != null
+    ? '$count/7 • ${next.name.toLowerCase()}'  // "3/7 • visit"
+    : '$count/7';  // "7/7" (completed)
+
+// TouchpointPattern.types array:
+// [Visit, Call, Call, Visit, Call, Call, Visit]
+// Index 0 = 1st touchpoint (Visit)
+// Index 1 = 2nd touchpoint (Call)
+// ...
+// Index 6 = 7th touchpoint (Visit)
+```
+
+**Why it works:**
+- Shows progress (X/7) and what comes next (visit/call)
+- Lowercase type for visual consistency
+- Bullet separator (•) for clean appearance
+- No next type when all 7 completed
+
+**Display Format:**
+- 0 touchpoints: "0/7 • visit" (next is 1st: visit)
+- 1 touchpoint: "1/7 • call" (next is 2nd: call)
+- 2 touchpoints: "2/7 • call" (next is 3rd: call)
+- 3 touchpoints: "3/7 • visit" (next is 4th: visit)
+- 6 touchpoints: "6/7 • visit" (next is 7th: visit)
+- 7 touchpoints: "7/7" (completed, no next)
+
+**Related Files:**
+- Implementation: `mobile/imu_flutter/lib/shared/widgets/client/touchpoint_progress_badge.dart:51-58`
+- Pattern: `mobile/imu_flutter/lib/core/models/touchpoint_pattern.dart`
+
+**Impact:** Consistent, informative touchpoint progress display across all UI components
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: TouchpointReason Enum Values
+
+**Description:** TouchpointReason enum uses `interested` value, not `qualifiedLead`
+
+**When to use:** Setting touchpoint status/reason in code and tests
+
+**Example:**
+```dart
+// CORRECT:
+final status = TouchpointStatus.interested;
+
+// WRONG - doesn't exist:
+// final status = TouchpointStatus.qualifiedLead;
+
+// Valid TouchpointStatus values:
+// - TouchpointStatus.interested
+// - TouchpointStatus.undecided
+// - TouchpointStatus.notInterested
+// - TouchpointStatus.completed
+```
+
+**Why it matters:**
+- `qualifiedLead` was likely renamed to `interested`
+- Using wrong value causes compilation errors
+- Tests must use correct enum values
+- Affects both mobile and backend code
+
+**Common Pitfalls:**
+- **Using legacy names:** `qualifiedLead` doesn't exist
+- **Case sensitivity:** Must be lowercase `interested`
+- **Wrong enum:** `TouchpointReason` vs `TouchpointStatus` (different enums)
+
+**Related Files:**
+- Enum: `mobile/imu_flutter/lib/features/clients/data/models/client_model.dart`
+- Tests: `mobile/imu_flutter/test/widget/widgets/touchpoint_progress_badge_test.dart`
+
+**Impact:** Prevents compilation errors in touchpoint-related code
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: Lucide Icons Import and Usage
+
+**Description:** Lucide icons require `LucideIcons.iconName` prefix, NOT Flutter's `Icons.iconName`
+
+**When to use:** Using Lucide icon library in Flutter widgets
+
+**Example:**
+```dart
+// Import statement
+import 'package:lucide_icons/lucide_icons.dart' show LucideIcons;
+
+// CORRECT: Use LucideIcons prefix
+Icon(LucideIcons.phone)
+Icon(LucideIcons.calendar)
+Icon(LucideIcons.mapPin)
+
+// WRONG: Flutter's Icons class
+// Icon(Icons.phone)  // This is Flutter's Material Icons
+// Icon(Icons.calendar)  // This is Flutter's Material Icons
+```
+
+**Why it matters:**
+- Lucide icons are separate from Flutter's built-in Material Icons
+- Must use `LucideIcons` prefix to access Lucide icon set
+- `show LucideIcons` in import prevents naming conflicts
+
+**Common Pitfalls:**
+- **Forgetting LucideIcons prefix:** Results in undefined reference error
+- **Using Icons.iconName:** Wrong icon library (Material Icons instead)
+- **Missing import:** Must import lucide_icons package
+
+**Related Files:**
+- Import: `mobile/imu_flutter/lib/shared/widgets/client/client_list_tile.dart:10`
+- Package: `package:lucide_icons/lucide_icons.dart`
+
+**Impact:** Correct icon rendering in UI components
+
+**Fix Date:** 2026-04-07
+
+---
+
+#### Pattern: Import Aliasing for Conflicting Types
+
+**Description:** Use `hide TypeName` when multiple imports define the same type name
+
+**When to use:** Multiple libraries define conflicting type names (e.g., TimeOfDay)
+
+**Example:**
+```dart
+// CONFLICT: Both Flutter and client_model define TimeOfDay
+import 'package:flutter/material.dart';  // Has TimeOfDay
+import '../../../clients/data/models/client_model.dart';  // Also has TimeOfDay
+
+// SOLUTION: Hide TimeOfDay from client_model import
+import 'package:flutter/material.dart';
+import '../../../clients/data/models/client_model.dart' hide TimeOfDay;
+
+// Now TimeOfDay refers to Flutter's version
+TimeOfDay now = TimeOfDay.now();
+```
+
+**Why it works:**
+- Explicitly hides conflicting type from import
+- Prevents "ambiguous import" errors
+- Clear which version you're using (Flutter's in this case)
+- No need to fully qualify type names
+
+**Common Conflicts:**
+- **TimeOfDay:** Flutter vs. client_model
+- **User:** Multiple packages may define User model
+- **Client:** Multiple packages may define Client model
+
+**Alternatives:**
+```dart
+// Alternative 1: Use prefix (more verbose)
+import 'package:flutter/material.dart' as material;
+material.TimeOfDay now = material.TimeOfDay.now();
+
+// Alternative 2: Hide from Flutter instead
+import 'package:flutter/material.dart' hide TimeOfDay;
+import '../../../clients/data/models/client_model.dart';
+// Now TimeOfDay refers to client_model's version
+```
+
+**Related Files:**
+- Import: `mobile/imu_flutter/lib/features/touchpoints/presentation/widgets/touchpoint_form.dart:10`
+- Conflict: Flutter's TimeOfDay vs. client_model's TimeOfDay
+
+**Impact:** Prevents compilation errors from conflicting type names
+
+**Fix Date:** 2026-04-07
 
 ---
 
