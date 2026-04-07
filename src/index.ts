@@ -45,6 +45,9 @@ import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
 
+// Export app for testing
+export { app };
+
 // Request logging middleware (simplified format)
 app.use('*', simpleRequestLogger);
 

@@ -17,7 +17,7 @@ const itineraries = new Hono();
 // Validation schemas
 const createItinerarySchema = z.object({
   user_id: z.string().uuid(),
-  client_id: z.string().uuid(),
+  client_ids: z.array(z.string().uuid()).min(1, 'At least one client is required'),
   scheduled_date: z.string(),
   scheduled_time: z.string().optional(),
   status: z.enum(['pending', 'assigned', 'in_progress', 'completed', 'cancelled']).default('pending'),
@@ -240,22 +240,24 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
   }
 });
 
-// POST /api/itineraries - Create new itinerary
+// POST /api/itineraries - Create new itinerary (supports multiple clients)
 itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create'), auditMiddleware('itinerary'), async (c) => {
+  const client = await pool.connect();
+
   try {
     const user = c.get('user');
     const body = await c.req.json();
 
-    // Debug logging to see what's being received
+    // Debug logging
     console.log('[Itineraries POST] Request body:', JSON.stringify(body, null, 2));
     console.log('[Itineraries POST] user_id value:', body.user_id, 'type:', typeof body.user_id);
-    console.log('[Itineraries POST] client_id value:', body.client_id, 'type:', typeof body.client_id);
-    console.log('[Itineraries POST] scheduled_date value:', body.scheduled_date, 'type:', typeof body.scheduled_date);
+    console.log('[Itineraries POST] client_ids value:', body.client_ids, 'type:', typeof body.client_ids);
 
     const validated = createItinerarySchema.parse(body);
+    const { user_id, client_ids, scheduled_date, scheduled_time, status, priority, notes } = validated;
 
     // Validate that scheduled_date is not in the past
-    const scheduledDate = new Date(validated.scheduled_date);
+    const scheduledDate = new Date(scheduled_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -263,55 +265,95 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
       throw new ValidationError('Scheduled date cannot be in the past');
     }
 
-    // Validate that client exists, check loan_released status, and user has access to client's municipality
-    // RULE: loan_released clients cannot be added to itinerary (they're "done")
-    const clientCheck = await pool.query(
-      `SELECT id, municipality, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL`,
-      [validated.client_id]
-    );
-    if (clientCheck.rows.length === 0) {
-      throw new NotFoundError('Client');
+    await client.query('BEGIN');
+
+    const results = [];
+    const errors = [];
+
+    // Validate and insert each client individually
+    for (const clientId of client_ids) {
+      try {
+        // Validate that client exists and check loan_released status
+        const clientCheck = await client.query(
+          `SELECT id, municipality, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL`,
+          [clientId]
+        );
+
+        if (clientCheck.rows.length === 0) {
+          errors.push({ client_id: clientId, error: 'Client not found' });
+          continue;
+        }
+
+        const clientData = clientCheck.rows[0];
+        if (clientData.loan_released || clientData.loan_released_bool) {
+          errors.push({ client_id: clientId, error: 'Cannot add client: Loan has already been released' });
+          continue;
+        }
+
+        // Check if itinerary already exists for this client, user, and date
+        const existingCheck = await client.query(
+          `SELECT id FROM itineraries
+           WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3`,
+          [clientId, user_id, scheduled_date]
+        );
+
+        if (existingCheck.rows.length > 0) {
+          errors.push({
+            client_id: clientId,
+            error: 'Client already has an itinerary for this date',
+            existing_itinerary_id: existingCheck.rows[0].id
+          });
+          continue;
+        }
+
+        // Insert itinerary
+        const result = await client.query(
+          `INSERT INTO itineraries (
+            id, user_id, client_id, scheduled_date, scheduled_time, status, priority, notes, created_by
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+          ) RETURNING *`,
+          [
+            user_id, clientId, scheduled_date,
+            scheduled_time || null, status, priority,
+            notes || null, user.sub
+          ]
+        );
+
+        results.push(result.rows[0]);
+      } catch (err) {
+        // Record error but continue with other clients
+        errors.push({
+          client_id: clientId,
+          error: err.message || 'Unknown error'
+        });
+      }
     }
 
-    const client = clientCheck.rows[0];
-    if (client.loan_released || client.loan_released_bool) {
+    // If we have any successes, commit the transaction
+    if (results.length > 0) {
+      await client.query('COMMIT');
+
+      return c.json({
+        success: true,
+        itineraries: results,
+        count: results.length,
+        partial: errors.length > 0,
+        errors: errors.length > 0 ? errors : undefined
+      });
+    } else {
+      // All failed, rollback
+      await client.query('ROLLBACK');
+
       return c.json({
         success: false,
-        message: 'Cannot add client to itinerary: Loan has already been released'
+        error: 'Failed to create any itineraries',
+        errors: errors
       }, 400);
     }
-
-    // Check if itinerary already exists for this client, user, and date
-    const existingCheck = await pool.query(
-      `SELECT id FROM itineraries
-       WHERE client_id = $1 AND user_id = $2 AND scheduled_date = $3`,
-      [validated.client_id, validated.user_id, validated.scheduled_date]
-    );
-    if (existingCheck.rows.length > 0) {
-      return c.json({
-        message: 'Client already has an itinerary for this date',
-        existing_itinerary_id: existingCheck.rows[0].id
-      }, 400);
-    }
-
-    // For field agents and caravans, they can create itineraries for any client
-    // (The itinerary is assigned to them via user_id, not filtered by client municipality)
-
-    const result = await pool.query(
-      `INSERT INTO itineraries (
-        id, user_id, client_id, scheduled_date, scheduled_time, status, priority, notes, created_by
-      ) VALUES (
-        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
-      ) RETURNING *`,
-      [
-        validated.user_id, validated.client_id, validated.scheduled_date,
-        validated.scheduled_time, validated.status, validated.priority,
-        validated.notes, user.sub
-      ]
-    );
-
-    return c.json(mapRowToItinerary(result.rows[0]), 201);
   } catch (error) {
+    await client.query('ROLLBACK');
+
     if (error instanceof z.ZodError) {
       // Log detailed Zod validation errors
       console.error('[Itineraries POST] Zod validation errors:');
@@ -326,8 +368,11 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
       });
       throw validationError;
     }
+
     console.error('Create itinerary error:', error);
     throw new Error('Failed to create itinerary');
+  } finally {
+    client.release();
   }
 });
 
