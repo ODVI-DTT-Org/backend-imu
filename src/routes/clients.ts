@@ -725,52 +725,97 @@ clients.get('/assigned', authMiddleware, async (c) => {
     }
 
     // Always filter by touchpoint status for assigned endpoint (default: callable)
-    // Map touchpoint_status to group score
-    const statusToScoreMap: Record<string, number> = {
-      'callable': 1,
-      'waiting_for_caravan': 2,  // For Tele: next is Visit (need caravan)
-      'completed': 3,
-      'loan_released': 4,
-      'no_progress': 5
-    };
+    // Use separate CTEs approach for Tele role to ensure proper ordering
+    if (user.role === 'tele') {
+      // Tele-specific 5-group scoring with separate CTEs
+      withGroupScoreCTE = `${withGroupScoreCTE},
+        callable_group AS (
+          SELECT ti.*, 1 as group_score
+          FROM touchpoint_info ti
+          WHERE ti.next_touchpoint_type = 'Call' AND ti.completed_count < 7 AND NOT ti.loan_released
+        ),
+        waiting_for_caravan_group AS (
+          SELECT ti.*, 2 as group_score
+          FROM touchpoint_info ti
+          WHERE ti.next_touchpoint_type = 'Visit' AND ti.completed_count < 7 AND NOT ti.loan_released
+        ),
+        completed_group AS (
+          SELECT ti.*, 3 as group_score
+          FROM touchpoint_info ti
+          WHERE ti.completed_count >= 7 AND NOT ti.loan_released
+        ),
+        loan_released_group AS (
+          SELECT ti.*, 4 as group_score
+          FROM touchpoint_info ti
+          WHERE ti.loan_released
+        ),
+        no_progress_group AS (
+          SELECT ti.*, 5 as group_score
+          FROM touchpoint_info ti
+          WHERE ti.completed_count = 0
+        ),
+        touchpoint_with_score AS (
+          SELECT * FROM callable_group
+          UNION ALL
+          SELECT * FROM waiting_for_caravan_group
+          UNION ALL
+          SELECT * FROM completed_group
+          UNION ALL
+          SELECT * FROM loan_released_group
+          UNION ALL
+          SELECT * FROM no_progress_group
+        )`;
 
-    const targetScore = statusToScoreMap[effectiveTouchpointStatus];
-    if (targetScore !== undefined) {
-      // Add group score calculation to CTE
-      // IMPORTANT: For Tele users, separate callable (Call) from waiting for caravan (Visit)
-      withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
-        SELECT *,
-          CASE
-            ${user.role === 'tele' ? `
-            -- Tele-specific scoring: prioritize callable (Call) over waiting for caravan (Visit)
-            -- Group 1 (callable): Next is Call AND < 7 touchpoints AND loan NOT released
-            WHEN next_touchpoint_type = 'Call' AND completed_count < 7 AND NOT loan_released THEN 1
-            -- Group 2 (waiting for caravan): Next is Visit AND < 7 touchpoints AND loan NOT released
-            WHEN next_touchpoint_type = 'Visit' AND completed_count < 7 AND NOT loan_released THEN 2
-            -- Group 3 (completed): 7/7 touchpoints AND loan NOT released
-            WHEN completed_count >= 7 AND NOT loan_released THEN 3
-            -- Group 4 (loan released): Loan already released
-            WHEN loan_released THEN 4
-            -- Group 5 (no progress): 0 touchpoints
-            ELSE 5` : `
-            -- Caravan/Manager scoring
-            -- Group 1 (callable): User can create next touchpoint AND loan NOT released
-            WHEN (next_touchpoint_type IS NOT NULL OR completed_count = 0) AND completed_count < 7 AND NOT loan_released THEN 1
-            -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
-            WHEN completed_count >= 7 OR loan_released THEN 2
-            -- Group 3 (no_progress): Should not happen with caravan logic above, but kept for safety
-            ELSE 3
-            `}
-          END as group_score
-        FROM touchpoint_info
-      )`;
+      // Map touchpoint_status to group score for Tele
+      const statusToScoreMap: Record<string, number> = {
+        'callable': 1,
+        'waiting_for_caravan': 2,
+        'completed': 3,
+        'loan_released': 4,
+        'no_progress': 5
+      };
 
-      // Filter by group score in WHERE clause
-      const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
-      const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-      areaFilterWhereClause += `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-      baseParams.push(targetScore);
-      baseParamIndex++;
+      const targetScore = statusToScoreMap[effectiveTouchpointStatus];
+      if (targetScore !== undefined) {
+        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+        areaFilterWhereClause += `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+        baseParams.push(targetScore);
+        baseParamIndex++;
+      }
+    } else {
+      // For Caravan/Admin: Use original CASE expression approach
+      const statusToScoreMap: Record<string, number> = {
+        'callable': 1,
+        'waiting_for_caravan': 2,
+        'completed': 3,
+        'loan_released': 4,
+        'no_progress': 5
+      };
+
+      const targetScore = statusToScoreMap[effectiveTouchpointStatus];
+      if (targetScore !== undefined) {
+        // Add group score calculation to CTE
+        withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
+          SELECT *,
+            CASE
+              -- Group 1 (callable): User can create next touchpoint AND loan NOT released
+              WHEN (next_touchpoint_type IS NOT NULL OR completed_count = 0) AND completed_count < 7 AND NOT loan_released THEN 1
+              -- Group 2 (completed): 7/7 touchpoints OR loan released (blocked from further touchpoints)
+              WHEN completed_count >= 7 OR loan_released THEN 2
+              -- Group 3 (no_progress): Should not happen with caravan logic above, but kept for safety
+              ELSE 3
+            END as group_score
+          FROM touchpoint_info
+        )`;
+
+        // Filter by group score in WHERE clause
+        const hasExistingWhere = baseWhereClause || areaFilterWhereClause;
+        const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+        areaFilterWhereClause += `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+        baseParams.push(targetScore);
+        baseParamIndex++;
+      }
     }
 
     // Get total count using CTE
@@ -808,6 +853,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
         tws.next_touchpoint_type,
         tws.last_touchpoint_type,
         tws.last_touchpoint_user_id,
+        tws.group_score,
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name
       FROM clients c
