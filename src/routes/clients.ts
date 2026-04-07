@@ -72,11 +72,10 @@ const phoneSchema = z.object({
 
 // Helper to map DB row to Client type
 function mapRowToClient(row: Record<string, any>) {
-  // Calculate display_name: "Surname, First Name MiddleName Extension"
+  // Calculate display_name: "Surname, First Name MiddleName"
   // Only comma after surname, rest separated by spaces
   const middleName = row.middle_name || '';
-  const extName = row.ext_name || '';
-  const nameParts = [row.first_name, middleName, extName].filter((p: string) => p && p.trim().length > 0);
+  const nameParts = [row.first_name, middleName].filter((p: string) => p && p.trim().length > 0);
   const displayName = `${row.last_name}, ${nameParts.join(' ')}`;
 
   return {
@@ -84,7 +83,6 @@ function mapRowToClient(row: Record<string, any>) {
     first_name: row.first_name,
     last_name: row.last_name,
     middle_name: row.middle_name,
-    ext_name: row.ext_name,
     display_name: displayName,
     birth_date: row.birth_date,
     email: row.email,

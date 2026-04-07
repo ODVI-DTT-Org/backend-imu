@@ -289,7 +289,7 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     const result = await pool.query(
       `SELECT t.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
-              c.middle_name as client_middle_name, c.ext_name as client_ext_name,
+              c.middle_name as client_middle_name,
               u.first_name as user_first_name, u.last_name as user_last_name
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
@@ -301,10 +301,9 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     );
 
     const items = result.rows.map(row => {
-      // Calculate display_name for client: "Surname, First Name MiddleName Extension"
+      // Calculate display_name for client: "Surname, First Name MiddleName"
       const middleName = row.client_middle_name || '';
-      const extName = row.client_ext_name || '';
-      const nameParts = [row.client_first_name, middleName, extName].filter((p: string) => p && p.trim().length > 0);
+      const nameParts = [row.client_first_name, middleName].filter((p: string) => p && p.trim().length > 0);
       const clientDisplayName = `${row.client_last_name}, ${nameParts.join(' ')}`;
 
       return {
@@ -315,7 +314,6 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
             first_name: row.client_first_name,
             last_name: row.client_last_name,
             middle_name: row.client_middle_name,
-            ext_name: row.client_ext_name,
             display_name: clientDisplayName,
           },
           user_id: row.user_id ? {
