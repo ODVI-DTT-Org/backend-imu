@@ -2002,19 +2002,13 @@ clients.post(
           // Update client with municipality information only (no barangay, no PSGC ID)
           await pool.query(
             `UPDATE clients
-             SET psgc_region = $1,
-                 psgc_province = $2,
-                 psgc_municipality = $3,
-                 region = COALESCE($4, region),
-                 province = COALESCE($5, province),
-                 municipality = COALESCE($6, municipality),
+             SET region = $1,
+                 province = $2,
+                 municipality = $3,
                  psgc_id = NULL,  -- Explicitly set to NULL (barangay required for PSGC ID)
                  updated_at = NOW()
-             WHERE id = $7`,
+             WHERE id = $4`,
             [
-              assignment.region,
-              assignment.province,
-              assignment.municipality,
               assignment.region,
               assignment.province,
               assignment.municipality,
@@ -2032,20 +2026,21 @@ clients.post(
       }
 
       // Log batch assignment for audit trail
-      await pool.query(
-        `INSERT INTO audit_log (user_id, action, entity_type, details)
-         VALUES ($1, $2, $3, $4)`,
-        [
-          user.sub,
-          'psgc_batch_municipality_assigned',
-          'client',
-          JSON.stringify({
-            total: validated.assignments.length,
-            successful: results.success.length,
-            failed: results.failed.length,
-          }),
-        ]
-      );
+      // TODO: Implement audit logging when audit_log table is created
+      // await pool.query(
+      //   `INSERT INTO audit_log (user_id, action, entity_type, details)
+      //      VALUES ($1, $2, $3, $4)`,
+      //   [
+      //     user.sub,
+      //     'psgc_batch_municipality_assigned',
+      //     'client',
+      //     JSON.stringify({
+      //       total: validated.assignments.length,
+      //       successful: results.success.length,
+      //       failed: results.failed.length,
+      //     }),
+      //   ]
+      // );
 
       return c.json({
         success: true,
