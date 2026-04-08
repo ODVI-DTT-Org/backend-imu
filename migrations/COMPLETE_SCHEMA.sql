@@ -1232,61 +1232,13 @@ CREATE TRIGGER update_feature_flags_updated_at BEFORE UPDATE ON feature_flags FO
 -- ============================================================
 -- DASHBOARD MATERIALIZED VIEWS
 -- ============================================================
--- Action items materialized view for dashboard
-DROP MATERIALIZED VIEW IF EXISTS action_items CASCADE;
-
-CREATE MATERIALIZED VIEW action_items AS
-WITH overdue_visits AS (
-  -- Overdue visits (past scheduled date, not completed)
-  SELECT
-    'overdue_visit' as action_type,
-    'high' as priority,
-    c.id as client_id,
-    c.first_name,
-    c.last_name,
-    c.municipality,
-    i.scheduled_date,
-    u.id as assigned_to,
-    (CURRENT_DATE - i.scheduled_date)::INTEGER as days_overdue
-  FROM itineraries i
-  JOIN clients c ON i.client_id = c.id
-  JOIN users u ON c.user_id = u.id
-  WHERE i.scheduled_date < CURRENT_DATE
-    AND i.status NOT IN ('completed', 'cancelled')
-    AND c.user_id = u.id
-
-  UNION ALL
-
-  -- Overdue follow-ups (no touchpoint in 14+ days for interested clients)
-  SELECT
-    'overdue_followup' as action_type,
-    'medium' as priority,
-    c.id as client_id,
-    c.first_name,
-    c.last_name,
-    c.municipality,
-    MAX(t.date) as scheduled_date,
-    c.user_id as assigned_to,
-    (CURRENT_DATE - MAX(t.date))::INTEGER as days_overdue
-  FROM clients c
-  JOIN touchpoints t ON t.client_id = c.id
-  WHERE c.loan_released = false
-    AND EXISTS (
-      SELECT 1 FROM touchpoints
-      WHERE client_id = c.id
-        AND status IN ('Interested', 'Undecided')
-        AND date > CURRENT_DATE - INTERVAL '30 days'
-    )
-  GROUP BY c.id, c.first_name, c.last_name, c.municipality, c.user_id
-  HAVING MAX(t.date) < CURRENT_DATE - INTERVAL '14 days'
-)
-SELECT * FROM overdue_visits
-ORDER BY priority DESC, days_overdue DESC;
-
--- Create indexes on materialized view for fast queries
-CREATE UNIQUE INDEX idx_action_items_client_type ON action_items(client_id, action_type);
-CREATE INDEX IF NOT EXISTS idx_action_items_priority ON action_items(priority);
-CREATE INDEX IF NOT EXISTS idx_action_items_assigned_to ON action_items(assigned_to);
+-- NOTE: action_items materialized view temporarily disabled due to touchpoints schema changes
+-- The view needs to be updated to work with the normalized touchpoints schema (visits/calls tables)
+-- DROP MATERIALIZED VIEW IF EXISTS action_items CASCADE;
+-- CREATE MATERIALIZED VIEW action_items AS ...
+-- CREATE UNIQUE INDEX idx_action_items_client_type ON action_items(client_id, action_type);
+-- CREATE INDEX IF NOT EXISTS idx_action_items_priority ON action_items(priority);
+-- CREATE INDEX IF NOT EXISTS idx_action_items_assigned_to ON action_items(assigned_to);
 
 -- ============================================================
 -- DASHBOARD PERFORMANCE INDEXES
