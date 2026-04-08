@@ -1,7 +1,7 @@
 # Fuzzy Full-Name Search Design
 
 **Date:** 2026-04-08
-**Status:** Approved
+**Status:** Draft
 **Author:** Claude (AI Agent)
 **Reviewers:** [Pending]
 
@@ -67,6 +67,8 @@ USING GIN (full_name gin_trgm_ops);
 **Search Query:**
 ```typescript
 // Instead of ILIKE, use trigram similarity
+// The % operator uses pg_trgm's default similarity threshold of 0.3
+// This means strings must share at least 30% of their trigrams to match
 const searchCondition = `
   full_name % $1 OR
   first_name % $1 OR
@@ -76,7 +78,7 @@ const searchCondition = `
   phone ILIKE $2
 `;
 
-// Order by similarity score
+// Order by similarity score (0.0 to 1.0, where 1.0 is exact match)
 ORDER BY
   SIMILARITY(full_name, $1) DESC,
   last_name ASC,
@@ -95,7 +97,10 @@ dependencies:
 ```dart
 class FuzzySearchService {
   final List<Client> _clients;
-  static const int _threshold = 70; // 0-100, higher = stricter
+  // Threshold of 70 means 70% string similarity required (Levenshtein distance)
+  // Higher = stricter matching, Lower = more permissive
+  // 70 is a good balance for catching typos while avoiding false positives
+  static const int _threshold = 70;
 
   List<Client> searchByName(String query) {
     if (query.isEmpty) return _clients;
@@ -229,7 +234,7 @@ export function normalizeSearchQuery(query: string): string {
 ### Phase 1: Backend Migration (Zero Downtime)
 
 ```sql
--- Migration file: backend/src/migrations/XXX_add_fuzzy_search.sql
+-- Migration file: backend/src/migrations/053_add_fuzzy_search.sql
 
 -- Step 1: Add extension (non-blocking)
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
