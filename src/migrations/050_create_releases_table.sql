@@ -1,5 +1,5 @@
 -- Migration 050: Create releases table
--- This table stores loan release events
+-- This table stores loan release events with approval audit trail
 
 CREATE TABLE IF NOT EXISTS releases (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -11,15 +11,22 @@ CREATE TABLE IF NOT EXISTS releases (
     amount NUMERIC NOT NULL,
     approval_notes TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed')),
+    approved_by UUID REFERENCES users(id) ON DELETE SET NULL,  -- Audit field: who approved
+    approved_at TIMESTAMPTZ,  -- Audit field: when approved
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Indexes for releases
-CREATE INDEX idx_releases_client_id ON releases(client_id);
-CREATE INDEX idx_releases_user_id ON releases(user_id);
-CREATE INDEX idx_releases_visit_id ON releases(visit_id);
-CREATE INDEX idx_releases_status ON releases(status);
-CREATE INDEX idx_releases_product_type ON releases(product_type);
-CREATE INDEX idx_releases_loan_type ON releases(loan_type);
-CREATE INDEX idx_releases_created_at ON releases(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_releases_client_id ON releases(client_id);
+CREATE INDEX IF NOT EXISTS idx_releases_user_id ON releases(user_id);
+CREATE INDEX IF NOT EXISTS idx_releases_visit_id ON releases(visit_id);
+CREATE INDEX IF NOT EXISTS idx_releases_status ON releases(status);
+CREATE INDEX IF NOT EXISTS idx_releases_product_type ON releases(product_type);
+CREATE INDEX IF NOT EXISTS idx_releases_loan_type ON releases(loan_type);
+CREATE INDEX IF NOT EXISTS idx_releases_created_at ON releases(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_releases_approved_by ON releases(approved_at);  -- For audit queries
+
+-- Comment for audit fields
+COMMENT ON COLUMN releases.approved_by IS 'User ID of the manager who approved/rejected this release';
+COMMENT ON COLUMN releases.approved_at IS 'Timestamp when the release was approved or rejected';

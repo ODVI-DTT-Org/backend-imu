@@ -1,90 +1,98 @@
 import { Hono } from 'hono';
-import { authenticate, authorize } from '../middleware/auth';
-import { validateBody } from '../middleware/validation';
-import { releaseService } from '../services/release.service';
+import { z } from 'zod';
+import { authMiddleware } from '../middleware/auth.js';
+import { releaseService, createReleaseSchema, updateReleaseSchema } from '../services/release.service.js';
+import { ValidationError } from '../errors/index.js';
 
 const releases = new Hono();
 
 // Get all releases (with filters)
-releases.get('/', authenticate, authorize('releases', 'read'), async (c) => {
-  const userId = c.get('userId');
+releases.get('/', authMiddleware, async (c) => {
+  const user = c.get('user');
   const filters = c.req.query();
-  const releases = await releaseService.findAll(userId, filters);
+  const releases = await releaseService.findAll(user.sub, filters);
   return c.json(releases);
 });
 
 // Get release by ID
-releases.get('/:id', authenticate, authorize('releases', 'read'), async (c) => {
+releases.get('/:id', authMiddleware, async (c) => {
   const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Invalid ID' }, 400);
   const release = await releaseService.findById(id);
   if (!release) return c.json({ error: 'Release not found' }, 404);
   return c.json(release);
 });
 
 // Create release
-releases.post('/',
-  authenticate,
-  authorize('releases', 'create'),
-  validateBody,
-  async (c) => {
-    const userId = c.get('userId');
+releases.post('/', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
     const data = await c.req.json();
-    const release = await releaseService.create({ ...data, user_id: userId });
+    const release = await releaseService.create({ ...data, user_id: user.sub });
     return c.json(release, 201);
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    throw error;
   }
-);
+});
 
 // Update release
-releases.patch('/:id',
-  authenticate,
-  authorize('releases', 'update'),
-  validateBody,
-  async (c) => {
+releases.patch('/:id', authMiddleware, async (c) => {
+  try {
     const id = c.req.param('id');
+    if (!id) return c.json({ error: 'Invalid ID' }, 400);
     const data = await c.req.json();
     const release = await releaseService.update(id, data);
     if (!release) return c.json({ error: 'Release not found' }, 404);
     return c.json(release);
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    throw error;
   }
-);
+});
 
 // Approve release
-releases.post('/:id/approve',
-  authenticate,
-  authorize('releases', 'approve'),
-  async (c) => {
-    const id = c.req.param('id');
-    const userId = c.get('userId');
-    const notes = await c.req.json().then(b => b?.notes);
-    const release = await releaseService.approve(id, userId, notes);
-    if (!release) return c.json({ error: 'Release not found' }, 404);
-    return c.json(release);
-  }
-);
+releases.post('/:id/approve', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Invalid ID' }, 400);
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  const notes = body?.notes;
+  const release = await releaseService.approve(id, user.sub, notes);
+  if (!release) return c.json({ error: 'Release not found' }, 404);
+  return c.json(release);
+});
 
 // Reject release
-releases.post('/:id/reject',
-  authenticate,
-  authorize('releases', 'approve'),
-  async (c) => {
-    const id = c.req.param('id');
-    const userId = c.get('userId');
-    const notes = await c.req.json().then(b => b?.notes);
-    const release = await releaseService.reject(id, userId, notes);
-    if (!release) return c.json({ error: 'Release not found' }, 404);
-    return c.json(release);
-  }
-);
+releases.post('/:id/reject', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Invalid ID' }, 400);
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+  const notes = body?.notes;
+  const release = await releaseService.reject(id, user.sub, notes);
+  if (!release) return c.json({ error: 'Release not found' }, 404);
+  return c.json(release);
+});
 
 // Delete release
-releases.delete('/:id',
-  authenticate,
-  authorize('releases', 'delete'),
-  async (c) => {
-    const id = c.req.param('id');
-    await releaseService.delete(id);
-    return c.json({ success: true });
-  }
-);
+releases.delete('/:id', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Invalid ID' }, 400);
+  await releaseService.delete(id);
+  return c.json({ success: true });
+});
 
 export default releases;

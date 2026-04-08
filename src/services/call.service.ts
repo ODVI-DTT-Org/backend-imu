@@ -1,4 +1,19 @@
-import { db } from '../db/database';
+import { pool } from '../db/index.js';
+import { z } from 'zod';
+
+// Validation schemas
+export const createCallSchema = z.object({
+  client_id: z.string().uuid('Invalid client ID format'),
+  user_id: z.string().uuid('Invalid user ID format'),
+  phone_number: z.string().min(10, 'Phone number must be at least 10 digits').max(20),
+  dial_time: z.coerce.date().optional(),
+  duration: z.number().int().min(0).max(7200).optional(),  // Max 2 hours in seconds
+  notes: z.string().max(5000).optional(),
+  reason: z.string().max(500).optional(),
+  status: z.string().max(100).optional(),
+});
+
+export const updateCallSchema = createCallSchema.partial();
 
 export interface Call {
   id?: string;
@@ -13,6 +28,15 @@ export interface Call {
   created_at?: Date;
   updated_at?: Date;
 }
+
+// Allowlist of updateable fields to prevent SQL injection
+const UPDATEABLE_CALL_FIELDS = [
+  'dial_time',
+  'duration',
+  'notes',
+  'reason',
+  'status',
+];
 
 export const callService = {
   async findAll(userId: string, filters: any = {}): Promise<Call[]> {
@@ -30,33 +54,44 @@ export const callService = {
     query += ` ORDER BY dial_time DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
     params.push(limit, offset);
 
-    const result = await db.query(query, params);
+    const result = await pool.query(query, params);
     return result.rows;
   },
 
   async findById(id: string): Promise<Call | null> {
-    const result = await db.query('SELECT * FROM calls WHERE id = $1', [id]);
+    const result = await pool.query('SELECT * FROM calls WHERE id = $1', [id]);
     return result.rows[0] || null;
   },
 
   async create(data: Omit<Call, 'id' | 'created_at' | 'updated_at'>): Promise<Call> {
-    const result = await db.query(
+    // Validate input data
+    const validated = createCallSchema.parse(data);
+
+    const result = await pool.query(
       `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, notes, reason, status)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [data.client_id, data.user_id, data.phone_number, data.dial_time,
-       data.duration, data.notes, data.reason, data.status]
+      [validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
+       validated.duration, validated.notes, validated.reason, validated.status]
     );
     return result.rows[0];
   },
 
   async update(id: string, data: Partial<Call>): Promise<Call | null> {
+    // Validate input data
+    const validated = updateCallSchema.parse(data);
+
     const fields: string[] = [];
     const values: any[] = [];
     let paramIndex = 1;
 
-    Object.entries(data).forEach(([key, value]) => {
-      if (value !== undefined && key !== 'id' && key !== 'created_at') {
+    // Only allow updates to fields in the allowlist
+    Object.entries(validated).forEach(([key, value]) => {
+      if (value !== undefined && key !== 'id' && key !== 'created_at' && key !== 'updated_at') {
+        // Validate field name against allowlist to prevent SQL injection
+        if (!UPDATEABLE_CALL_FIELDS.includes(key)) {
+          throw new Error(`Invalid field name: ${key}`);
+        }
         fields.push(`${key} = $${paramIndex++}`);
         values.push(value);
       }
@@ -65,7 +100,7 @@ export const callService = {
     if (fields.length === 0) return this.findById(id);
 
     values.push(id);
-    const result = await db.query(
+    const result = await pool.query(
       `UPDATE calls SET ${fields.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
       values
     );
@@ -73,7 +108,7 @@ export const callService = {
   },
 
   async delete(id: string): Promise<boolean> {
-    const result = await db.query('DELETE FROM calls WHERE id = $1', [id]);
+    const result = await pool.query('DELETE FROM calls WHERE id = $1', [id]);
     return (result.rowCount || 0) > 0;
   }
 };
