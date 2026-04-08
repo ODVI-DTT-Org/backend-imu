@@ -129,3 +129,4 @@ powersync-*.db
 # Import scripts (temporary)
 import-*.txt
 import-*.log
+.worktrees/
