@@ -4,6 +4,7 @@ import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
+import { normalizeSearchQuery } from '../utils/search-normalizer.js';
 import {
   ValidationError,
   NotFoundError,
@@ -259,12 +260,14 @@ clients.get('/', authMiddleware, async (c) => {
 
     // Fix: Check if search is truthy AND not just whitespace
     if (search && search.trim()) {
-      console.log('[clients] DEBUG: Adding search condition');
-      const trimmedSearch = search.trim();
-      baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
-      baseParams.push(`%${trimmedSearch}%`);
-      baseParamIndex++;
-      console.log('[clients] DEBUG: After adding search, baseParams =', baseParams);
+      console.log('[clients] DEBUG: Adding fuzzy search condition');
+      const normalizedSearch = normalizeSearchQuery(search.trim());
+      // Use pg_trgm fuzzy search with % operator (trigram similarity)
+      // Falls back to ILIKE for email/phone exact matching
+      baseWhereConditions.push(`(c.full_name % $${baseParamIndex} OR c.first_name % $${baseParamIndex} OR c.last_name % $${baseParamIndex} OR c.middle_name % $${baseParamIndex} OR c.email ILIKE $${baseParamIndex + 1} OR c.phone ILIKE $${baseParamIndex + 1})`);
+      baseParams.push(normalizedSearch, `%${normalizedSearch}%`);
+      baseParamIndex += 2;
+      console.log('[clients] DEBUG: After adding fuzzy search, baseParams =', baseParams);
     } else {
       console.log('[clients] DEBUG: Search condition NOT added (search is falsy or empty)');
       console.log('[clients] DEBUG: search value:', JSON.stringify(search));
@@ -679,9 +682,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
     let baseParamIndex = 1;
 
     if (search) {
-      baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
-      baseParams.push(`%${search}%`);
-      baseParamIndex++;
+      const normalizedSearch = normalizeSearchQuery(search);
+      // Use pg_trgm fuzzy search with % operator (trigram similarity)
+      baseWhereConditions.push(`(c.full_name % $${baseParamIndex} OR c.first_name % $${baseParamIndex} OR c.last_name % $${baseParamIndex} OR c.middle_name % $${baseParamIndex} OR c.email ILIKE $${baseParamIndex + 1} OR c.phone ILIKE $${baseParamIndex + 1})`);
+      baseParams.push(normalizedSearch, `%${normalizedSearch}%`);
+      baseParamIndex += 2;
     }
 
     // Soft delete filter: Only show active clients (not deleted)
@@ -1460,9 +1465,11 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     let paramIndex = 1;
 
     if (search) {
-      conditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${paramIndex} OR c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);
-      params.push(`%${search}%`);
-      paramIndex++;
+      const normalizedSearch = normalizeSearchQuery(search);
+      // Use pg_trgm fuzzy search with % operator (trigram similarity)
+      conditions.push(`(c.full_name % $${paramIndex} OR c.first_name % $${paramIndex} OR c.last_name % $${paramIndex} OR c.middle_name % $${paramIndex} OR c.email ILIKE $${paramIndex + 1} OR c.phone ILIKE $${paramIndex + 1})`);
+      params.push(normalizedSearch, `%${normalizedSearch}%`);
+      paramIndex += 2;
     }
 
     // Soft delete filter: Only show active clients (not deleted)
