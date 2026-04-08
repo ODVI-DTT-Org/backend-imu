@@ -44,6 +44,8 @@ import jobsRoutes from './routes/jobs.js';
 import powersyncRoutes from './routes/powersync.js';
 import featureFlagsRoutes from './routes/feature-flags.js';
 import filtersRoutes from './routes/filters.js';
+import addressesRoutes from './routes/addresses.js';
+import phoneNumbersRoutes from './routes/phone-numbers.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
@@ -701,6 +703,8 @@ app.route('/api/jobs', jobsRoutes);
 app.route('/api/powersync', powersyncRoutes);
 app.route('/api/feature-flags', featureFlagsRoutes);
 app.route('/api/filters', filtersRoutes);
+app.route('/api', addressesRoutes);
+app.route('/api', phoneNumbersRoutes);
 
 // 404 handler
 app.notFound((c) => {
