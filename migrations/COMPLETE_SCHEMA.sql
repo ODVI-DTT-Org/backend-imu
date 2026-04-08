@@ -143,41 +143,68 @@ CREATE TABLE IF NOT EXISTS phone_numbers (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Touchpoints table
+-- Touchpoints table (normalized - sequence tracking only)
 CREATE TABLE IF NOT EXISTS touchpoints (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    visit_id UUID REFERENCES visits(id) ON DELETE SET NULL,
+    call_id UUID REFERENCES calls(id) ON DELETE SET NULL,
     touchpoint_number INTEGER NOT NULL CHECK (touchpoint_number BETWEEN 1 AND 7),
     type TEXT NOT NULL CHECK (type IN ('Visit', 'Call')),
-    date DATE NOT NULL,
-    address TEXT,
-    time_arrival TEXT,
-    time_departure TEXT,
+    rejection_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT touchpoint_has_record CHECK (visit_id IS NOT NULL OR call_id IS NOT NULL)
+);
+
+-- Visits table (physical visit data with GPS and odometer tracking)
+CREATE TABLE IF NOT EXISTS visits (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    type TEXT NOT NULL DEFAULT 'regular_visit' CHECK (type IN ('regular_visit', 'release_loan')),
+    time_in TIMESTAMPTZ,
+    time_out TIMESTAMPTZ,
     odometer_arrival TEXT,
     odometer_departure TEXT,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('Interested', 'Undecided', 'Not Interested', 'Completed')),
-    next_visit_date DATE,
-    notes TEXT,
     photo_url TEXT,
-    audio_url TEXT,
+    notes TEXT,
+    reason TEXT,
+    status TEXT,
+    address TEXT,
     latitude REAL,
     longitude REAL,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-    -- Time In/Out GPS-tracked fields
-    time_in TIMESTAMP,
-    time_in_gps_lat DOUBLE PRECISION,
-    time_in_gps_lng DOUBLE PRECISION,
-    time_in_gps_address TEXT,
-    time_out TIMESTAMP,
-    time_out_gps_lat DOUBLE PRECISION,
-    time_out_gps_lng DOUBLE PRECISION,
-    time_out_gps_address TEXT,
+-- Calls table (phone call data for tele touchpoints)
+CREATE TABLE IF NOT EXISTS calls (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    phone_number TEXT NOT NULL,
+    dial_time TIMESTAMPTZ,
+    duration INTEGER,
+    notes TEXT,
+    reason TEXT,
+    status TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
 
-    -- Rejection reason (for unfavorable status)
-    rejection_reason TEXT,
-
+-- Releases table (loan release events)
+CREATE TABLE IF NOT EXISTS releases (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+    visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+    product_type TEXT NOT NULL CHECK (product_type IN ('PUSU', 'LIKA', 'SUB2K')),
+    loan_type TEXT NOT NULL CHECK (loan_type IN ('NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM')),
+    amount NUMERIC NOT NULL,
+    approval_notes TEXT,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed')),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -407,15 +434,36 @@ CREATE INDEX IF NOT EXISTS idx_addresses_is_primary ON addresses(is_primary) WHE
 CREATE INDEX IF NOT EXISTS idx_phone_numbers_client_id ON phone_numbers(client_id);
 CREATE INDEX IF NOT EXISTS idx_phone_numbers_is_primary ON phone_numbers(is_primary) WHERE is_primary = true;
 
--- Touchpoints indexes
+-- Touchpoints indexes (normalized)
 CREATE INDEX IF NOT EXISTS idx_touchpoints_client_id ON touchpoints(client_id);
 CREATE INDEX IF NOT EXISTS idx_touchpoints_user_id ON touchpoints(user_id);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_date ON touchpoints(date DESC);
 CREATE INDEX IF NOT EXISTS idx_touchpoints_touchpoint_number ON touchpoints(client_id, touchpoint_number);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_time_in ON touchpoints(time_in);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_time_out ON touchpoints(time_out);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_client_status ON touchpoints(client_id, touchpoint_number, type);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_active ON touchpoints(client_id, touchpoint_number) WHERE touchpoint_number <= 7;
+CREATE INDEX IF NOT EXISTS idx_touchpoints_visit_id ON touchpoints(visit_id) WHERE visit_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_touchpoints_call_id ON touchpoints(call_id) WHERE call_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_touchpoints_client_type ON touchpoints(client_id, type);
+
+-- Visits indexes
+CREATE INDEX IF NOT EXISTS idx_visits_client_id ON visits(client_id);
+CREATE INDEX IF NOT EXISTS idx_visits_user_id ON visits(user_id);
+CREATE INDEX IF NOT EXISTS idx_visits_type ON visits(type);
+CREATE INDEX IF NOT EXISTS idx_visits_time_in ON visits(time_in DESC);
+CREATE INDEX IF NOT EXISTS idx_visits_time_out ON visits(time_out DESC);
+CREATE INDEX IF NOT EXISTS idx_visits_client_user ON visits(client_id, user_id);
+
+-- Calls indexes
+CREATE INDEX IF NOT EXISTS idx_calls_client_id ON calls(client_id);
+CREATE INDEX IF NOT EXISTS idx_calls_user_id ON calls(user_id);
+CREATE INDEX IF NOT EXISTS idx_calls_dial_time ON calls(dial_time DESC);
+CREATE INDEX IF NOT EXISTS idx_calls_client_user ON calls(client_id, user_id);
+
+-- Releases indexes
+CREATE INDEX IF NOT EXISTS idx_releases_client_id ON releases(client_id);
+CREATE INDEX IF NOT EXISTS idx_releases_user_id ON releases(user_id);
+CREATE INDEX IF NOT EXISTS idx_releases_visit_id ON releases(visit_id);
+CREATE INDEX IF NOT EXISTS idx_releases_status ON releases(status);
+CREATE INDEX IF NOT EXISTS idx_releases_product_type ON releases(product_type);
+CREATE INDEX IF NOT EXISTS idx_releases_loan_type ON releases(loan_type);
+CREATE INDEX IF NOT EXISTS idx_releases_created_at ON releases(created_at DESC);
 
 -- Itineraries indexes
 CREATE INDEX IF NOT EXISTS idx_itineraries_user_id ON itineraries(user_id);
@@ -613,6 +661,16 @@ CREATE TRIGGER update_clients_updated_at BEFORE UPDATE ON clients FOR EACH ROW E
 
 DROP TRIGGER IF EXISTS update_touchpoints_updated_at ON touchpoints;
 CREATE TRIGGER update_touchpoints_updated_at BEFORE UPDATE ON touchpoints FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Triggers for new normalized tables
+DROP TRIGGER IF EXISTS update_visits_updated_at ON visits;
+CREATE TRIGGER update_visits_updated_at BEFORE UPDATE ON visits FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_calls_updated_at ON calls;
+CREATE TRIGGER update_calls_updated_at BEFORE UPDATE ON calls FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+DROP TRIGGER IF EXISTS update_releases_updated_at ON releases;
+CREATE TRIGGER update_releases_updated_at BEFORE UPDATE ON releases FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 DROP TRIGGER IF EXISTS update_itineraries_updated_at ON itineraries;
 CREATE TRIGGER update_itineraries_updated_at BEFORE UPDATE ON itineraries FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -1233,11 +1291,15 @@ CREATE INDEX IF NOT EXISTS idx_action_items_assigned_to ON action_items(assigned
 -- ============================================================
 -- DASHBOARD PERFORMANCE INDEXES
 -- ============================================================
--- Touchpoints performance indexes
-CREATE INDEX IF NOT EXISTS idx_touchpoints_client_date ON touchpoints(client_id, date DESC);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_client_type_status ON touchpoints(client_id, type, status);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_date ON touchpoints(date DESC);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_client_user_date ON touchpoints(client_id, date DESC, type);
+-- Touchpoints performance indexes (normalized)
+CREATE INDEX IF NOT EXISTS idx_touchpoints_client_number_type ON touchpoints(client_id, touchpoint_number, type);
+CREATE INDEX IF NOT EXISTS idx_touchpoints_created_at ON touchpoints(created_at DESC);
+
+-- Visits performance indexes
+CREATE INDEX IF NOT EXISTS idx_visits_created_at ON visits(created_at DESC);
+
+-- Calls performance indexes
+CREATE INDEX IF NOT EXISTS idx_calls_created_at ON calls(created_at DESC);
 
 -- Clients performance indexes
 CREATE INDEX IF NOT EXISTS idx_clients_user_type ON clients(user_id, client_type);
