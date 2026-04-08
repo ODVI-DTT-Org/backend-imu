@@ -10,6 +10,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
 import { startScheduler, stopScheduler } from './services/cronScheduler.js';
 import './middleware/database-logger.js'; // Initialize database query logging
+import { httpDatabaseLogger } from './middleware/http-database-logger.js'; // HTTP request database logging
 import { initializeBackend, isInitializationSuccessful } from './utils/init-logger.js';
 import { processMobileErrorLogs } from './services/errorLogsBatchProcessor.js';
 import cron from 'node-cron';
@@ -43,12 +44,16 @@ import jobsRoutes from './routes/jobs.js';
 import powersyncRoutes from './routes/powersync.js';
 import featureFlagsRoutes from './routes/feature-flags.js';
 import filtersRoutes from './routes/filters.js';
+import requestLogsRoutes from './routes/request-logs.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
 
 // Export app for testing
 export { app };
+
+// HTTP request database logging middleware (must be first to capture all requests)
+app.use('*', httpDatabaseLogger());
 
 // Request logging middleware (simplified format)
 app.use('*', simpleRequestLogger);
@@ -560,6 +565,71 @@ app.get('/api/migrate', authMiddleware, requireRole('admin'), async (c) => {
       } catch (e: any) {
         results.push(`⏭️  Migration 046: ${e.message.substring(0, 100)}`);
       }
+
+      // Migration 047: Create request_logs table for HTTP request logging
+      try {
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS request_logs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            request_id VARCHAR(100) UNIQUE NOT NULL,
+            timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            completed_at TIMESTAMPTZ,
+            method VARCHAR(10) NOT NULL,
+            path VARCHAR(500) NOT NULL,
+            query_params JSONB,
+            headers JSONB NOT NULL,
+            body JSONB,
+            ip_address INET,
+            user_agent TEXT,
+            origin VARCHAR(500),
+            user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+            user_role VARCHAR(50),
+            status_code INTEGER,
+            duration_ms INTEGER,
+            response_size BIGINT,
+            error_message TEXT,
+            error_name VARCHAR(100),
+            error_code VARCHAR(50),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+          )
+        `);
+
+        // Create indexes
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_request_id ON request_logs(request_id)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_timestamp ON request_logs(timestamp DESC)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_user_id ON request_logs(user_id)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_status_code ON request_logs(status_code)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_method ON request_logs(method)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_path ON request_logs(path)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_ip_address ON request_logs(ip_address)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_user_timestamp ON request_logs(user_id, timestamp DESC)`);
+        await client.query(`CREATE INDEX IF NOT EXISTS idx_request_logs_errors ON request_logs(status_code, timestamp DESC) WHERE status_code >= 400`);
+
+        // Create trigger function
+        await client.query(`
+          CREATE OR REPLACE FUNCTION update_request_logs_updated_at()
+          RETURNS TRIGGER AS $$
+          BEGIN
+            NEW.updated_at = NOW();
+            RETURN NEW;
+          END;
+          $$ LANGUAGE plpgsql
+        `);
+
+        await client.query(`DROP TRIGGER IF EXISTS trigger_update_request_logs_updated_at ON request_logs`);
+
+        await client.query(`
+          CREATE TRIGGER trigger_update_request_logs_updated_at
+            BEFORE UPDATE ON request_logs
+            FOR EACH ROW
+            EXECUTE FUNCTION update_request_logs_updated_at()
+        `);
+
+        results.push('✅ Migration 047: Created request_logs table with indexes and triggers');
+      } catch (e: any) {
+        results.push(`⏭️  Migration 047: ${e.message.substring(0, 100)}`);
+      }
     } finally {
       client.release();
     }
@@ -601,6 +671,7 @@ app.get('/', (c) => {
       errors: '/api/errors',
       jobs: '/api/jobs',
       featureFlags: '/api/feature-flags',
+      requestLogs: '/api/request-logs',
     },
   });
 });
@@ -635,6 +706,7 @@ app.route('/api/jobs', jobsRoutes);
 app.route('/api/powersync', powersyncRoutes);
 app.route('/api/feature-flags', featureFlagsRoutes);
 app.route('/api/filters', filtersRoutes);
+app.route('/api/request-logs', requestLogsRoutes);
 
 // 404 handler
 app.notFound((c) => {
