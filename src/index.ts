@@ -10,7 +10,7 @@ import { errorHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
 import { startScheduler, stopScheduler } from './services/cronScheduler.js';
 import './middleware/database-logger.js'; // Initialize database query logging
-import { httpDatabaseLogger } from './middleware/http-database-logger.js'; // HTTP request database logging
+import { requestTracker } from './middleware/request-tracker.js'; // Request tracking with SQL query logging
 import { initializeBackend, isInitializationSuccessful } from './utils/init-logger.js';
 import { processMobileErrorLogs } from './services/errorLogsBatchProcessor.js';
 import cron from 'node-cron';
@@ -44,7 +44,6 @@ import jobsRoutes from './routes/jobs.js';
 import powersyncRoutes from './routes/powersync.js';
 import featureFlagsRoutes from './routes/feature-flags.js';
 import filtersRoutes from './routes/filters.js';
-import requestLogsRoutes from './routes/request-logs.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
@@ -52,13 +51,10 @@ const app = new Hono();
 // Export app for testing
 export { app };
 
-// HTTP request database logging middleware (must be first to capture all requests)
-app.use('*', httpDatabaseLogger());
+// Request tracking middleware (must be first to capture all requests and SQL queries)
+app.use('*', requestTracker());
 
-// Request logging middleware (simplified format)
-app.use('*', simpleRequestLogger);
-
-// Error handler middleware (must be after request logging)
+// Error handler middleware (must be after request tracking)
 app.use('*', errorHandler);
 
 // CORS configuration for web and mobile app
@@ -671,7 +667,6 @@ app.get('/', (c) => {
       errors: '/api/errors',
       jobs: '/api/jobs',
       featureFlags: '/api/feature-flags',
-      requestLogs: '/api/request-logs',
     },
   });
 });
@@ -706,7 +701,6 @@ app.route('/api/jobs', jobsRoutes);
 app.route('/api/powersync', powersyncRoutes);
 app.route('/api/feature-flags', featureFlagsRoutes);
 app.route('/api/filters', filtersRoutes);
-app.route('/api/request-logs', requestLogsRoutes);
 
 // 404 handler
 app.notFound((c) => {

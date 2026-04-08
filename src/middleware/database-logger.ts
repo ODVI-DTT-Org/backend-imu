@@ -1,9 +1,11 @@
 /**
  * Database Query Logger Middleware
  * Logs all SQL queries executed on the database for debugging
+ * Integrates with request tracker to link queries to HTTP requests
  */
 
 import { Pool, PoolClient } from 'pg';
+import { AsyncLocalStorage } from 'async_hooks';
 import { logger } from '../utils/logger.js';
 
 interface QueryLog {
@@ -15,12 +17,50 @@ interface QueryLog {
   error?: string;
 }
 
+interface RequestContext {
+  requestId: string;
+  addSqlQuery: (queryInfo: {
+    query: string;
+    params?: any[];
+    duration: number;
+    rows?: number;
+    error?: string;
+  }) => void;
+}
+
+// AsyncLocalStorage to track current request context
+const requestContextStorage = new AsyncLocalStorage<RequestContext>();
+
 // Enable/disable database logging via environment variable
 const DB_LOGGING_ENABLED = process.env.DB_LOGGING !== 'false'; // Enabled by default
 
 // Store original query methods
 const originalQuery = Pool.prototype.query;
 const originalConnect = Pool.prototype.connect;
+
+/**
+ * Get current request context
+ */
+export function getCurrentRequestContext(): RequestContext | undefined {
+  return requestContextStorage.getStore();
+}
+
+/**
+ * Run function within request context
+ */
+export function runInRequestContext<T>(
+  requestId: string,
+  addSqlQuery: (queryInfo: {
+    query: string;
+    params?: any[];
+    duration: number;
+    rows?: number;
+    error?: string;
+  }) => void,
+  fn: () => T
+): T {
+  return requestContextStorage.run({ requestId, addSqlQuery }, fn);
+}
 
 /**
  * Extract table name from SQL query
@@ -134,6 +174,9 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
     duration: 0,
   };
 
+  // Get current request context
+  const requestContext = getCurrentRequestContext();
+
   // Call original query method and ensure we get a Promise
   const method = originalQuery as any;
   let result: any;
@@ -163,6 +206,16 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
         // Log all queries for debugging
         logQuery(queryLog);
 
+        // Add to request context if available
+        if (requestContext) {
+          requestContext.addSqlQuery({
+            query: queryLog.query,
+            params: queryLog.params,
+            duration: queryLog.duration,
+            rows: queryLog.rows,
+          });
+        }
+
         return dbResult;
       })
       .catch((error: any) => {
@@ -170,6 +223,16 @@ Pool.prototype.query = function(this: Pool, ...args: any[]) {
         queryLog.error = error.message;
 
         logQuery(queryLog);
+
+        // Add to request context if available
+        if (requestContext) {
+          requestContext.addSqlQuery({
+            query: queryLog.query,
+            params: queryLog.params,
+            duration: queryLog.duration,
+            error: queryLog.error,
+          });
+        }
 
         throw error;
       });
@@ -215,6 +278,9 @@ Pool.prototype.connect = function(this: Pool, ...args: any[]) {
           duration: 0,
         };
 
+        // Get current request context
+        const requestContext = getCurrentRequestContext();
+
         // Detect if this is a callback-based call
         const hasQueryCallback = clientArgs.length > 0 && typeof clientArgs[clientArgs.length - 1] === 'function';
 
@@ -239,6 +305,16 @@ Pool.prototype.connect = function(this: Pool, ...args: any[]) {
               // Log all queries for debugging
               logQuery(queryLog);
 
+              // Add to request context if available
+              if (requestContext) {
+                requestContext.addSqlQuery({
+                  query: queryLog.query,
+                  params: queryLog.params,
+                  duration: queryLog.duration,
+                  rows: queryLog.rows,
+                });
+              }
+
               return dbResult;
             })
             .catch((error: any) => {
@@ -246,6 +322,16 @@ Pool.prototype.connect = function(this: Pool, ...args: any[]) {
               queryLog.error = error.message;
 
               logQuery(queryLog);
+
+              // Add to request context if available
+              if (requestContext) {
+                requestContext.addSqlQuery({
+                  query: queryLog.query,
+                  params: queryLog.params,
+                  duration: queryLog.duration,
+                  error: queryLog.error,
+                });
+              }
 
               throw error;
             });
