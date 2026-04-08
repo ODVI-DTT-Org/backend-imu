@@ -520,7 +520,9 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
       ${combinedWhereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
-      ${searchParam ? `ORDER BY similarity_score DESC, ` : ''}${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias).replace(/^ORDER BY /, '')}
+      ${searchParam
+        ? `ORDER BY similarity_score DESC, ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias).replace(/^ORDER BY /, '')}`
+        : orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
