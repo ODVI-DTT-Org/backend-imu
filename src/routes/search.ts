@@ -96,7 +96,7 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
           // Get total count
           const countResult = await pool.query(
             `SELECT COUNT(*) as count FROM clients c ${whereClause}`,
-            [normalizedQuery, ...params]
+            params
           );
           total = parseInt(countResult.rows[0].count);
 
