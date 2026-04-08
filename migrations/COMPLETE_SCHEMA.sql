@@ -1266,6 +1266,9 @@ CREATE PUBLICATION powersync FOR TABLE
     clients,
     itineraries,
     touchpoints,
+    visits,      -- NEW
+    calls,       -- NEW
+    releases,    -- NEW
 
     -- Related data tables
     addresses,
