@@ -27,6 +27,9 @@ LwIDAQAB
 // Set DATABASE_URL to prevent connection errors
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test_db';
 
+// Set JWT_SECRET for integration tests (must match tokens.ts)
+process.env.JWT_SECRET = 'your-256-bit-secret-key-here-min-32-characters';
+
 // ============================================
 // STEP 2: Smart database pool mock
 // ============================================
