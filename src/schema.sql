@@ -106,39 +106,30 @@ CREATE TABLE IF NOT EXISTS phone_numbers (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Touchpoints table
+-- Touchpoints table (normalized schema)
 CREATE TABLE IF NOT EXISTS touchpoints (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     touchpoint_number INTEGER NOT NULL CHECK (touchpoint_number BETWEEN 1 AND 7),
     type TEXT NOT NULL CHECK (type IN ('Visit', 'Call')),
-    date DATE NOT NULL,
-    address TEXT,
-    time_arrival TEXT,
-    time_departure TEXT,
-    odometer_arrival TEXT,
-    odometer_departure TEXT,
-    reason TEXT NOT NULL,
-    status TEXT NOT NULL CHECK (status IN ('Interested', 'Undecided', 'Not Interested', 'Completed')),
+    date DATE,
+    reason TEXT,
+    status TEXT CHECK (status IN ('Interested', 'Undecided', 'Not Interested', 'Completed')),
     next_visit_date DATE,
     notes TEXT,
-    photo_url TEXT,
-    audio_url TEXT,
-    latitude REAL,
-    longitude REAL,
-    -- Time In/Out GPS-tracked fields
-    time_in TIMESTAMP,
-    time_in_gps_lat DOUBLE PRECISION,
-    time_in_gps_lng DOUBLE PRECISION,
-    time_in_gps_address TEXT,
-    time_out TIMESTAMP,
-    time_out_gps_lat DOUBLE PRECISION,
-    time_out_gps_lng DOUBLE PRECISION,
-    time_out_gps_address TEXT,
+    rejection_reason TEXT,
+    visit_id UUID,
+    call_id UUID,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT touchpoint_has_record CHECK (visit_id IS NOT NULL OR call_id IS NOT NULL)
 );
+
+-- Foreign keys for visits and calls (added separately to avoid circular dependency)
+-- Note: visits and calls tables are created in separate migration files
+-- ALTER TABLE touchpoints ADD CONSTRAINT touchpoints_visit_id_fkey FOREIGN KEY (visit_id) REFERENCES visits(id) ON DELETE SET NULL;
+-- ALTER TABLE touchpoints ADD CONSTRAINT touchpoints_call_id_fkey FOREIGN KEY (call_id) REFERENCES calls(id) ON DELETE SET NULL;
 
 -- Itineraries table
 CREATE TABLE IF NOT EXISTS itineraries (
@@ -220,11 +211,10 @@ CREATE INDEX IF NOT EXISTS idx_clients_client_type ON clients(client_type);
 CREATE INDEX IF NOT EXISTS idx_addresses_client_id ON addresses(client_id);
 CREATE INDEX IF NOT EXISTS idx_phone_numbers_client_id ON phone_numbers(client_id);
 CREATE INDEX IF NOT EXISTS idx_touchpoints_client_id ON touchpoints(client_id);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_caravan_id ON touchpoints(caravan_id);
+CREATE INDEX IF NOT EXISTS idx_touchpoints_user_id ON touchpoints(user_id);
 CREATE INDEX IF NOT EXISTS idx_touchpoints_date ON touchpoints(date);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_time_in ON touchpoints(time_in);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_time_out ON touchpoints(time_out);
-CREATE INDEX IF NOT EXISTS idx_touchpoints_edit_status ON touchpoints(edit_status) WHERE edit_status IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_touchpoints_visit_id ON touchpoints(visit_id) WHERE visit_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_touchpoints_call_id ON touchpoints(call_id) WHERE call_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_itineraries_caravan_id ON itineraries(caravan_id);
 CREATE INDEX IF NOT EXISTS idx_itineraries_scheduled_date ON itineraries(scheduled_date);
 CREATE INDEX IF NOT EXISTS idx_attendance_user_id ON attendance(user_id);

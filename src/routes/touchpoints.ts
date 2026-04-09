@@ -105,41 +105,25 @@ function canCreateTouchpoint(
   return true;
 }
 
-// Validation schemas
+// Validation schemas (normalized schema - visit/call data moved to separate tables)
 const createTouchpointSchema = z.object({
   client_id: z.string().uuid(),
   user_id: z.string().uuid().optional(), // Optional - will be set to current user if not provided
   touchpoint_number: z.number().int().min(1).max(7),
   type: z.enum(['Visit', 'Call']),
-  date: z.string(),
-  address: z.string().optional(),
-  time_arrival: z.string().optional(),
-  time_departure: z.string().optional(),
-  odometer_arrival: z.string().nullish(), // .nullish() accepts undefined, null, or string
-  odometer_departure: z.string().nullish(), // .nullish() accepts undefined, null, or string
-  reason: z.string().min(1),
+  date: z.string().optional(),
+  reason: z.string().optional(),
   status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed']).optional().default('Interested'),
   next_visit_date: z.string().optional(),
   notes: z.string().optional(),
-  photo_url: z.string().optional(),
-  audio_url: z.string().optional(),
-  latitude: z.number().optional(),
-  longitude: z.number().optional(),
   rejection_reason: z.string().optional(),
-  // Time In/Out fields
-  time_in: z.string().optional(),
-  time_in_gps_lat: z.number().optional(),
-  time_in_gps_lng: z.number().optional(),
-  time_in_gps_address: z.string().optional(),
-  time_out: z.string().optional(),
-  time_out_gps_lat: z.number().optional(),
-  time_out_gps_lng: z.number().optional(),
-  time_out_gps_address: z.string().optional(),
+  visit_id: z.string().uuid().optional(),
+  call_id: z.string().uuid().optional(),
 });
 
 const updateTouchpointSchema = createTouchpointSchema.partial();
 
-// Helper to map DB row to Touchpoint type
+// Helper to map DB row to Touchpoint type (normalized schema)
 function mapRowToTouchpoint(row: Record<string, any>) {
   return {
     id: row.id,
@@ -148,29 +132,13 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     touchpoint_number: row.touchpoint_number,
     type: row.type,
     date: row.date,
-    address: row.address,
-    time_arrival: row.time_arrival,
-    time_departure: row.time_departure,
-    odometer_arrival: row.odometer_arrival,
-    odometer_departure: row.odometer_departure,
     reason: row.reason,
     status: row.status,
     next_visit_date: row.next_visit_date,
     notes: row.notes,
-    photo_url: row.photo_url,
-    audio_url: row.audio_url,
-    latitude: row.latitude,
-    longitude: row.longitude,
     rejection_reason: row.rejection_reason,
-    // Time In/Out fields
-    time_in: row.time_in,
-    time_in_gps_lat: row.time_in_gps_lat,
-    time_in_gps_lng: row.time_in_gps_lng,
-    time_in_gps_address: row.time_in_gps_address,
-    time_out: row.time_out,
-    time_out_gps_lat: row.time_out_gps_lat,
-    time_out_gps_lng: row.time_out_gps_lng,
-    time_out_gps_address: row.time_out_gps_address,
+    visit_id: row.visit_id,
+    call_id: row.call_id,
     created: row.created_at,
     updated: row.updated_at,
     expand: row.expand,
@@ -390,10 +358,9 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
 
     // Get existing touchpoints for this client
     const existingResult = await pool.query(
-      `SELECT touchpoint_number, type, date, edit_status
+      `SELECT touchpoint_number, type, date
        FROM touchpoints
        WHERE client_id = $1
-       AND edit_status IN ('approved', 'pending_approval')
        ORDER BY touchpoint_number ASC`,
       [clientId]
     );
@@ -402,7 +369,6 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
       touchpointNumber: row.touchpoint_number,
       type: row.type,
       date: row.date,
-      editStatus: row.edit_status,
     }));
 
     return c.json({
@@ -700,23 +666,16 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     const result = await pool.query(
       `INSERT INTO touchpoints (
-        id, client_id, user_id, touchpoint_number, type, date,
-        address, time_arrival, time_departure, odometer_arrival, odometer_departure,
-        reason, status, next_visit_date, notes, photo_url, audio_url, latitude, longitude,
-        time_in, time_in_gps_lat, time_in_gps_lng, time_in_gps_address,
-        time_out, time_out_gps_lat, time_out_gps_lng, time_out_gps_address
+        client_id, user_id, touchpoint_number, type, date,
+        reason, status, next_visit_date, notes, rejection_reason,
+        visit_id, call_id
       ) VALUES (
-        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-        $18, $19, $20, $21, $22, $23, $24, $25, $26
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
       ) RETURNING *`,
       [
         validated.client_id, validated.user_id, validated.touchpoint_number, validated.type,
-        validated.date, validated.address, validated.time_arrival, validated.time_departure,
-        validated.odometer_arrival, validated.odometer_departure, validated.reason, validated.status,
-        validated.next_visit_date, validated.notes, validated.photo_url, validated.audio_url,
-        validated.latitude, validated.longitude,
-        time_in, validated.time_in_gps_lat, validated.time_in_gps_lng, validated.time_in_gps_address,
-        time_out, validated.time_out_gps_lat, validated.time_out_gps_lng, validated.time_out_gps_address
+        validated.date, validated.reason, validated.status, validated.next_visit_date,
+        validated.notes, validated.rejection_reason, validated.visit_id, validated.call_id
       ]
     );
 
@@ -866,22 +825,14 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
         // Columns: client_id, user_id, touchpoint_number, type, date, address, time_arrival, time_departure,
         //          odometer_arrival, odometer_departure, reason, status, next_visit_date, notes,
         //          photo_url, audio_url, latitude, longitude, time_in, time_in_gps_lat, time_in_gps_lng,
-        //          time_in_gps_address, time_out, time_out_gps_lat, time_out_gps_lng, time_out_gps_address
+        // Insert touchpoint - normalized schema (visit/call data in separate tables)
         const result = await client.query(
           `INSERT INTO touchpoints (
-            client_id, user_id, touchpoint_number, type, date, address,
-            time_arrival, time_departure, odometer_arrival, odometer_departure,
-            reason, status, next_visit_date, notes, photo_url, audio_url,
-            latitude, longitude,
-            time_in, time_in_gps_lat, time_in_gps_lng, time_in_gps_address,
-            time_out, time_out_gps_lat, time_out_gps_lng, time_out_gps_address
+            client_id, user_id, touchpoint_number, type, date,
+            reason, status, next_visit_date, notes, rejection_reason,
+            visit_id, call_id
           ) VALUES (
-            $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10,
-            $11, $12, $13, $14, $15, $16,
-            $17, $18,
-            $19, $20, $21, $22, $23,
-            $24, $25, $26, $27
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
           ) RETURNING *`,
           [
             touchpointData.client_id,
@@ -889,27 +840,13 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
             touchpointData.touchpoint_number,
             touchpointData.type,
             date,
-            finalGpsAddress || null,  // address
-            null,  // time_arrival
-            null,  // time_departure
-            null,  // odometer_arrival
-            null,  // odometer_departure
             touchpointData.reason,
             touchpointData.status,
             null,  // next_visit_date
             touchpointData.remarks || null,  // notes (remarks from mobile maps to notes in DB)
-            null,  // photo_url
-            null,  // audio_url
-            finalGpsLat,  // latitude
-            finalGpsLng,  // longitude
-            time_in,
-            finalGpsLat,  // time_in_gps_lat
-            finalGpsLng,  // time_in_gps_lng
-            finalGpsAddress,  // time_in_gps_address
-            time_out,
-            null,  // time_out_gps_lat (not captured yet)
-            null,  // time_out_gps_lng
-            null,  // time_out_gps_address
+            null,  // rejection_reason
+            null,  // visit_id (will be set when visit is created)
+            null,  // call_id (will be set when call is created)
           ]
         );
 
