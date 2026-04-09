@@ -119,6 +119,8 @@ const createTouchpointSchema = z.object({
   rejection_reason: z.string().optional(),
   visit_id: z.string().uuid().optional(),
   call_id: z.string().uuid().optional(),
+  time_arrival: z.string().optional(),
+  time_departure: z.string().optional(),
 });
 
 const updateTouchpointSchema = createTouchpointSchema.partial();
@@ -646,9 +648,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       return `${dateStr}T${timeStr}:00`;
     };
 
-    // Convert time_in and time_out to proper timestamps
-    const time_in = timeToTimestamp(validated.time_in, validated.date);
-    const time_out = timeToTimestamp(validated.time_out, validated.date);
+    // Convert time_arrival and time_departure to proper timestamps
+    const dateForTime = validated.date || new Date().toISOString().split('T')[0];
+    const time_in = timeToTimestamp(validated.time_arrival, dateForTime);
+    const time_out = timeToTimestamp(validated.time_departure, dateForTime);
 
     // Validate Time Out is after Time In (if both provided)
     if (time_in && time_out) {
@@ -723,8 +726,8 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
         status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed']).default('Interested'),
         remarks: z.string().max(1000).optional(),
         date: z.string().optional(), // Will default to CURRENT_DATE
-        time_in: z.string().optional(),
-        time_out: z.string().optional(),
+        time_arrival: z.string().optional(),
+        time_departure: z.string().optional(),
         gps_lat: z.number().optional(),
         gps_lng: z.number().optional(),
         gps_address: z.string().optional(),
@@ -817,9 +820,9 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
         // Use provided date or default to CURRENT_DATE
         const date = touchpointData.date || new Date().toISOString().split('T')[0];
 
-        // Convert time_in and time_out to timestamps
-        const time_in = timeToTimestamp(touchpointData.time_in, date);
-        const time_out = timeToTimestamp(touchpointData.time_out, date);
+        // Convert time_arrival and time_departure to timestamps
+        const time_in = timeToTimestamp(touchpointData.time_arrival, date);
+        const time_out = timeToTimestamp(touchpointData.time_departure, date);
 
         // Insert touchpoint - match exact database schema order
         // Columns: client_id, user_id, touchpoint_number, type, date, address, time_arrival, time_departure,
@@ -926,13 +929,13 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
     // Get the date to use for time conversion (either from update or existing)
     const dateForTime = validated.date || existingTouchpoint.date;
 
-    // Convert time_in and time_out to proper timestamps if provided
-    const time_in = validated.time_in !== undefined
-      ? timeToTimestamp(validated.time_in, dateForTime)
-      : existingTouchpoint.time_in;
-    const time_out = validated.time_out !== undefined
-      ? timeToTimestamp(validated.time_out, dateForTime)
-      : existingTouchpoint.time_out;
+    // Convert time_arrival and time_departure to proper timestamps if provided
+    const time_in = validated.time_arrival !== undefined
+      ? timeToTimestamp(validated.time_arrival, dateForTime)
+      : existingTouchpoint.time_arrival;
+    const time_out = validated.time_departure !== undefined
+      ? timeToTimestamp(validated.time_departure, dateForTime)
+      : existingTouchpoint.time_departure;
 
     // Validate Time Out is after Time In (if both provided)
     if (time_in && time_out) {
@@ -967,24 +970,15 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       audio_url: 'audio_url',
       latitude: 'latitude',
       longitude: 'longitude',
-      // Time In/Out fields - use converted values
-      time_in: 'time_in',
-      time_in_gps_lat: 'time_in_gps_lat',
-      time_in_gps_lng: 'time_in_gps_lng',
-      time_in_gps_address: 'time_in_gps_address',
-      time_out: 'time_out',
-      time_out_gps_lat: 'time_out_gps_lat',
-      time_out_gps_lng: 'time_out_gps_lng',
-      time_out_gps_address: 'time_out_gps_address',
     };
 
-    // Override time_in and time_out values with converted timestamps
+    // Override time_arrival and time_departure values with converted timestamps
     const updateData: any = { ...validated };
-    if (validated.time_in !== undefined) {
-      updateData.time_in = time_in;
+    if (validated.time_arrival !== undefined) {
+      updateData.time_arrival = time_in;
     }
-    if (validated.time_out !== undefined) {
-      updateData.time_out = time_out;
+    if (validated.time_departure !== undefined) {
+      updateData.time_departure = time_out;
     }
 
     for (const [key, dbField] of Object.entries(fieldMappings)) {
