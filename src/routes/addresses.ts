@@ -4,6 +4,8 @@ import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { apiRateLimit } from '../middleware/rate-limit.js';
+import { getCacheService, CACHE_PREFIX, CACHE_TTL } from '../services/cache/redis-cache.js';
+import { getCacheMetrics } from '../services/cache/cache-metrics.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -55,6 +57,48 @@ function mapRowToAddress(row: Record<string, any>) {
   };
 }
 
+// Cache helpers
+const cache = getCacheService();
+const metrics = getCacheMetrics();
+
+/**
+ * Generate cache key for client addresses
+ */
+function getAddressesCacheKey(clientId: string, page: number, limit: number): string {
+  return `${CACHE_PREFIX.ADDRESSES}client:${clientId}:page:${page}:limit:${limit}`;
+}
+
+/**
+ * Generate cache key for single address
+ */
+function getAddressCacheKey(addressId: string): string {
+  return `${CACHE_PREFIX.ADDRESSES}${addressId}`;
+}
+
+/**
+ * Invalidate all address caches for a client
+ */
+async function invalidateClientAddressesCache(clientId: string): Promise<void> {
+  try {
+    await cache.delPattern(`${CACHE_PREFIX.ADDRESSES}client:${clientId}:*`);
+    metrics.recordDelete('addresses');
+  } catch (error) {
+    console.error('[Addresses Cache] Invalidation error:', error);
+  }
+}
+
+/**
+ * Invalidate single address cache
+ */
+async function invalidateAddressCache(addressId: string): Promise<void> {
+  try {
+    await cache.del(getAddressCacheKey(addressId));
+    metrics.recordDelete('addresses');
+  } catch (error) {
+    console.error('[Addresses Cache] Invalidation error:', error);
+  }
+}
+
 /**
  * GET /api/clients/:id/addresses
  * List all addresses for a specific client
@@ -77,6 +121,17 @@ addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '50', 10)));
   const offset = (page - 1) * limit;
+
+  // Check cache first
+  const cacheKey = getAddressesCacheKey(clientId, page, limit);
+  const cached = await cache.get(cacheKey);
+
+  if (cached) {
+    metrics.recordHit('addresses');
+    return c.json(cached);
+  }
+
+  metrics.recordMiss('addresses');
 
   // Verify user has access to this client
   const clientCheck = await pool.query(
@@ -103,7 +158,7 @@ addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
   const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
   const totalPages = Math.ceil(totalCount / limit);
 
-  return c.json({
+  const response = {
     success: true,
     data: result.rows.map(mapRowToAddress),
     pagination: {
@@ -114,7 +169,13 @@ addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
       hasNext: page < totalPages,
       hasPrev: page > 1,
     },
-  });
+  };
+
+  // Store in cache for 5 minutes
+  await cache.set(cacheKey, response, CACHE_TTL.SHORT);
+  metrics.recordSet('addresses');
+
+  return c.json(response);
 });
 
 /**
@@ -194,6 +255,9 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
      WHERE a.id = $1`,
     [result.rows[0].id]
   );
+
+  // Invalidate cache for this client's addresses
+  await invalidateClientAddressesCache(clientId);
 
   return c.json({
     success: true,
@@ -305,6 +369,10 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
     [result.rows[0].id]
   );
 
+  // Invalidate cache for this client's addresses and this specific address
+  await invalidateClientAddressesCache(clientId);
+  await invalidateAddressCache(addressId);
+
   return c.json({
     success: true,
     data: mapRowToAddress(fullResult.rows[0]),
@@ -335,6 +403,10 @@ addresses.delete('/clients/:id/addresses/:addressId', authMiddleware, auditMiddl
   if (result.rows.length === 0) {
     throw new NotFoundError('Address not found');
   }
+
+  // Invalidate cache for this client's addresses and this specific address
+  await invalidateClientAddressesCache(clientId);
+  await invalidateAddressCache(addressId);
 
   return c.json({
     success: true,
@@ -394,6 +466,9 @@ addresses.patch('/clients/:id/addresses/:addressId/primary', authMiddleware, aud
      WHERE a.id = $1`,
     [result.rows[0].id]
   );
+
+  // Invalidate cache for this client's addresses (all addresses affected by primary change)
+  await invalidateClientAddressesCache(clientId);
 
   return c.json({
     success: true,
