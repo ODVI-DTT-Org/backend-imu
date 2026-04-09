@@ -47,3 +47,31 @@ JOIN permissions p ON (
 )
 WHERE r.slug = 'tele'
 ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- Assign permissions to Assistant Area Manager (area access)
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM roles r
+JOIN permissions p ON (
+    (p.resource IN ('visits', 'calls', 'releases') AND p.action IN ('read', 'update') AND p.constraint_name = 'area')
+)
+WHERE r.slug = 'assistant_area_manager'
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- Assign permissions to Area Manager (area access)
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM roles r
+JOIN permissions p ON (
+    (p.resource IN ('visits', 'calls', 'releases') AND p.action IN ('read', 'update', 'delete') AND p.constraint_name = 'area')
+)
+WHERE r.slug = 'area_manager'
+ON CONFLICT (role_id, permission_id) DO NOTHING;
+
+-- Assign permissions to Admin (all permissions)
+INSERT INTO role_permissions (role_id, permission_id)
+SELECT r.id, p.id
+FROM roles r
+CROSS JOIN permissions p
+WHERE r.slug = 'admin' AND p.resource IN ('visits', 'calls', 'releases')
+ON CONFLICT (role_id, permission_id) DO NOTHING;
