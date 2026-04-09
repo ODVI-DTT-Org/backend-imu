@@ -18,6 +18,8 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.DATABASE_URL?.includes('ondigitalocean.com')
     ? { rejectUnauthorized: false }
+    : process.env.DATABASE_URL?.includes('localhost')
+    ? false // Disable SSL for local development
     : false,
 });
 
@@ -28,10 +30,16 @@ async function runMigration() {
     process.exit(1);
   }
 
-  const migrationPath = resolve(__dirname, '../src/migrations', migrationFile);
+  // Try both src/migrations and migrations directories
+  let migrationPath = resolve(__dirname, '../src/migrations', migrationFile);
+  if (!fs.existsSync(migrationPath)) {
+    migrationPath = resolve(__dirname, '../migrations', migrationFile);
+  }
 
   if (!fs.existsSync(migrationPath)) {
-    console.error(`Migration file not found: ${migrationPath}`);
+    console.error(`Migration file not found: ${migrationFile}`);
+    console.error(`Tried: ${resolve(__dirname, '../src/migrations', migrationFile)}`);
+    console.error(`Tried: ${resolve(__dirname, '../migrations', migrationFile)}`);
     process.exit(1);
   }
 

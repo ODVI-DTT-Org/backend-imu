@@ -6,6 +6,12 @@ import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
 import { normalizeSearchQuery } from '../utils/search-normalizer.js';
 import {
+  parseHybridSearchQuery,
+  buildHybridSearchClause,
+  getHybridSearchStrategyInfo,
+  logSearchStrategy,
+} from '../utils/hybrid-search.js';
+import {
   ValidationError,
   NotFoundError,
   AuthorizationError,
@@ -232,16 +238,25 @@ clients.get('/', authMiddleware, async (c) => {
     const baseParams: any[] = [];
     let baseParamIndex = 1;
     let searchParam = ''; // Track search parameter for similarity scoring
+    let searchStrategy = ''; // Track search strategy for SELECT clause
+    let searchOrderBy = ''; // Track search ORDER BY clause
 
-    // Fix: Check if search is truthy AND not just whitespace
+    // Hybrid search: pg_trgm for 1-2 words, full-text search for 3+ words
     if (search && search.trim()) {
-      const normalizedSearch = normalizeSearchQuery(search.trim());
-      searchParam = normalizedSearch; // Store for similarity scoring
-      // Use pg_trgm fuzzy search with % operator (trigram similarity)
-      // Falls back to ILIKE for email/phone exact matching
-      baseWhereConditions.push(`(c.full_name % $${baseParamIndex} OR c.first_name % $${baseParamIndex} OR c.last_name % $${baseParamIndex} OR c.middle_name % $${baseParamIndex} OR c.email ILIKE $${baseParamIndex + 1} OR c.phone ILIKE $${baseParamIndex + 1})`);
-      baseParams.push(normalizedSearch, `%${normalizedSearch}%`);
-      baseParamIndex += 2;
+      const parsedSearch = parseHybridSearchQuery(search.trim());
+
+      const searchResult = buildHybridSearchClause(parsedSearch, baseParamIndex);
+      baseWhereConditions.push(searchResult.whereClause);
+      baseParams.push(...searchResult.params);
+      baseParamIndex = searchResult.newParamIndex;
+
+      // Store search info for similarity scoring and ordering
+      searchParam = parsedSearch.normalizedQuery;
+      searchStrategy = searchResult.similaritySelect || '';
+      searchOrderBy = searchResult.orderBy || '';
+
+      // Log search strategy for debugging
+      logSearchStrategy(parsedSearch, 'GET /api/clients', searchResult.strategy);
     }
 
     if (clientType && clientType !== 'all') {
@@ -488,10 +503,8 @@ clients.get('/', authMiddleware, async (c) => {
       ? `, ${touchpointInfoAlias}.group_score`
       : '';
 
-    // Add similarity score to SELECT when search is active
-    const similaritySelect = searchParam
-      ? `, SIMILARITY(c.full_name, $1) as similarity_score`
-      : '';
+    // Add similarity score or word match count to SELECT when search is active
+    const similaritySelect = searchStrategy || '';
 
     const mainQuery = `
       ${withGroupScoreCTE}
@@ -520,8 +533,8 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
       ${combinedWhereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
-      ${searchParam
-        ? `ORDER BY similarity_score DESC, ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias).replace(/^ORDER BY /, '')}`
+      ${searchOrderBy
+        ? `ORDER BY ${searchOrderBy}, ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias).split('ORDER BY')[1]?.trim() || ''}`
         : orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
@@ -650,14 +663,25 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const baseParams: any[] = [];
     let baseParamIndex = 1;
     let searchParam = ''; // Track search parameter for similarity scoring
+    let searchStrategy = ''; // Track search strategy for SELECT clause
+    let searchOrderBy = ''; // Track search ORDER BY clause
 
+    // Hybrid search: pg_trgm for 1-2 words, full-text search for 3+ words
     if (search) {
-      const normalizedSearch = normalizeSearchQuery(search);
-      searchParam = normalizedSearch; // Store for similarity scoring
-      // Use pg_trgm fuzzy search with % operator (trigram similarity)
-      baseWhereConditions.push(`(c.full_name % $${baseParamIndex} OR c.first_name % $${baseParamIndex} OR c.last_name % $${baseParamIndex} OR c.middle_name % $${baseParamIndex} OR c.email ILIKE $${baseParamIndex + 1} OR c.phone ILIKE $${baseParamIndex + 1})`);
-      baseParams.push(normalizedSearch, `%${normalizedSearch}%`);
-      baseParamIndex += 2;
+      const parsedSearch = parseHybridSearchQuery(search);
+
+      const searchResult = buildHybridSearchClause(parsedSearch, baseParamIndex);
+      baseWhereConditions.push(searchResult.whereClause);
+      baseParams.push(...searchResult.params);
+      baseParamIndex = searchResult.newParamIndex;
+
+      // Store search info for similarity scoring and ordering
+      searchParam = parsedSearch.normalizedQuery;
+      searchStrategy = searchResult.similaritySelect || '';
+      searchOrderBy = searchResult.orderBy || '';
+
+      // Log search strategy for debugging
+      logSearchStrategy(parsedSearch, 'GET /api/clients/assigned', searchResult.strategy);
     }
 
     // Soft delete filter: Only show active clients (not deleted)
@@ -832,10 +856,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Get paginated results using CTEs
     // IMPORTANT: Query FROM assigned_clients_in_location to ensure we only get assigned clients
     // and the ORDER BY works correctly (callable clients first)
-    // Add similarity score to SELECT when search is active
-    const similaritySelect = searchParam
-      ? `, SIMILARITY(c.full_name, $1) as similarity_score`
-      : '';
+    // Add similarity score or word match count to SELECT when search is active
+    const similaritySelect = searchStrategy || '';
 
     const mainQuery = `
       ${withGroupScoreCTE}
@@ -867,7 +889,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, acl.completed_count, acl.next_touchpoint_type, acl.last_touchpoint_type, acl.last_touchpoint_user_id, lt.first_name, lt.last_name, acl.group_score
-      ${searchParam ? `ORDER BY similarity_score DESC, acl.group_score ASC` : `ORDER BY acl.group_score ASC`}
+      ${searchOrderBy ? `ORDER BY ${searchOrderBy}, acl.group_score ASC` : `ORDER BY acl.group_score ASC`}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
@@ -1438,12 +1460,17 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     const params: any[] = [];
     let paramIndex = 1;
 
+    // Hybrid search: pg_trgm for 1-2 words, full-text search for 3+ words
     if (search) {
-      const normalizedSearch = normalizeSearchQuery(search);
-      // Use pg_trgm fuzzy search with % operator (trigram similarity)
-      conditions.push(`(c.full_name % $${paramIndex} OR c.first_name % $${paramIndex} OR c.last_name % $${paramIndex} OR c.middle_name % $${paramIndex} OR c.email ILIKE $${paramIndex + 1} OR c.phone ILIKE $${paramIndex + 1})`);
-      params.push(normalizedSearch, `%${normalizedSearch}%`);
-      paramIndex += 2;
+      const parsedSearch = parseHybridSearchQuery(search);
+
+      const searchResult = buildHybridSearchClause(parsedSearch, paramIndex);
+      conditions.push(searchResult.whereClause);
+      params.push(...searchResult.params);
+      paramIndex = searchResult.newParamIndex;
+
+      // Log search strategy for debugging
+      logSearchStrategy(parsedSearch, 'GET /api/clients/search/unassigned', searchResult.strategy);
     }
 
     // Soft delete filter: Only show active clients (not deleted)
