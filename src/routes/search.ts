@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
+import { normalizeSearchQuery } from '../utils/search-normalizer.js';
 import {
   ValidationError,
 } from '../errors/index.js';
@@ -44,16 +45,20 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
           const params: any[] = [];
           let paramIndex = 1;
 
-          // Full-text search on name fields
+          // Normalize query for fuzzy matching
+          const normalizedQuery = normalizeSearchQuery(query);
+
+          // Use pg_trgm fuzzy search with % operator
           conditions.push(`(
-            first_name ILIKE $${paramIndex} OR
-            last_name ILIKE $${paramIndex} OR
-            CONCAT(first_name, ' ', last_name) ILIKE $${paramIndex} OR
-            email ILIKE $${paramIndex} OR
-            phone ILIKE $${paramIndex}
+            c.full_name % $${paramIndex} OR
+            c.first_name % $${paramIndex} OR
+            c.last_name % $${paramIndex} OR
+            c.middle_name % $${paramIndex} OR
+            c.email ILIKE $${paramIndex + 1} OR
+            c.phone ILIKE $${paramIndex + 1}
           )`);
-          params.push(`%${query}%`);
-          paramIndex++;
+          params.push(normalizedQuery, `%${normalizedQuery}%`);
+          paramIndex += 2;
 
           // Apply filters
           if (filters.client_type?.length) {
@@ -90,19 +95,20 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
 
           // Get total count
           const countResult = await pool.query(
-            `SELECT COUNT(*) as count FROM clients ${whereClause}`,
+            `SELECT COUNT(*) as count FROM clients c ${whereClause}`,
             params
           );
           total = parseInt(countResult.rows[0].count);
 
-          // Get paginated results
+          // Get paginated results with similarity score
           const result = await pool.query(
-            `SELECT id, first_name, last_name, email, phone, client_type, market_type,
-                    region, province, municipality, is_starred
-             FROM clients ${whereClause}
-             ORDER BY last_name, first_name
+            `SELECT c.id, c.first_name, c.last_name, c.email, c.phone, c.client_type, c.market_type,
+                    c.region, c.province, c.municipality, c.is_starred,
+                    SIMILARITY(c.full_name, $1) as similarity_score
+             FROM clients c ${whereClause}
+             ORDER BY similarity_score DESC, c.last_name, c.first_name
              LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
-            [...params, limit, offset]
+            [normalizedQuery, ...params, limit, offset]
           );
 
           results = result.rows;
