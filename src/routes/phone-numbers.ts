@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
+import { apiRateLimit } from '../middleware/rate-limit.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -10,10 +11,20 @@ import {
 
 const phoneNumbers = new Hono();
 
+// Apply rate limiting to all phone numbers routes
+phoneNumbers.use('/*', apiRateLimit);
+
 // Validation schemas
 const createPhoneSchema = z.object({
   label: z.enum(['Mobile', 'Home', 'Work']),
-  number: z.string().min(1).max(20).regex(/^[\d\s\-\+\(\)]+$/),
+  number: z.string().min(1).max(20).regex(
+    // Philippine phone number formats:
+    // - Mobile: 09XXXXXXXXX (11 digits starting with 09)
+    // - International: +639XXXXXXXXX (12 digits starting with +639)
+    // - Landline: Area code (2-4 digits) + 7-8 digit number
+    /^(09\d{9}|\+639\d{9}|(0\d{1,4})?\d{7,8})$/,
+    'Invalid Philippine phone number format. Mobile: 09XX XXX XXXX, International: +639XX XXX XXXX, Landline: (Area Code) XXX XXXX'
+  ),
   is_primary: z.boolean().default(false),
 });
 
@@ -32,26 +43,87 @@ function mapRowToPhoneNumber(row: Record<string, any>) {
   };
 }
 
-// GET /api/clients/:id/phone-numbers - List all phone numbers for client
+/**
+ * GET /api/clients/:id/phone-numbers
+ * List all phone numbers for a specific client
+ *
+ * @param id - Client ID
+ * @param page - Page number (optional, default: 1)
+ * @param limit - Items per page (optional, default: 50, max: 100)
+ * @returns { success: true, data: PhoneNumber[], pagination: object } - Paginated phone numbers
+ * @throws {NotFoundError} - If client not found or access denied
+ * @throws {ValidationError} - If pagination parameters are invalid
+ *
+ * Phone numbers are ordered by is_primary DESC, created_at ASC
+ * Only returns active phone numbers (deleted_at IS NULL)
+ */
 phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
+  const userId = c.get('user')?.sub;
 
-  const result = await pool.query(
-    `SELECT * FROM phone_numbers
-     WHERE client_id = $1 AND deleted_at IS NULL
-     ORDER BY is_primary DESC, created_at ASC`,
-    [clientId]
+  // Parse pagination parameters
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '50', 10)));
+  const offset = (page - 1) * limit;
+
+  // Verify user has access to this client
+  const clientCheck = await pool.query(
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    [clientId, userId]
   );
+
+  if (clientCheck.rows.length === 0) {
+    throw new NotFoundError('Client not found or access denied');
+  }
+
+  // I23: Optimize N+1 query - use window function for single query with count
+  const result = await pool.query(
+    `SELECT *, COUNT(*) OVER() as total_count
+     FROM phone_numbers
+     WHERE client_id = $1 AND deleted_at IS NULL
+     ORDER BY is_primary DESC, created_at ASC
+     LIMIT $2 OFFSET $3`,
+    [clientId, limit, offset]
+  );
+
+  const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
+  const totalPages = Math.ceil(totalCount / limit);
 
   return c.json({
     success: true,
     data: result.rows.map(mapRowToPhoneNumber),
+    pagination: {
+      page,
+      limit,
+      totalCount,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    },
   });
 });
 
+/**
+ * POST /api/clients/:id/phone-numbers
+ * Create a new phone number for a client
+ *
+ * @param id - Client ID
+ * @param body - Phone number data
+ * @param body.label - Phone label (Mobile, Home, Work)
+ * @param body.number - Phone number (Philippine format: 09XX XXX XXXX or +63 XXX XXX XXXX)
+ * @param body.is_primary - Set as primary phone number (optional, auto-set if first number)
+ * @returns { success: true, data: PhoneNumber } - Created phone number
+ * @throws {ValidationError} - If invalid phone number format or validation fails
+ * @throws {NotFoundError} - If client not found
+ * @throws {ConflictError} - If phone number already exists for this client
+ *
+ * First phone number is automatically set as primary
+ * Phone numbers must be unique per client (validated against existing numbers)
+ */
 // POST /api/clients/:id/phone-numbers - Create new phone number
 phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
+  const userId = c.get('user')?.sub;
   const body = await c.req.json();
 
   // Validate input
@@ -62,14 +134,14 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
 
   const data = validatedData.data;
 
-  // Verify client exists
+  // Verify client exists and user has access (I3: Security fix - verify ownership)
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1',
-    [clientId]
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2',
+    [clientId, userId]
   );
 
   if (clientCheck.rows.length === 0) {
-    throw new NotFoundError('Client not found');
+    throw new NotFoundError('Client not found or access denied');
   }
 
   // Check for duplicate number
@@ -107,6 +179,17 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
 phoneNumbers.get('/clients/:id/phone-numbers/:phoneId', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
   const phoneId = c.req.param('phoneId');
+  const userId = c.get('user')?.sub;
+
+  // Verify user owns this client (I1: Security fix)
+  const clientCheck = await pool.query(
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    [clientId, userId]
+  );
+
+  if (clientCheck.rows.length === 0) {
+    throw new NotFoundError('Client not found or access denied');
+  }
 
   const result = await pool.query(
     'SELECT * FROM phone_numbers WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL',
@@ -123,6 +206,20 @@ phoneNumbers.get('/clients/:id/phone-numbers/:phoneId', authMiddleware, async (c
   });
 });
 
+/**
+ * PUT /api/clients/:id/phone-numbers/:phoneId
+ * Update an existing phone number
+ *
+ * @param id - Client ID
+ * @param phoneId - Phone number ID
+ * @param body - Partial phone number data to update
+ * @returns { success: true, data: PhoneNumber } - Updated phone number
+ * @throws {ValidationError} - If validation fails or no fields to update
+ * @throws {NotFoundError} - If phone number not found
+ * @throws {ConflictError} - If new phone number already exists for this client
+ *
+ * Only whitelisted fields can be updated: label, number, is_primary
+ */
 // PUT /api/clients/:id/phone-numbers/:phoneId - Update phone number
 phoneNumbers.put('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
@@ -159,13 +256,14 @@ phoneNumbers.put('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMid
     }
   }
 
-  // Build update query dynamically
+  // Build update query dynamically with whitelist
+  const ALLOWED_UPDATE_FIELDS = ['label', 'number', 'is_primary'];
   const updates: string[] = [];
   const values: any[] = [];
   let paramIndex = 1;
 
   Object.entries(data).forEach(([key, value]) => {
-    if (value !== undefined) {
+    if (value !== undefined && ALLOWED_UPDATE_FIELDS.includes(key)) {
       updates.push(`${key} = $${paramIndex++}`);
       values.push(value);
     }
@@ -188,6 +286,17 @@ phoneNumbers.put('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMid
   });
 });
 
+/**
+ * DELETE /api/clients/:id/phone-numbers/:phoneId
+ * Soft delete a phone number (sets deleted_at timestamp)
+ *
+ * @param id - Client ID
+ * @param phoneId - Phone number ID
+ * @returns { success: true, message: string }
+ * @throws {NotFoundError} - If phone number not found or doesn't belong to client
+ *
+ * Soft delete preserves data for recovery. Phone number won't appear in API responses.
+ */
 // DELETE /api/clients/:id/phone-numbers/:phoneId - Soft delete phone number
 phoneNumbers.delete('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
@@ -208,12 +317,35 @@ phoneNumbers.delete('/clients/:id/phone-numbers/:phoneId', authMiddleware, audit
   });
 });
 
+/**
+ * PATCH /api/clients/:id/phone-numbers/:phoneId/primary
+ * Set a phone number as the primary phone number for a client
+ *
+ * @param id - Client ID
+ * @param phoneId - Phone number ID to set as primary
+ * @returns { success: true, data: PhoneNumber } - Updated primary phone number
+ * @throws {NotFoundError} - If client not found, access denied, or phone number not found
+ *
+ * Database trigger automatically unsets is_primary on all other phone numbers for this client
+ * Only one primary phone number per client is allowed
+ */
 // PATCH /api/clients/:id/phone-numbers/:phoneId/primary - Set as primary
 phoneNumbers.patch('/clients/:id/phone-numbers/:phoneId/primary', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
   const phoneId = c.req.param('phoneId');
+  const userId = c.get('user')?.sub;
 
-  // Check if phone exists
+  // Verify user owns this client
+  const clientCheck = await pool.query(
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    [clientId, userId]
+  );
+
+  if (clientCheck.rows.length === 0) {
+    throw new NotFoundError('Client not found or access denied');
+  }
+
+  // Check if phone exists and belongs to client
   const existing = await pool.query(
     'SELECT * FROM phone_numbers WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL',
     [phoneId, clientId]
