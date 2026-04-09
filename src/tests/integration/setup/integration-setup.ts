@@ -21,7 +21,7 @@ vi.mock('../../../db/index.js', () => ({
   default: mockPool,
 }));
 
-// Mock Redis (will be replaced with real Redis service in later tasks)
+// Mock Redis and cache services
 vi.mock('ioredis', () => {
   const createMockRedis = () => ({
     get: vi.fn(() => Promise.resolve(null)),
@@ -45,6 +45,71 @@ vi.mock('ioredis', () => {
     default: vi.fn().mockImplementation(createMockRedis),
   };
 });
+
+// Mock cache services to return mock implementations
+vi.mock('../../../services/cache/redis-cache.js', () => ({
+  getCacheService: vi.fn(() => ({
+    get: vi.fn(() => Promise.resolve(null)),
+    set: vi.fn(() => Promise.resolve(true)),
+    del: vi.fn(() => Promise.resolve(true)),
+    delPattern: vi.fn(() => Promise.resolve(0)),
+    exists: vi.fn(() => Promise.resolve(false)),
+    incr: vi.fn(() => Promise.resolve(0)),
+    mget: vi.fn(() => Promise.resolve([])),
+    mset: vi.fn(() => Promise.resolve(true)),
+    flush: vi.fn(() => Promise.resolve(true)),
+    getStats: vi.fn(() => Promise.resolve({
+      keyCount: 0,
+      memoryUsage: '0B',
+      hitRate: 0,
+    })),
+    getClient: vi.fn(),
+    isEnabled: vi.fn(() => false),
+  })),
+  CACHE_TTL: {
+    SHORT: 300,
+    MEDIUM: 1800,
+    LONG: 3600,
+    DAY: 86400,
+  },
+  CACHE_PREFIX: {
+    ADDRESSES: 'addr:',
+    PHONE_NUMBERS: 'phone:',
+    PSGC: 'psgc:',
+    CLIENT: 'client:',
+  },
+}));
+
+vi.mock('../../../services/cache/cache-metrics.js', () => ({
+  getCacheMetrics: vi.fn(() => ({
+    recordHit: vi.fn(),
+    recordMiss: vi.fn(),
+    recordSet: vi.fn(),
+    recordDelete: vi.fn(),
+    recordError: vi.fn(),
+    getStats: vi.fn(() => ({
+      hits: 0,
+      misses: 0,
+      hitRate: 0,
+      missRate: 0,
+      totalRequests: 0,
+      sets: 0,
+      deletes: 0,
+      errors: 0,
+    })),
+    getSummary: vi.fn(() => ({
+      hits: 0,
+      misses: 0,
+      hitRate: 0,
+      missRate: 0,
+      totalRequests: 0,
+      sets: 0,
+      deletes: 0,
+      errors: 0,
+    })),
+    reset: vi.fn(),
+  })),
+}));
 
 // Create test app
 export function createTestApp(): Hono {
