@@ -290,6 +290,10 @@ phoneNumbers.put('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMid
   const phoneId = c.req.param('phoneId');
   const body = await c.req.json();
 
+  if (!clientId || !phoneId) {
+    throw new ValidationError('Client ID and Phone ID are required');
+  }
+
   // Validate input
   const validatedData = updatePhoneSchema.safeParse(body);
   if (!validatedData.success) {
