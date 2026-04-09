@@ -105,6 +105,10 @@ phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
   const userId = c.get('user')?.sub;
 
+  if (!clientId) {
+    throw new ValidationError('Client ID is required');
+  }
+
   // Parse pagination parameters
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '50', 10)));

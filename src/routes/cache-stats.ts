@@ -54,7 +54,7 @@ cacheStats.get('/stats', requireRole('admin'), async (c) => {
 
   // Build detailed metrics response
   const detailedMetrics: Record<string, any> = {};
-  allMetrics.forEach((stats, key) => {
+  allMetrics.forEach((stats: any, key: string) => {
     if (key !== '__global__') {
       detailedMetrics[key] = {
         hits: stats.hits,
