@@ -370,6 +370,10 @@ phoneNumbers.delete('/clients/:id/phone-numbers/:phoneId', authMiddleware, audit
   const clientId = c.req.param('id');
   const phoneId = c.req.param('phoneId');
 
+  if (!clientId || !phoneId) {
+    throw new ValidationError('Client ID and Phone ID are required');
+  }
+
   const result = await pool.query(
     'UPDATE phone_numbers SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL RETURNING *',
     [phoneId, clientId]
@@ -406,6 +410,10 @@ phoneNumbers.patch('/clients/:id/phone-numbers/:phoneId/primary', authMiddleware
   const clientId = c.req.param('id');
   const phoneId = c.req.param('phoneId');
   const userId = c.get('user')?.sub;
+
+  if (!clientId || !phoneId) {
+    throw new ValidationError('Client ID and Phone ID are required');
+  }
 
   // Verify user owns this client
   const clientCheck = await pool.query(

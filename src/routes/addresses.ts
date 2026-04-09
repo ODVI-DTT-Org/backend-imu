@@ -115,6 +115,9 @@ async function invalidateAddressCache(addressId: string): Promise<void> {
  */
 addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
+  if (!clientId) {
+    throw new ValidationError('Client ID is required');
+  }
   const userId = c.get('user')?.sub;
 
   // Parse pagination parameters
@@ -253,7 +256,7 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1`,
-    [result.rows[0].id]
+    [result.rows[0]!.id!]
   );
 
   // Invalidate cache for this client's addresses
@@ -366,7 +369,7 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1`,
-    [result.rows[0].id]
+    [result.rows[0]!.id!]
   );
 
   // Invalidate cache for this client's addresses and this specific address
@@ -464,7 +467,7 @@ addresses.patch('/clients/:id/addresses/:addressId/primary', authMiddleware, aud
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1`,
-    [result.rows[0].id]
+    [result.rows[0]!.id!]
   );
 
   // Invalidate cache for this client's addresses (all addresses affected by primary change)
