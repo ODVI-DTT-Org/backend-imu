@@ -57,3 +57,13 @@ CREATE TRIGGER trigger_update_phone_numbers_updated_at
 COMMENT ON TABLE phone_numbers IS 'Multiple phone numbers per client';
 COMMENT ON COLUMN phone_numbers.label IS 'Phone type: Mobile, Home, Work';
 COMMENT ON COLUMN phone_numbers.is_primary IS 'Primary phone flag - only one per client';
+
+-- ROLLBACK
+-- To rollback this migration, run:
+-- DROP TRIGGER IF EXISTS trigger_ensure_single_primary_phone;
+-- DROP TRIGGER IF EXISTS trigger_update_phone_numbers_updated_at;
+-- DROP FUNCTION IF EXISTS ensure_single_primary_phone();
+-- DROP FUNCTION IF EXISTS update_phone_numbers_updated_at();
+-- DROP INDEX IF EXISTS idx_phone_numbers_is_primary;
+-- DROP INDEX IF EXISTS idx_phone_numbers_client_id;
+-- DROP TABLE IF EXISTS phone_numbers;

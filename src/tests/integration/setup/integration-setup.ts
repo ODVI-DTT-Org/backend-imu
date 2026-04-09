@@ -14,6 +14,7 @@ import { Hono } from 'hono';
 import addressesRoutes from '../../../routes/addresses.js';
 import phoneNumbersRoutes from '../../../routes/phone-numbers.js';
 import { authMiddleware } from '../../../middleware/auth.js';
+import type { AppError } from '../../../errors/index.js';
 
 // Mock database
 vi.mock('../../../db/index.js', () => ({
@@ -23,12 +24,19 @@ vi.mock('../../../db/index.js', () => ({
 
 // Mock Redis and cache services
 vi.mock('ioredis', () => {
+  // Track counters per key for rate limiting
+  const counters = new Map<string, number>();
+
   const createMockRedis = () => ({
     get: vi.fn(() => Promise.resolve(null)),
     set: vi.fn(() => Promise.resolve('OK')),
     setex: vi.fn(() => Promise.resolve('OK')),
     del: vi.fn(() => Promise.resolve(1)),
-    incr: vi.fn(() => Promise.resolve(1)),
+    incr: vi.fn((key: string) => {
+      const current = counters.get(key) || 0;
+      counters.set(key, current + 1);
+      return Promise.resolve(current + 1);
+    }),
     expire: vi.fn(() => Promise.resolve(1)),
     on: vi.fn(function() { return this; }),
     connect: vi.fn(() => Promise.resolve()),
@@ -36,15 +44,25 @@ vi.mock('ioredis', () => {
     keys: vi.fn(() => Promise.resolve([])),
     mget: vi.fn(() => Promise.resolve([])),
     mset: vi.fn(() => Promise.resolve('OK')),
-    flushdb: vi.fn(() => Promise.resolve('OK')),
+    flushdb: vi.fn(() => {
+      counters.clear();
+      return Promise.resolve('OK');
+    }),
     info: vi.fn(() => Promise.resolve('')),
-    dbsize: vi.fn(() => Promise.resolve(0)),
+    dbsize: vi.fn(() => Promise.resolve(counters.size)),
   });
 
   return {
     default: vi.fn().mockImplementation(createMockRedis),
   };
 });
+
+// Mock error logger service
+vi.mock('../../../services/errorLogger.js', () => ({
+  errorLogger: {
+    log: vi.fn(() => Promise.resolve()),
+  },
+}));
 
 // Mock cache services to return mock implementations
 vi.mock('../../../services/cache/redis-cache.js', () => ({
@@ -118,9 +136,22 @@ export function createTestApp(): Hono {
   // Apply auth middleware (use optional auth for testing)
   app.use('/api/*', authMiddleware);
 
-  // Register routes
-  app.route('/api/addresses', addressesRoutes);
-  app.route('/api/phone-numbers', phoneNumbersRoutes);
+  // Register routes (mount at /api so routes become /api/clients/:id/addresses)
+  app.route('/api', addressesRoutes);
+  app.route('/api', phoneNumbersRoutes);
+
+  // Error handler for tests (handles all errors) - must be AFTER routes
+  app.onError((error: any, c) => {
+    // Check if error has statusCode (AppError)
+    const statusCode = error.statusCode || 500;
+    const code = error.code || 'INTERNAL_SERVER_ERROR';
+
+    return c.json({
+      success: false,
+      message: error.message || 'Internal server error',
+      code,
+    }, statusCode);
+  });
 
   return app;
 }

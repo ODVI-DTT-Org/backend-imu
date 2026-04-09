@@ -64,3 +64,14 @@ COMMENT ON COLUMN addresses.psgc_id IS 'FK to PSGC table for geographic data';
 COMMENT ON COLUMN addresses.label IS 'Address type: Home, Work, Relative, Other';
 COMMENT ON COLUMN addresses.street_address IS 'Street and building information';
 COMMENT ON COLUMN addresses.is_primary IS 'Primary address flag - only one per client';
+
+-- ROLLBACK
+-- To rollback this migration, run:
+-- DROP TRIGGER IF EXISTS trigger_ensure_single_primary_address;
+-- DROP TRIGGER IF EXISTS trigger_update_addresses_updated_at;
+-- DROP FUNCTION IF EXISTS ensure_single_primary_address();
+-- DROP FUNCTION IF EXISTS update_addresses_updated_at();
+-- DROP INDEX IF EXISTS idx_addresses_is_primary;
+-- DROP INDEX IF EXISTS idx_addresses_psgc_id;
+-- DROP INDEX IF EXISTS idx_addresses_client_id;
+-- DROP TABLE IF EXISTS addresses;
