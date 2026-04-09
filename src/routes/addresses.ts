@@ -207,6 +207,10 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
   const userId = c.get('user')?.sub;
   const body = await c.req.json();
 
+  if (!clientId) {
+    throw new ValidationError('Client ID is required');
+  }
+
   // Validate input
   const validatedData = createAddressSchema.safeParse(body);
   if (!validatedData.success) {
@@ -321,6 +325,10 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
   const addressId = c.req.param('addressId');
   const body = await c.req.json();
 
+  if (!clientId || !addressId) {
+    throw new ValidationError('Client ID and Address ID are required');
+  }
+
   // Validate input
   const validatedData = updateAddressSchema.safeParse(body);
   if (!validatedData.success) {
@@ -397,6 +405,10 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
 addresses.delete('/clients/:id/addresses/:addressId', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
   const addressId = c.req.param('addressId');
+
+  if (!clientId || !addressId) {
+    throw new ValidationError('Client ID and Address ID are required');
+  }
 
   const result = await pool.query(
     'UPDATE addresses SET deleted_at = CURRENT_TIMESTAMP WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL RETURNING *',

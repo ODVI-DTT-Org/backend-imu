@@ -187,6 +187,10 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
   const userId = c.get('user')?.sub;
   const body = await c.req.json();
 
+  if (!clientId) {
+    throw new ValidationError('Client ID is required');
+  }
+
   // Validate input
   const validatedData = createPhoneSchema.safeParse(body);
   if (!validatedData.success) {
