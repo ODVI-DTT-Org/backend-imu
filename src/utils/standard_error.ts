@@ -4,100 +4,109 @@
  * Provides consistent error response structure across all API endpoints.
  *
  * Usage:
- * ```dart
+ * ```typescript
  * throw StandardError.notFound('Resource not found')
- * throw StandardError.validation('Invalid input', details: {...})
+ * throw StandardError.validation('Invalid input', details)
  * ```
  */
 
-class StandardError {
-  final String message;
-  final String type;
-  final Map<String, dynamic>? details;
-  final int statusCode;
+export class StandardError extends Error {
+  public readonly message: string;
+  public readonly type: string;
+  public readonly details?: Record<string, unknown>;
+  public readonly statusCode: number;
 
-  const StandardError({
-    required this.message,
-    required this.type,
-    this.details,
-    required this.statusCode,
-  });
+  constructor({
+    message,
+    type,
+    details,
+    statusCode,
+  }: {
+    message: string;
+    type: string;
+    details?: Record<string, unknown>;
+    statusCode: number;
+  }) {
+    super(message);
+    this.message = message;
+    this.type = type;
+    this.details = details;
+    this.statusCode = statusCode;
+    Error.captureStackTrace(this, this.constructor);
+  }
 
-  /// Create a NOT FOUND error (404)
-  const StandardError.notFound(
-    String message, {
-    Map<String, dynamic>? details,
-  }) : this(
-          message: message,
-          type: 'NOT_FOUND',
-          details: details,
-          statusCode: 404,
-        );
+  /** Create a NOT FOUND error (404) */
+  static notFound(message: string, details?: Record<string, unknown>): StandardError {
+    return new StandardError({
+      message,
+      type: 'NOT_FOUND',
+      details,
+      statusCode: 404,
+    });
+  }
 
-  /// Create a VALIDATION error (400)
-  const StandardError.validation(
-    String message, {
-    Map<String, dynamic>? details,
-  }) : this(
-          message: message,
-          type: 'VALIDATION_ERROR',
-          details: details,
-          statusCode: 400,
-        );
+  /** Create a VALIDATION error (400) */
+  static validation(message: string, details?: Record<string, unknown>): StandardError {
+    return new StandardError({
+      message,
+      type: 'VALIDATION_ERROR',
+      details,
+      statusCode: 400,
+    });
+  }
 
-  /// Create an UNAUTHORIZED error (401)
-  const StandardError.unauthorized(
-    String message, {
-    Map<String, dynamic>? details,
-  }) : this(
-          message: message,
-          type: 'UNAUTHORIZED',
-          details: details,
-          statusCode: 401,
-        );
+  /** Create an UNAUTHORIZED error (401) */
+  static unauthorized(message: string, details?: Record<string, unknown>): StandardError {
+    return new StandardError({
+      message,
+      type: 'UNAUTHORIZED',
+      details,
+      statusCode: 401,
+    });
+  }
 
-  /// Create a FORBIDDEN error (403)
-  const StandardError.forbidden(
-    String message, {
-    Map<String, dynamic>? details,
-  }) : this(
-          message: message,
-          type: 'FORBIDDEN',
-          details: details,
-          statusCode: 403,
-        );
+  /** Create a FORBIDDEN error (403) */
+  static forbidden(message: string, details?: Record<string, unknown>): StandardError {
+    return new StandardError({
+      message,
+      type: 'FORBIDDEN',
+      details,
+      statusCode: 403,
+    });
+  }
 
-  /// Create a CONFLICT error (409)
-  const StandardError.conflict(
-    String message, {
-    Map<String, dynamic>? details,
-  }) : this(
-          message: message,
-          type: 'CONFLICT',
-          details: details,
-          statusCode: 409,
-        );
+  /** Create a CONFLICT error (409) */
+  static conflict(message: string, details?: Record<string, unknown>): StandardError {
+    return new StandardError({
+      message,
+      type: 'CONFLICT',
+      details,
+      statusCode: 409,
+    });
+  }
 
-  /// Create an INTERNAL SERVER ERROR (500)
-  const StandardError.internal(
-    String message, {
-    Map<String, dynamic>? details,
-  }) : this(
-          message: message,
-          type: 'INTERNAL_ERROR',
-          details: details,
-          statusCode: 500,
-        );
+  /** Create an INTERNAL SERVER ERROR (500) */
+  static internal(message: string, details?: Record<string, unknown>): StandardError {
+    return new StandardError({
+      message,
+      type: 'INTERNAL_ERROR',
+      details,
+      statusCode: 500,
+    });
+  }
 
-  /// Convert to JSON response format
-  Map<String, dynamic> toJson() {
+  /** Convert to JSON response format */
+  toJSON(): Record<string, unknown> {
     return {
-      'success': false,
-      'error': {
-        'message': message,
-        'type': type,
-        if (details != null) 'details': details,
+      success: false,
+      error: {
+        message: this.message,
+        type: this.type,
+        ...(this.details && { details: this.details }),
       },
+    };
+  }
+}
     };
   }
 
