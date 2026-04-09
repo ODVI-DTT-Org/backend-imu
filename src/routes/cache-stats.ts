@@ -12,7 +12,7 @@ import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { requireRole } from '../middleware/auth.js';
 import { getCacheService } from '../services/cache/redis-cache.js';
-import { getCacheMetrics } from '../services/cache/metrics.js';
+import { getCacheMetrics } from '../services/cache/cache-metrics.js';
 
 const cacheStats = new Hono();
 
