@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { apiRateLimit } from '../middleware/rate-limit.js';
+import { getCacheService, CACHE_PREFIX, CACHE_TTL } from '../services/cache/redis-cache.js';
+import { getCacheMetrics } from '../services/cache/cache-metrics.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -43,6 +45,48 @@ function mapRowToPhoneNumber(row: Record<string, any>) {
   };
 }
 
+// Cache helpers
+const cache = getCacheService();
+const metrics = getCacheMetrics();
+
+/**
+ * Generate cache key for client phone numbers
+ */
+function getPhoneNumbersCacheKey(clientId: string, page: number, limit: number): string {
+  return `${CACHE_PREFIX.PHONE_NUMBERS}client:${clientId}:page:${page}:limit:${limit}`;
+}
+
+/**
+ * Generate cache key for single phone number
+ */
+function getPhoneNumberCacheKey(phoneId: string): string {
+  return `${CACHE_PREFIX.PHONE_NUMBERS}${phoneId}`;
+}
+
+/**
+ * Invalidate all phone number caches for a client
+ */
+async function invalidateClientPhoneNumbersCache(clientId: string): Promise<void> {
+  try {
+    await cache.delPattern(`${CACHE_PREFIX.PHONE_NUMBERS}client:${clientId}:*`);
+    metrics.recordDelete('phone-numbers');
+  } catch (error) {
+    console.error('[Phone Numbers Cache] Invalidation error:', error);
+  }
+}
+
+/**
+ * Invalidate single phone number cache
+ */
+async function invalidatePhoneNumberCache(phoneId: string): Promise<void> {
+  try {
+    await cache.del(getPhoneNumberCacheKey(phoneId));
+    metrics.recordDelete('phone-numbers');
+  } catch (error) {
+    console.error('[Phone Numbers Cache] Invalidation error:', error);
+  }
+}
+
 /**
  * GET /api/clients/:id/phone-numbers
  * List all phone numbers for a specific client
@@ -65,6 +109,17 @@ phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
   const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
   const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '50', 10)));
   const offset = (page - 1) * limit;
+
+  // Check cache first
+  const cacheKey = getPhoneNumbersCacheKey(clientId, page, limit);
+  const cached = await cache.get(cacheKey);
+
+  if (cached) {
+    metrics.recordHit('phone-numbers');
+    return c.json(cached);
+  }
+
+  metrics.recordMiss('phone-numbers');
 
   // Verify user has access to this client
   const clientCheck = await pool.query(
@@ -89,7 +144,7 @@ phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
   const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
   const totalPages = Math.ceil(totalCount / limit);
 
-  return c.json({
+  const response = {
     success: true,
     data: result.rows.map(mapRowToPhoneNumber),
     pagination: {
@@ -100,7 +155,13 @@ phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
       hasNext: page < totalPages,
       hasPrev: page > 1,
     },
-  });
+  };
+
+  // Store in cache for 5 minutes
+  await cache.set(cacheKey, response, CACHE_TTL.SHORT);
+  metrics.recordSet('phone-numbers');
+
+  return c.json(response);
 });
 
 /**
@@ -168,6 +229,9 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
      RETURNING *`,
     [clientId, data.label, data.number, isPrimary]
   );
+
+  // Invalidate cache for this client's phone numbers
+  await invalidateClientPhoneNumbersCache(clientId);
 
   return c.json({
     success: true,
@@ -280,6 +344,10 @@ phoneNumbers.put('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMid
     values
   );
 
+  // Invalidate cache for this client's phone numbers and this specific phone number
+  await invalidateClientPhoneNumbersCache(clientId);
+  await invalidatePhoneNumberCache(phoneId);
+
   return c.json({
     success: true,
     data: mapRowToPhoneNumber(result.rows[0]),
@@ -310,6 +378,10 @@ phoneNumbers.delete('/clients/:id/phone-numbers/:phoneId', authMiddleware, audit
   if (result.rows.length === 0) {
     throw new NotFoundError('Phone number not found');
   }
+
+  // Invalidate cache for this client's phone numbers and this specific phone number
+  await invalidateClientPhoneNumbersCache(clientId);
+  await invalidatePhoneNumberCache(phoneId);
 
   return c.json({
     success: true,
@@ -360,6 +432,9 @@ phoneNumbers.patch('/clients/:id/phone-numbers/:phoneId/primary', authMiddleware
     'UPDATE phone_numbers SET is_primary = true WHERE id = $1 RETURNING *',
     [phoneId]
   );
+
+  // Invalidate cache for this client's phone numbers (all phone numbers affected by primary change)
+  await invalidateClientPhoneNumbersCache(clientId);
 
   return c.json({
     success: true,
