@@ -447,6 +447,10 @@ addresses.patch('/clients/:id/addresses/:addressId/primary', authMiddleware, aud
   const addressId = c.req.param('addressId');
   const userId = c.get('user')?.sub;
 
+  if (!clientId || !addressId) {
+    throw new ValidationError('Client ID and Address ID are required');
+  }
+
   // Verify user owns this client
   const clientCheck = await pool.query(
     'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
