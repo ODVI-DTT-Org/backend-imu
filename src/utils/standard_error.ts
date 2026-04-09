@@ -106,17 +106,14 @@ export class StandardError extends Error {
       },
     };
   }
-}
-    };
-  }
 
-  /// Create from existing exception
-  factory StandardError.fromException(dynamic exception) {
-    if (exception is StandardError) return exception;
+  /** Create from existing exception */
+  static fromException(exception: unknown): StandardError {
+    if (exception instanceof StandardError) return exception;
 
     return StandardError.internal(
-      exception.toString(),
-      details: {'exception_type': exception.runtimeType.toString()},
+      exception instanceof Error ? exception.message : String(exception),
+      { exception_type: exception?.constructor?.name || 'Unknown' },
     );
   }
 }
