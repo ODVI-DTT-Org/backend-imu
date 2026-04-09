@@ -4,6 +4,13 @@ import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
+import { normalizeSearchQuery } from '../utils/search-normalizer.js';
+import {
+  parseHybridSearchQuery,
+  buildHybridSearchClause,
+  getHybridSearchStrategyInfo,
+  logSearchStrategy,
+} from '../utils/hybrid-search.js';
 import {
   ValidationError,
   NotFoundError,
@@ -132,19 +139,6 @@ clients.get('/', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
 
-    // Log the entire request for debugging
-    console.log('[clients] ================================================');
-    console.log('[clients] REQUEST URL:', c.req.url);
-    console.log('[clients] REQUEST METHOD:', c.req.method);
-    console.log('[clients] REQUEST QUERY:', c.req.query());
-    console.log('[clients] REQUEST QUERY PARAMS:');
-    console.log('[clients]   - page:', c.req.query('page'));
-    console.log('[clients]   - perPage:', c.req.query('perPage'));
-    console.log('[clients]   - search:', c.req.query('search'));
-    console.log('[clients]   - client_type:', c.req.query('client_type'));
-    console.log('[clients]   - product_type:', c.req.query('product_type'));
-    console.log('[clients] ================================================');
-
     const page = parseInt(c.req.query('page') || '1');
     let perPage = parseInt(c.req.query('perPage') || '20');
 
@@ -163,17 +157,6 @@ clients.get('/', authMiddleware, async (c) => {
     const productType = c.req.query('product_type');
     const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
-
-    console.log('[clients] DEBUG: search parameter =', search, '(type:', typeof search, ')');
-    console.log('[clients] DEBUG: search === undefined:', search === undefined);
-    console.log('[clients] DEBUG: search === null:', search === null);
-    console.log('[clients] DEBUG: search === "":', search === "");
-    console.log('[clients] DEBUG: clientType =', clientType);
-    console.log('[clients] DEBUG: productType =', productType);
-
-    // IMPORTANT: Log raw query string to debug parameter extraction
-    console.log('[clients] DEBUG: Raw query string:', c.req.url.split('?')[1]);
-    console.log('[clients] ================================================');
 
     const offset = (page - 1) * perPage;
 
@@ -254,20 +237,26 @@ clients.get('/', authMiddleware, async (c) => {
     const baseWhereConditions: string[] = [];
     const baseParams: any[] = [];
     let baseParamIndex = 1;
+    let searchParam = ''; // Track search parameter for similarity scoring
+    let searchStrategy = ''; // Track search strategy for SELECT clause
+    let searchOrderBy = ''; // Track search ORDER BY clause
 
-    console.log('[clients] DEBUG: Building baseWhereConditions, search =', search);
-
-    // Fix: Check if search is truthy AND not just whitespace
+    // Hybrid search: pg_trgm for 1-2 words, full-text search for 3+ words
     if (search && search.trim()) {
-      console.log('[clients] DEBUG: Adding search condition');
-      const trimmedSearch = search.trim();
-      baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
-      baseParams.push(`%${trimmedSearch}%`);
-      baseParamIndex++;
-      console.log('[clients] DEBUG: After adding search, baseParams =', baseParams);
-    } else {
-      console.log('[clients] DEBUG: Search condition NOT added (search is falsy or empty)');
-      console.log('[clients] DEBUG: search value:', JSON.stringify(search));
+      const parsedSearch = parseHybridSearchQuery(search.trim());
+
+      const searchResult = buildHybridSearchClause(parsedSearch, baseParamIndex);
+      baseWhereConditions.push(searchResult.whereClause);
+      baseParams.push(...searchResult.params);
+      baseParamIndex = searchResult.newParamIndex;
+
+      // Store search info for similarity scoring and ordering
+      searchParam = parsedSearch.normalizedQuery;
+      searchStrategy = searchResult.similaritySelect || '';
+      searchOrderBy = searchResult.orderBy || '';
+
+      // Log search strategy for debugging
+      logSearchStrategy(parsedSearch, 'GET /api/clients', searchResult.strategy);
     }
 
     if (clientType && clientType !== 'all') {
@@ -348,11 +337,8 @@ clients.get('/', authMiddleware, async (c) => {
         FROM user_locations
         WHERE user_id = '${user.sub}' AND deleted_at IS NULL
       ), ${touchpointInfoCTE}`;
-      console.log('[clients] CTE with area filter:', withGroupScoreCTE.substring(0, 300) + '...');
-      console.log('[clients] user.sub:', user.sub);
     } else {
       withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
-      console.log('[clients] CTE without area filter:', withGroupScoreCTE.substring(0, 200) + '...');
     }
     let groupScoreFilter = '';
     let useGroupedCTEs = false;
@@ -500,9 +486,6 @@ clients.get('/', authMiddleware, async (c) => {
       ${combinedWhereClause}
     `;
 
-    console.log('[clients] COUNT query:', countQuery);
-    console.log('[clients] COUNT params:', baseParams);
-
     const countResult = await pool.query(countQuery, baseParams);
     const totalItems = parseInt(countResult.rows[0].count);
 
@@ -520,6 +503,9 @@ clients.get('/', authMiddleware, async (c) => {
       ? `, ${touchpointInfoAlias}.group_score`
       : '';
 
+    // Add similarity score or word match count to SELECT when search is active
+    const similaritySelect = searchStrategy || '';
+
     const mainQuery = `
       ${withGroupScoreCTE}
       SELECT c.*,
@@ -536,7 +522,7 @@ clients.get('/', authMiddleware, async (c) => {
         COALESCE(${touchpointInfoAlias}.completed_count, 0) as completed_touchpoints,
         ${touchpointInfoAlias}.next_touchpoint_type,
         ${touchpointInfoAlias}.last_touchpoint_type,
-        ${touchpointInfoAlias}.last_touchpoint_user_id${groupScoreSelect},
+        ${touchpointInfoAlias}.last_touchpoint_user_id${groupScoreSelect}${similaritySelect},
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name
       FROM clients c
@@ -547,12 +533,11 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN users lt ON lt.id = ${touchpointInfoAlias}.last_touchpoint_user_id
       ${combinedWhereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, ${touchpointInfoAlias}.completed_count, ${touchpointInfoAlias}.next_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_type, ${touchpointInfoAlias}.last_touchpoint_user_id, ${touchpointInfoAlias}.loan_released${groupScoreSelect !== '' ? `, ${touchpointInfoAlias}.group_score` : ''}, lt.first_name, lt.last_name
-      ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias)}
+      ${searchOrderBy
+        ? `ORDER BY ${searchOrderBy}, ${orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias).split('ORDER BY')[1]?.trim() || ''}`
+        : orderByClause.replaceAll('{touchpoint_alias}', touchpointInfoAlias)}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
-
-    console.log('[clients] SELECT query:', mainQuery.substring(0, 500) + '...');
-    console.log('[clients] SELECT params:', [...baseParams, perPage, offset]);
 
     const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
 
@@ -677,11 +662,26 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const baseWhereConditions: string[] = [];
     const baseParams: any[] = [];
     let baseParamIndex = 1;
+    let searchParam = ''; // Track search parameter for similarity scoring
+    let searchStrategy = ''; // Track search strategy for SELECT clause
+    let searchOrderBy = ''; // Track search ORDER BY clause
 
+    // Hybrid search: pg_trgm for 1-2 words, full-text search for 3+ words
     if (search) {
-      baseWhereConditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${baseParamIndex} OR c.first_name ILIKE $${baseParamIndex} OR c.last_name ILIKE $${baseParamIndex} OR c.email ILIKE $${baseParamIndex})`);
-      baseParams.push(`%${search}%`);
-      baseParamIndex++;
+      const parsedSearch = parseHybridSearchQuery(search);
+
+      const searchResult = buildHybridSearchClause(parsedSearch, baseParamIndex);
+      baseWhereConditions.push(searchResult.whereClause);
+      baseParams.push(...searchResult.params);
+      baseParamIndex = searchResult.newParamIndex;
+
+      // Store search info for similarity scoring and ordering
+      searchParam = parsedSearch.normalizedQuery;
+      searchStrategy = searchResult.similaritySelect || '';
+      searchOrderBy = searchResult.orderBy || '';
+
+      // Log search strategy for debugging
+      logSearchStrategy(parsedSearch, 'GET /api/clients/assigned', searchResult.strategy);
     }
 
     // Soft delete filter: Only show active clients (not deleted)
@@ -856,6 +856,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Get paginated results using CTEs
     // IMPORTANT: Query FROM assigned_clients_in_location to ensure we only get assigned clients
     // and the ORDER BY works correctly (callable clients first)
+    // Add similarity score or word match count to SELECT when search is active
+    const similaritySelect = searchStrategy || '';
+
     const mainQuery = `
       ${withGroupScoreCTE}
       SELECT c.*,
@@ -873,7 +876,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
         acl.next_touchpoint_type,
         acl.last_touchpoint_type,
         acl.last_touchpoint_user_id,
-        acl.group_score,
+        acl.group_score${similaritySelect},
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name
       FROM assigned_clients_in_location acl
@@ -886,6 +889,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, acl.completed_count, acl.next_touchpoint_type, acl.last_touchpoint_type, acl.last_touchpoint_user_id, lt.first_name, lt.last_name, acl.group_score
+      ${searchOrderBy ? `ORDER BY ${searchOrderBy}, acl.group_score ASC` : `ORDER BY acl.group_score ASC`}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
@@ -1166,9 +1170,6 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
     const user = c.get('user');
     const id = c.req.param('id');
     const body = await c.req.json();
-
-    // Debug: Log received body
-    console.log('[PUT /api/clients/:id] Received body:', JSON.stringify(body, null, 2));
 
     const validated = updateClientSchema.parse(body);
 
@@ -1459,10 +1460,17 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     const params: any[] = [];
     let paramIndex = 1;
 
+    // Hybrid search: pg_trgm for 1-2 words, full-text search for 3+ words
     if (search) {
-      conditions.push(`((c.first_name || ' ' || c.last_name) ILIKE $${paramIndex} OR c.first_name ILIKE $${paramIndex} OR c.last_name ILIKE $${paramIndex} OR c.email ILIKE $${paramIndex})`);
-      params.push(`%${search}%`);
-      paramIndex++;
+      const parsedSearch = parseHybridSearchQuery(search);
+
+      const searchResult = buildHybridSearchClause(parsedSearch, paramIndex);
+      conditions.push(searchResult.whereClause);
+      params.push(...searchResult.params);
+      paramIndex = searchResult.newParamIndex;
+
+      // Log search strategy for debugging
+      logSearchStrategy(parsedSearch, 'GET /api/clients/search/unassigned', searchResult.strategy);
     }
 
     // Soft delete filter: Only show active clients (not deleted)
