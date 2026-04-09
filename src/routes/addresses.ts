@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/permissions.js';
+import { apiRateLimit } from '../middleware/rate-limit.js';
 import { pool } from '../db/index.js';
 import {
   ValidationError,
@@ -11,6 +12,9 @@ import {
 } from '../errors/index.js';
 
 const addresses = new Hono();
+
+// Apply rate limiting to all addresses routes
+addresses.use('/*', apiRateLimit);
 
 // Validation schemas
 const createAddressSchema = z.object({
@@ -51,14 +55,32 @@ function mapRowToAddress(row: Record<string, any>) {
   };
 }
 
-// GET /api/clients/:id/addresses - List all addresses for client
+/**
+ * GET /api/clients/:id/addresses
+ * List all addresses for a specific client
+ *
+ * @param id - Client ID
+ * @param page - Page number (optional, default: 1)
+ * @param limit - Items per page (optional, default: 50, max: 100)
+ * @returns { success: true, data: Address[], pagination: object } - Paginated addresses with PSGC data
+ * @throws {NotFoundError} - If client not found or access denied
+ * @throws {ValidationError} - If pagination parameters are invalid
+ *
+ * Addresses are ordered by is_primary DESC, created_at ASC
+ * Only returns active addresses (deleted_at IS NULL)
+ */
 addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
   const userId = c.get('user')?.sub;
 
+  // Parse pagination parameters
+  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '50', 10)));
+  const offset = (page - 1) * limit;
+
   // Verify user has access to this client
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1 AND (user_id = $2 OR deleted_at IS NOT NULL)',
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
     [clientId, userId]
   );
 
@@ -66,21 +88,55 @@ addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
     throw new NotFoundError('Client not found or access denied');
   }
 
+  // I23: Optimize N+1 query - use window function for single query with count
   const result = await pool.query(
-    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay
+    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay,
+            COUNT(*) OVER() as total_count
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.client_id = $1 AND a.deleted_at IS NULL
-     ORDER BY a.is_primary DESC, a.created_at ASC`,
-    [clientId]
+     ORDER BY a.is_primary DESC, a.created_at ASC
+     LIMIT $2 OFFSET $3`,
+    [clientId, limit, offset]
   );
+
+  const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
+  const totalPages = Math.ceil(totalCount / limit);
 
   return c.json({
     success: true,
     data: result.rows.map(mapRowToAddress),
+    pagination: {
+      page,
+      limit,
+      totalCount,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1,
+    },
   });
 });
 
+/**
+ * POST /api/clients/:id/addresses
+ * Create a new address for a client
+ *
+ * @param id - Client ID
+ * @param body - Address data
+ * @param body.label - Address label (Home, Work, Relative, Other)
+ * @param body.street_address - Street address
+ * @param body.postal_code - Postal code (optional)
+ * @param body.psgc_id - PSGC ID (must exist in PSGC table)
+ * @param body.latitude - GPS latitude (optional)
+ * @param body.longitude - GPS longitude (optional)
+ * @param body.is_primary - Set as primary address (optional, auto-set if first address)
+ * @returns { success: true, data: Address } - Created address with PSGC data
+ * @throws {ValidationError} - If invalid PSGC ID or validation fails
+ * @throws {NotFoundError} - If client not found
+ *
+ * First address is automatically set as primary
+ * Only one address per label per client (enforced by unique constraint)
+ */
 // POST /api/clients/:id/addresses - Create new address
 addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
@@ -95,14 +151,24 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
 
   const data = validatedData.data;
 
-  // Verify client exists and user has access
+  // Verify client exists and user has access (I3: Security fix - verify ownership)
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1',
-    [clientId]
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2',
+    [clientId, userId]
   );
 
   if (clientCheck.rows.length === 0) {
-    throw new NotFoundError('Client not found');
+    throw new NotFoundError('Client not found or access denied');
+  }
+
+  // Verify PSGC exists
+  const psgcCheck = await pool.query(
+    'SELECT id FROM psgc WHERE id = $1',
+    [data.psgc_id]
+  );
+
+  if (psgcCheck.rows.length === 0) {
+    throw new ValidationError('Invalid PSGC ID - geographic location not found');
   }
 
   // If this is the first address, automatically set as primary
@@ -139,6 +205,17 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
 addresses.get('/clients/:id/addresses/:addressId', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
   const addressId = c.req.param('addressId');
+  const userId = c.get('user')?.sub;
+
+  // Verify user owns this client (I1: Security fix)
+  const clientCheck = await pool.query(
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    [clientId, userId]
+  );
+
+  if (clientCheck.rows.length === 0) {
+    throw new NotFoundError('Client not found or access denied');
+  }
 
   const result = await pool.query(
     `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay
@@ -158,6 +235,19 @@ addresses.get('/clients/:id/addresses/:addressId', authMiddleware, async (c) => 
   });
 });
 
+/**
+ * PUT /api/clients/:id/addresses/:addressId
+ * Update an existing address
+ *
+ * @param id - Client ID
+ * @param addressId - Address ID
+ * @param body - Partial address data to update
+ * @returns { success: true, data: Address } - Updated address with PSGC data
+ * @throws {ValidationError} - If validation fails or no fields to update
+ * @throws {NotFoundError} - If address not found
+ *
+ * Only whitelisted fields can be updated: label, street_address, postal_code, latitude, longitude, is_primary
+ */
 // PUT /api/clients/:id/addresses/:addressId - Update address
 addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
@@ -182,13 +272,14 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
     throw new NotFoundError('Address not found');
   }
 
-  // Build update query dynamically
+  // Build update query dynamically with whitelist
+  const ALLOWED_UPDATE_FIELDS = ['label', 'street_address', 'postal_code', 'latitude', 'longitude', 'is_primary'];
   const updates: string[] = [];
   const values: any[] = [];
   let paramIndex = 1;
 
   Object.entries(data).forEach(([key, value]) => {
-    if (value !== undefined) {
+    if (value !== undefined && ALLOWED_UPDATE_FIELDS.includes(key)) {
       updates.push(`${key} = $${paramIndex++}`);
       values.push(value);
     }
@@ -220,6 +311,17 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
   });
 });
 
+/**
+ * DELETE /api/clients/:id/addresses/:addressId
+ * Soft delete an address (sets deleted_at timestamp)
+ *
+ * @param id - Client ID
+ * @param addressId - Address ID
+ * @returns { success: true, message: string }
+ * @throws {NotFoundError} - If address not found or doesn't belong to client
+ *
+ * Soft delete preserves data for recovery. Address won't appear in API responses.
+ */
 // DELETE /api/clients/:id/addresses/:addressId - Soft delete address
 addresses.delete('/clients/:id/addresses/:addressId', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
@@ -240,12 +342,35 @@ addresses.delete('/clients/:id/addresses/:addressId', authMiddleware, auditMiddl
   });
 });
 
+/**
+ * PATCH /api/clients/:id/addresses/:addressId/primary
+ * Set an address as the primary address for a client
+ *
+ * @param id - Client ID
+ * @param addressId - Address ID to set as primary
+ * @returns { success: true, data: Address } - Updated primary address with PSGC data
+ * @throws {NotFoundError} - If client not found, access denied, or address not found
+ *
+ * Database trigger automatically unsets is_primary on all other addresses for this client
+ * Only one primary address per client is allowed
+ */
 // PATCH /api/clients/:id/addresses/:addressId/primary - Set as primary
 addresses.patch('/clients/:id/addresses/:addressId/primary', authMiddleware, auditMiddleware('client'), async (c) => {
   const clientId = c.req.param('id');
   const addressId = c.req.param('addressId');
+  const userId = c.get('user')?.sub;
 
-  // Check if address exists
+  // Verify user owns this client
+  const clientCheck = await pool.query(
+    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    [clientId, userId]
+  );
+
+  if (clientCheck.rows.length === 0) {
+    throw new NotFoundError('Client not found or access denied');
+  }
+
+  // Check if address exists and belongs to client
   const existing = await pool.query(
     'SELECT * FROM addresses WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL',
     [addressId, clientId]
