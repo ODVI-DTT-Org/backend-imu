@@ -155,6 +155,8 @@ clients.get('/', authMiddleware, async (c) => {
     const municipality = c.req.query('municipality');
     const province = c.req.query('province');
     const productType = c.req.query('product_type');
+    const marketType = c.req.query('market_type');
+    const pensionType = c.req.query('pension_type');
     const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
@@ -268,6 +270,18 @@ clients.get('/', authMiddleware, async (c) => {
     if (productType && productType !== 'all') {
       baseWhereConditions.push(`c.product_type = $${baseParamIndex}`);
       baseParams.push(productType);
+      baseParamIndex++;
+    }
+
+    if (marketType && marketType !== 'all') {
+      baseWhereConditions.push(`c.market_type = $${baseParamIndex}`);
+      baseParams.push(marketType);
+      baseParamIndex++;
+    }
+
+    if (pensionType && pensionType !== 'all') {
+      baseWhereConditions.push(`c.pension_type = $${baseParamIndex}`);
+      baseParams.push(pensionType);
       baseParamIndex++;
     }
 
