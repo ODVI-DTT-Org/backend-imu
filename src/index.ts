@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
-import 'dotenv/config';
+
+// Load dotenv ONLY in development, not in production
+// In production (DigitalOcean), environment variables are already set
+if (process.env.NODE_ENV !== 'production') {
+  import('dotenv/config');
+}
 
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
