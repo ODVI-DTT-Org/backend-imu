@@ -48,6 +48,23 @@ const createClientSchema = z.object({
   is_starred: z.boolean().default(false),
   loan_released: z.boolean().optional().default(false),
   loan_released_at: z.string().max(50).optional(),
+  // Legacy PCNICMS fields (optional)
+  ext_name: z.string().max(50).optional(),
+  fullname: z.string().max(500).optional(),
+  full_address: z.string().max(1000).optional(),
+  account_code: z.string().max(50).optional(),
+  account_number: z.string().max(50).optional(),
+  rank: z.string().max(100).optional(),
+  monthly_pension_amount: z.number().optional(),
+  monthly_pension_gross: z.number().optional(),
+  atm_number: z.string().max(50).optional(),
+  applicable_republic_act: z.string().max(100).optional(),
+  unit_code: z.string().max(50).optional(),
+  pcni_acct_code: z.string().max(50).optional(),
+  dob: z.string().max(50).optional(),
+  g_company: z.string().max(255).optional(),
+  g_status: z.string().max(50).optional(),
+  status: z.string().max(50).default('active'),
 });
 
 const updateClientSchema = createClientSchema.partial().passthrough();
@@ -121,6 +138,23 @@ function mapRowToClient(row: Record<string, any>) {
     is_starred: row.is_starred,
     loan_released: row.loan_released || false,
     loan_released_at: row.loan_released_at,
+    // Legacy PCNICMS fields
+    ext_name: row.ext_name,
+    fullname: row.fullname,
+    full_address: row.full_address,
+    account_code: row.account_code,
+    account_number: row.account_number,
+    rank: row.rank,
+    monthly_pension_amount: row.monthly_pension_amount,
+    monthly_pension_gross: row.monthly_pension_gross,
+    atm_number: row.atm_number,
+    applicable_republic_act: row.applicable_republic_act,
+    unit_code: row.unit_code,
+    pcni_acct_code: row.pcni_acct_code,
+    dob: row.dob,
+    g_company: row.g_company,
+    g_status: row.g_status,
+    status: row.status,
     created: row.created_at,
     updated: row.updated_at,
     expand: row.psgc_id ? {
@@ -1143,9 +1177,13 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         id, first_name, last_name, middle_name, birth_date, email, phone,
         agency_name, department, position, employment_status, payroll_date, tenure,
         client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
-        agency_id, user_id, is_starred
+        agency_id, user_id, is_starred,
+        ext_name, fullname, full_address, account_code, account_number, rank,
+        monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
+        unit_code, pcni_acct_code, dob, g_company, g_status, status
       ) VALUES (
-        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22
+        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
       ) RETURNING *`,
       [
         validated.first_name, validated.last_name, validated.middle_name, validated.birth_date,
@@ -1153,7 +1191,12 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         validated.position, validated.employment_status, validated.payroll_date, validated.tenure,
         validated.client_type, validated.product_type, validated.market_type, validated.pension_type,
         validated.pan, validated.facebook_link, validated.remarks, validated.agency_id,
-        validated.user_id, validated.is_starred
+        validated.user_id, validated.is_starred,
+        validated.ext_name, validated.fullname, validated.full_address, validated.account_code,
+        validated.account_number, validated.rank, validated.monthly_pension_amount,
+        validated.monthly_pension_gross, validated.atm_number, validated.applicable_republic_act,
+        validated.unit_code, validated.pcni_acct_code, validated.dob, validated.g_company,
+        validated.g_status, validated.status
       ]
     );
 
@@ -1252,6 +1295,23 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
       is_starred: 'is_starred',
       loan_released: 'loan_released',
       loan_released_at: 'loan_released_at',
+      // Legacy PCNICMS fields
+      ext_name: 'ext_name',
+      fullname: 'fullname',
+      full_address: 'full_address',
+      account_code: 'account_code',
+      account_number: 'account_number',
+      rank: 'rank',
+      monthly_pension_amount: 'monthly_pension_amount',
+      monthly_pension_gross: 'monthly_pension_gross',
+      atm_number: 'atm_number',
+      applicable_republic_act: 'applicable_republic_act',
+      unit_code: 'unit_code',
+      pcni_acct_code: 'pcni_acct_code',
+      dob: 'dob',
+      g_company: 'g_company',
+      g_status: 'g_status',
+      status: 'status',
     };
 
     for (const [key, dbField] of Object.entries(fieldMappings)) {
@@ -2193,9 +2253,13 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
               id, first_name, last_name, middle_name, birth_date, email, phone,
               agency_name, department, position, employment_status, payroll_date, tenure,
               client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
-              province, municipality, barangay, is_starred
+              province, municipality, barangay, is_starred,
+              ext_name, fullname, full_address, account_code, account_number, rank,
+              monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
+              unit_code, pcni_acct_code, dob, g_company, g_status, status
             ) VALUES (
-              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, false
+              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, false,
+              $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
             )`,
             [
               validatedClient.first_name,
@@ -2217,6 +2281,22 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
               validatedClient.pan || null,
               validatedClient.facebook_link || null,
               validatedClient.remarks || null,
+              validatedClient.ext_name || null,
+              validatedClient.fullname || null,
+              validatedClient.full_address || null,
+              validatedClient.account_code || null,
+              validatedClient.account_number || null,
+              validatedClient.rank || null,
+              validatedClient.monthly_pension_amount || null,
+              validatedClient.monthly_pension_gross || null,
+              validatedClient.atm_number || null,
+              validatedClient.applicable_republic_act || null,
+              validatedClient.unit_code || null,
+              validatedClient.pcni_acct_code || null,
+              validatedClient.dob || null,
+              validatedClient.g_company || null,
+              validatedClient.g_status || null,
+              validatedClient.status || 'active',
             ]
           );
 
