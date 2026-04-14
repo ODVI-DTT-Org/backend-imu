@@ -11,6 +11,7 @@ import {
   AuthenticationError,
   AuthorizationError,
 } from '../errors/index.js';
+import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 
 const touchpoints = new Hono();
 
@@ -690,6 +691,16 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       [validated.client_id]
     );
 
+    // ============================================
+    // CACHE INVALIDATION: Invalidate touchpoint cache
+    // ============================================
+    // Non-blocking async cache invalidation
+    const cacheInvalidation = getClientCacheInvalidation();
+    cacheInvalidation.onTouchpointCreated(validated.client_id, validated.user_id)
+      .catch((error) => {
+        console.error('[Touchpoints] Cache invalidation error after touchpoint creation:', error);
+      });
+
     return c.json({
       ...mapRowToTouchpoint(result.rows[0]),
       message: 'Touchpoint submitted for approval'
@@ -865,6 +876,19 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
 
     await client.query('COMMIT');
 
+    // ============================================
+    // CACHE INVALIDATION: Invalidate bulk touchpoint cache
+    // ============================================
+    // Non-blocking async cache invalidation for all created touchpoints
+    if (createdTouchpoints.length > 0) {
+      const cacheInvalidation = getClientCacheInvalidation();
+      const clientIds = [...new Set(createdTouchpoints.map((tp: any) => tp.client_id))];
+      cacheInvalidation.onBulkTouchpointChange(clientIds, 'touchpoint_created')
+        .catch((error) => {
+          console.error('[Touchpoints] Cache invalidation error after bulk creation:', error);
+        });
+    }
+
     return c.json({
       message: `Created ${createdTouchpoints.length} touchpoint(s)`,
       created: createdTouchpoints,
@@ -1003,6 +1027,16 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       [...values, id]
     );
 
+    // ============================================
+    // CACHE INVALIDATION: Invalidate touchpoint cache
+    // ============================================
+    // Non-blocking async cache invalidation
+    const cacheInvalidation = getClientCacheInvalidation();
+    cacheInvalidation.onTouchpointUpdated(existingTouchpoint.client_id, existingTouchpoint.user_id)
+      .catch((error) => {
+        console.error('[Touchpoints] Cache invalidation error after touchpoint update:', error);
+      });
+
     return c.json({
       message: 'Touchpoint updated successfully',
       touchpoint: mapRowToTouchpoint(updateResult.rows[0])
@@ -1039,6 +1073,16 @@ touchpoints.delete('/:id', authMiddleware, requirePermission('touchpoints', 'del
 
     // Hard delete
     await pool.query('DELETE FROM touchpoints WHERE id = $1', [id]);
+
+    // ============================================
+    // CACHE INVALIDATION: Invalidate touchpoint cache
+    // ============================================
+    // Non-blocking async cache invalidation
+    const cacheInvalidation = getClientCacheInvalidation();
+    cacheInvalidation.onTouchpointDeleted(touchpoint.client_id, touchpoint.user_id)
+      .catch((error) => {
+        console.error('[Touchpoints] Cache invalidation error after touchpoint deletion:', error);
+      });
 
     return c.json({ message: 'Touchpoint deleted successfully' });
   } catch (error) {
