@@ -301,6 +301,13 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       caravanId = user.sub;
     }
 
+    console.log('[My Day Tasks] Fetching tasks:', {
+      userId: caravanId,
+      targetDate,
+      userRole: user.role,
+      requestedDate,
+    });
+
     // Get itineraries for the target date with client info
     const itinerariesResult = await pool.query(
       `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.client_type,
@@ -313,8 +320,97 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       [caravanId, targetDate]
     );
 
+    // Fetch addresses for all clients in batch
+    const clientIds = itinerariesResult.rows.map(row => row.client_id);
+    const addressesResult = clientIds.length > 0 ? await pool.query(
+      `SELECT client_id, id, street, city, province, zip_code, is_primary
+       FROM addresses
+       WHERE client_id = ANY($1) AND deleted_at IS NULL
+       ORDER BY client_id, is_primary DESC, created_at DESC`,
+      [clientIds]
+    ) : { rows: [] };
+
+    // Group addresses by client_id
+    const addressesByClient = new Map<string, any[]>();
+    for (const addr of addressesResult.rows) {
+      if (!addressesByClient.has(addr.client_id)) {
+        addressesByClient.set(addr.client_id, []);
+      }
+      addressesByClient.get(addr.client_id)!.push({
+        id: addr.id,
+        street: addr.street,
+        city: addr.city,
+        province: addr.province,
+        zip_code: addr.zip_code,
+        is_primary: addr.is_primary,
+      });
+    }
+
+    // Fetch latest touchpoint for each client
+    const touchpointsResult = clientIds.length > 0 ? await pool.query(
+      `SELECT DISTINCT ON (t.client_id) t.client_id, t.touchpoint_number, t.type, t.time_arrival
+       FROM touchpoints t
+       WHERE t.client_id = ANY($1)
+       ORDER BY t.client_id, t.touchpoint_number DESC`,
+      [clientIds]
+    ) : { rows: [] };
+
+    // Create a map of client_id -> latest touchpoint
+    const latestTouchpoints = new Map<string, { touchpoint_number: number; type: string; time_arrival: string }>();
+    for (const tp of touchpointsResult.rows) {
+      latestTouchpoints.set(tp.client_id, {
+        touchpoint_number: tp.touchpoint_number,
+        type: tp.type,
+        time_arrival: tp.time_arrival,
+      });
+    }
+
+    // Build tasks with all required data
+    const tasks = itinerariesResult.rows.map(row => {
+      const latestTp = latestTouchpoints.get(row.client_id);
+      const addresses = addressesByClient.get(row.client_id) || [];
+      const primaryAddress = addresses.length > 0 ? addresses[0] : null;
+
+      // Calculate next touchpoint number
+      const lastTpNumber = latestTp?.touchpoint_number || 0;
+      const nextTpNumber = lastTpNumber < 7 ? lastTpNumber + 1 : lastTpNumber;
+
+      // Determine next touchpoint type based on sequence
+      // Pattern: 1st: Visit, 2nd: Call, 3rd: Call, 4th: Visit, 5th: Call, 6th: Call, 7th: Visit
+      const getNextTouchpointType = (num: number): 'Visit' | 'Call' => {
+        switch (num) {
+          case 1: case 4: case 7: return 'Visit';
+          case 2: case 3: case 5: case 6: return 'Call';
+          default: return 'Visit';
+        }
+      };
+
+      return {
+        id: row.id,
+        client_id: row.client_id,
+        scheduled_date: row.scheduled_date,
+        scheduled_time: row.scheduled_time,
+        status: row.status,
+        priority: row.priority,
+        notes: row.notes,
+        touchpoint_number: nextTpNumber,
+        touchpoint_type: getNextTouchpointType(nextTpNumber),
+        time_in: latestTp?.time_arrival || null,
+        client: {
+          first_name: row.first_name,
+          last_name: row.last_name,
+          email: row.email,
+          phone: row.phone,
+          client_type: row.client_type,
+          agency: row.agency_name,
+          addresses: addresses,
+        },
+        location: primaryAddress?.street || null,
+      };
+    });
+
     // Get completed touchpoints for the target date
-    const touchpointsResult = await pool.query(
+    const completedTouchpointsResult = await pool.query(
       `SELECT t.id, t.client_id, t.touchpoint_number, t.type, t.reason, t.time_arrival, t.time_departure,
               c.first_name, c.last_name, c.client_type
        FROM touchpoints t
@@ -324,25 +420,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       [user.sub, targetDate]
     );
 
-    const tasks = itinerariesResult.rows.map(row => ({
-      id: row.id,
-      client_id: row.client_id,
-      scheduled_date: row.scheduled_date,
-      scheduled_time: row.scheduled_time,
-      status: row.status,
-      priority: row.priority,
-      notes: row.notes,
-      client: {
-        first_name: row.first_name,
-        last_name: row.last_name,
-        email: row.email,
-        phone: row.phone,
-        client_type: row.client_type,
-        agency: row.agency_name,
-      },
-    }));
-
-    const completedTouchpoints = touchpointsResult.rows.map(row => ({
+    const completedTouchpoints = completedTouchpointsResult.rows.map(row => ({
       id: row.id,
       client_id: row.client_id,
       touchpoint_number: row.touchpoint_number,

@@ -14,6 +14,10 @@ import {
   exportClientsToExcel,
   exportAttendanceToExcel,
 } from '../utils/excel-export.js';
+import {
+  exportToCsv,
+  getDateRangeCondition,
+} from '../utils/csv-export.js';
 
 const reports = new Hono();
 
@@ -827,6 +831,368 @@ reports.post('/export-csv', authMiddleware, requirePermission('reports', 'export
     }
     console.error('Export CSV error:', error);
     throw new Error('Failed to create CSV export job');
+  }
+});
+
+// GET /api/reports/releases - Releases report
+reports.get('/releases', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const startDate = c.req.query('start_date');
+    const endDate = c.req.query('end_date');
+    const status = c.req.query('status');
+    const productType = c.req.query('product_type');
+    const loanType = c.req.query('loan_type');
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Only admin/staff can view all, field agents can only see their own
+    if (user.role === 'caravan') {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      const dateCondition = getDateRangeCondition(startDate, endDate, 'r.created_at');
+      whereClause += ` AND ${dateCondition.condition}`;
+      params.push(...dateCondition.params);
+      paramIndex += dateCondition.params.length;
+    }
+
+    // Status filter
+    if (status) {
+      whereClause += ` AND r.status = $${paramIndex++}`;
+      params.push(status);
+    }
+
+    // Product type filter
+    if (productType) {
+      whereClause += ` AND r.product_type = $${paramIndex++}`;
+      params.push(productType);
+    }
+
+    // Loan type filter
+    if (loanType) {
+      whereClause += ` AND r.loan_type = $${paramIndex++}`;
+      params.push(loanType);
+    }
+
+    const query = `
+      SELECT
+        r.id,
+        r.client_id,
+        c.first_name,
+        c.middle_name,
+        c.last_name,
+        r.user_id,
+        u.first_name as agent_first_name,
+        u.last_name as agent_last_name,
+        r.visit_id,
+        r.product_type,
+        r.loan_type,
+        r.amount,
+        r.status,
+        r.approval_notes,
+        r.approved_by,
+        r.approved_at,
+        r.created_at,
+        r.updated_at
+      FROM releases r
+      JOIN clients c ON c.id = r.client_id
+      JOIN users u ON u.id = r.user_id
+      ${whereClause}
+      ORDER BY r.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+
+    return c.json({
+      items: result.rows,
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error('Releases report error:', error);
+    throw new Error('Failed to fetch releases report');
+  }
+});
+
+// GET /api/reports/visits - Visits report
+reports.get('/visits', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const startDate = c.req.query('start_date');
+    const endDate = c.req.query('end_date');
+    const type = c.req.query('type');
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    let whereClause = 'WHERE 1=1';
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Only admin/staff can view all, field agents can only see their own
+    if (user.role === 'caravan') {
+      whereClause += ` AND v.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      const dateCondition = getDateRangeCondition(startDate, endDate, 'v.created_at');
+      whereClause += ` AND ${dateCondition.condition}`;
+      params.push(...dateCondition.params);
+      paramIndex += dateCondition.params.length;
+    }
+
+    // Type filter
+    if (type) {
+      whereClause += ` AND v.type = $${paramIndex++}`;
+      params.push(type);
+    }
+
+    const query = `
+      SELECT
+        v.id,
+        v.client_id,
+        c.first_name,
+        c.middle_name,
+        c.last_name,
+        v.user_id,
+        u.first_name as agent_first_name,
+        u.last_name as agent_last_name,
+        v.type,
+        v.time_in,
+        v.time_out,
+        v.odometer_arrival,
+        v.odometer_departure,
+        v.photo_url,
+        v.notes,
+        v.reason,
+        v.status,
+        v.address,
+        v.latitude,
+        v.longitude,
+        v.created_at,
+        v.updated_at
+      FROM visits v
+      JOIN clients c ON c.id = v.client_id
+      JOIN users u ON u.id = v.user_id
+      ${whereClause}
+      ORDER BY v.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+
+    return c.json({
+      items: result.rows,
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error('Visits report error:', error);
+    throw new Error('Failed to fetch visits report');
+  }
+});
+
+// GET /api/reports/export/csv - Export report data as CSV
+reports.get('/export/csv', authMiddleware, requirePermission('reports', 'export'), async (c) => {
+  try {
+    const user = c.get('user');
+    const reportType = c.req.query('type') || 'releases';
+    const startDate = c.req.query('start_date');
+    const endDate = c.req.query('end_date');
+    const { formatDate: _formatDate } = await import('../utils/csv-export.js');
+
+    // Only admin/staff can export
+    if (user.role === 'caravan') {
+      throw new AuthorizationError('Unauthorized');
+    }
+
+    let csvData: { filename: string; content: string; mime_type: string };
+
+    switch (reportType) {
+      case 'releases': {
+        let whereClause = 'WHERE 1=1';
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (startDate || endDate) {
+          const dateCondition = getDateRangeCondition(startDate, endDate, 'r.created_at');
+          whereClause += ` AND ${dateCondition.condition}`;
+          params.push(...dateCondition.params);
+          paramIndex += dateCondition.params.length;
+        }
+
+        const query = `
+          SELECT
+            r.id,
+            c.first_name,
+            c.middle_name,
+            c.last_name,
+            u.first_name as agent_first_name,
+            u.last_name as agent_last_name,
+            r.product_type,
+            r.loan_type,
+            r.amount,
+            r.status,
+            r.approval_notes,
+            r.approved_by,
+            r.approved_at,
+            r.created_at
+          FROM releases r
+          JOIN clients c ON c.id = r.client_id
+          JOIN users u ON u.id = r.user_id
+          ${whereClause}
+          ORDER BY r.created_at DESC
+          LIMIT 10000
+        `;
+
+        csvData = await exportToCsv(query, params, {
+          filename: `releases_${startDate || 'all'}_${endDate || 'all'}`,
+          headers: [
+            'ID',
+            'Client First Name',
+            'Client Middle Name',
+            'Client Last Name',
+            'Agent First Name',
+            'Agent Last Name',
+            'Product Type',
+            'Loan Type',
+            'Amount',
+            'Status',
+            'Approval Notes',
+            'Approved By',
+            'Approved At',
+            'Created At',
+          ],
+          rowMapper: (row) => [
+            row.id,
+            row.first_name,
+            row.middle_name,
+            row.last_name,
+            row.agent_first_name,
+            row.agent_last_name,
+            row.product_type,
+            row.loan_type,
+            row.amount,
+            row.status,
+            row.approval_notes,
+            row.approved_by,
+            row.approved_at,
+            row.created_at,
+          ],
+        });
+        break;
+      }
+
+      case 'visits': {
+        let whereClause = 'WHERE 1=1';
+        const params: any[] = [];
+        let paramIndex = 1;
+
+        if (startDate || endDate) {
+          const dateCondition = getDateRangeCondition(startDate, endDate, 'v.created_at');
+          whereClause += ` AND ${dateCondition.condition}`;
+          params.push(...dateCondition.params);
+          paramIndex += dateCondition.params.length;
+        }
+
+        const query = `
+          SELECT
+            v.id,
+            c.first_name,
+            c.middle_name,
+            c.last_name,
+            u.first_name as agent_first_name,
+            u.last_name as agent_last_name,
+            v.type,
+            v.time_in,
+            v.time_out,
+            v.odometer_arrival,
+            v.odometer_departure,
+            v.photo_url,
+            v.notes,
+            v.reason,
+            v.status,
+            v.address,
+            v.latitude,
+            v.longitude,
+            v.created_at
+          FROM visits v
+          JOIN clients c ON c.id = v.client_id
+          JOIN users u ON u.id = v.user_id
+          ${whereClause}
+          ORDER BY v.created_at DESC
+          LIMIT 10000
+        `;
+
+        csvData = await exportToCsv(query, params, {
+          filename: `visits_${startDate || 'all'}_${endDate || 'all'}`,
+          headers: [
+            'ID',
+            'Client First Name',
+            'Client Middle Name',
+            'Client Last Name',
+            'Agent First Name',
+            'Agent Last Name',
+            'Type',
+            'Time In',
+            'Time Out',
+            'Odometer Arrival',
+            'Odometer Departure',
+            'Photo URL',
+            'Notes',
+            'Reason',
+            'Status',
+            'Address',
+            'Latitude',
+            'Longitude',
+            'Created At',
+          ],
+          rowMapper: (row) => [
+            row.id,
+            row.first_name,
+            row.middle_name,
+            row.last_name,
+            row.agent_first_name,
+            row.agent_last_name,
+            row.type,
+            row.time_in,
+            row.time_out,
+            row.odometer_arrival,
+            row.odometer_departure,
+            row.photo_url,
+            row.notes,
+            row.reason,
+            row.status,
+            row.address,
+            row.latitude,
+            row.longitude,
+            row.created_at,
+          ],
+        });
+        break;
+      }
+
+      default:
+        throw new ValidationError('Invalid report type');
+    }
+
+    return c.body(csvData.content, 200, {
+      'Content-Type': csvData.mime_type,
+      'Content-Disposition': `attachment; filename="${csvData.filename}"`,
+    });
+  } catch (error) {
+    console.error('Export CSV error:', error);
+    throw new Error('Failed to export CSV');
   }
 });
 
