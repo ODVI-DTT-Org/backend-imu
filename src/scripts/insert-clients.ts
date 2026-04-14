@@ -25,7 +25,7 @@ const middleInitials = [
   'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'
 ];
 
-const productTypes = ['Salary Loan', 'Pension Loan', 'Emergency Loan', 'Business Loan'];
+const productTypes = ['BFP ACTIVE', 'BFP PENSION', 'PNP PENSION', 'NAPOLCOM', 'BFP STP'];
 const marketTypes = ['Public', 'Private', 'Government'];
 const pensionTypes = ['SSS', 'GSIS', 'PVAO'];
 const clientTypes = ['POTENTIAL', 'EXISTING'];

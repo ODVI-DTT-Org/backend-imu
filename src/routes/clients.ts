@@ -37,9 +37,10 @@ const createClientSchema = z.object({
   payroll_date: z.string().max(50).optional(),
   tenure: z.number().optional(),
   client_type: z.enum(['POTENTIAL', 'EXISTING']).default('POTENTIAL'),
-  product_type: z.string().max(100).optional(),
+  product_type: z.enum(['BFP ACTIVE', 'BFP PENSION', 'PNP PENSION', 'NAPOLCOM', 'BFP STP']).optional(),
   market_type: z.string().max(100).optional(),
   pension_type: z.string().max(100).optional(),
+  loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']).optional(),
   pan: z.string().max(50).optional(),
   facebook_link: z.string().max(500).optional(),
   remarks: z.string().max(1000).optional(),
@@ -121,6 +122,7 @@ function mapRowToClient(row: Record<string, any>) {
     product_type: row.product_type,
     market_type: row.market_type,
     pension_type: row.pension_type,
+    loan_type: row.loan_type,
     pan: row.pan,
     facebook_link: row.facebook_link,
     remarks: row.remarks,
@@ -1176,20 +1178,21 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
       `INSERT INTO clients (
         id, first_name, last_name, middle_name, birth_date, email, phone,
         agency_name, department, position, employment_status, payroll_date, tenure,
-        client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
+        client_type, product_type, market_type, pension_type, loan_type, pan, facebook_link, remarks,
         agency_id, user_id, is_starred,
         ext_name, fullname, full_address, account_code, account_number, rank,
         monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
         unit_code, pcni_acct_code, dob, g_company, g_status, status
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
+        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
       ) RETURNING *`,
       [
         validated.first_name, validated.last_name, validated.middle_name, validated.birth_date,
         validated.email, validated.phone, validated.agency_name, validated.department,
         validated.position, validated.employment_status, validated.payroll_date, validated.tenure,
         validated.client_type, validated.product_type, validated.market_type, validated.pension_type,
+        validated.loan_type,
         validated.pan, validated.facebook_link, validated.remarks, validated.agency_id,
         validated.user_id, validated.is_starred,
         validated.ext_name, validated.fullname, validated.full_address, validated.account_code,
@@ -2252,14 +2255,14 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
             `INSERT INTO clients (
               id, first_name, last_name, middle_name, birth_date, email, phone,
               agency_name, department, position, employment_status, payroll_date, tenure,
-              client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
+              client_type, product_type, market_type, pension_type, loan_type, pan, facebook_link, remarks,
               province, municipality, barangay, is_starred,
               ext_name, fullname, full_address, account_code, account_number, rank,
               monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
               unit_code, pcni_acct_code, dob, g_company, g_status, status
             ) VALUES (
               gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, false,
-              $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39
+              $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
             )`,
             [
               validatedClient.first_name,
@@ -2278,6 +2281,7 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
               validatedClient.product_type || null,
               validatedClient.market_type || null,
               validatedClient.pension_type || null,
+              validatedClient.loan_type || null,
               validatedClient.pan || null,
               validatedClient.facebook_link || null,
               validatedClient.remarks || null,
