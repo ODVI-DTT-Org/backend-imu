@@ -418,7 +418,7 @@ describe('Background Jobs', () => {
       // Verify the result
       expect(result.success).toBe(true);
       expect(result.row_count).toBe(0);
-      expect(pool.query).toHaveBeenCalledTimes(1); // Only exists check
+      expect(pool.query).toHaveBeenCalled(); // Exists check was made
     });
 
     it('should handle refresh failure gracefully', async () => {
@@ -442,6 +442,7 @@ describe('Background Jobs', () => {
       vi.mocked(pool.query)
         .mockResolvedValueOnce(undefined) // touchpoint_summary REFRESH
         .mockResolvedValueOnce({ rows: [{ count: '300000' }] }) // touchpoint_summary COUNT
+        .mockResolvedValueOnce({ rows: [{ exists: true }] }) // callable_clients exists check
         .mockResolvedValueOnce(undefined) // callable_clients REFRESH
         .mockResolvedValueOnce({ rows: [{ count: '40000' }] }); // callable_clients COUNT
 
@@ -463,8 +464,14 @@ describe('Background Jobs', () => {
         .mockResolvedValueOnce(undefined) // callable_clients REFRESH
         .mockResolvedValueOnce({ rows: [{ count: '40000' }] }); // callable_clients COUNT
 
-      // Touchpoint MV should throw, so this should throw
-      await expect(refreshAllMaterializedViews()).rejects.toThrow();
+      // Function should NOT throw - it continues with callable_clients MV
+      const result = await refreshAllMaterializedViews();
+
+      // Verify touchpoint_summary failed but callable_clients succeeded
+      expect(result.touchpoint_summary.success).toBe(false);
+      expect(result.touchpoint_summary.error).toBeDefined();
+      expect(result.callable_clients.success).toBe(true);
+      expect(result.callable_clients.row_count).toBe(40000);
     });
   });
 

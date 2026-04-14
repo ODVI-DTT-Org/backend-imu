@@ -55,6 +55,7 @@ import filtersRoutes from './routes/filters.js';
 import addressesRoutes from './routes/addresses.js';
 import phoneNumbersRoutes from './routes/phone-numbers.js';
 import cacheStatsRoutes from './routes/cache-stats.js';
+import healthRoutes from './routes/health.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
@@ -112,44 +113,8 @@ app.use('*', cors({
   maxAge: 86400,
 }));
 
-// Health check endpoint
-app.get('/api/health', async (c) => {
-  let dbStatus = 'unknown';
-  let s3Status = 'unknown';
-  let s3Details = {};
-
-  try {
-    const client = await pool.connect();
-    await client.query('SELECT 1');
-    client.release();
-    dbStatus = 'connected';
-  } catch {
-    dbStatus = 'disconnected';
-  }
-
-  // Check S3 connection
-  try {
-    const { storageService } = await import('./services/storage.js');
-    const s3Health = await storageService.checkS3Connection();
-    s3Status = s3Health.connected ? 'connected' : 'disconnected';
-    s3Details = s3Health.details || {};
-  } catch (error: any) {
-    s3Status = 'error';
-    s3Details = { error: error.message };
-  }
-
-  return c.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    database: dbStatus,
-    storage: {
-      provider: process.env.STORAGE_PROVIDER || 'local',
-      s3: s3Status,
-      ...s3Details,
-    },
-    version: '1.0.0',
-  });
-});
+// Mount health check routes (comprehensive health monitoring)
+app.route('/api/health', healthRoutes);
 
 // Debug endpoint to check and fix approvals table (admin only)
 app.get('/api/debug/approvals-table', authMiddleware, requireRole('admin'), async (c) => {
@@ -653,7 +618,14 @@ app.get('/', (c) => {
     name: 'IMU Backend API',
     version: '1.0.0',
     endpoints: {
-      health: '/api/health',
+      health: {
+        overall: '/api/health',
+        database: '/api/health/database',
+        cache: '/api/health/cache',
+        materializedViews: '/api/health/mv',
+        ready: '/api/health/ready',
+        live: '/api/health/live',
+      },
       auth: '/api/auth',
       upload: '/api/upload',
       clients: '/api/clients',

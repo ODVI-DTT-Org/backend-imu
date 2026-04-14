@@ -12,6 +12,21 @@
  */
 
 import { pool } from '../db/index.js';
+import { retryWithBackoff, CircuitBreaker } from '../utils/retry.js';
+
+/**
+ * Circuit breakers for MV refresh operations
+ * Prevents cascade failures when database is unavailable
+ */
+const touchpointSummaryMVBreaker = new CircuitBreaker(
+  5, // Open circuit after 5 consecutive failures
+  60000 // Close circuit after 1 minute
+);
+
+const callableClientsMVBreaker = new CircuitBreaker(
+  5, // Open circuit after 5 consecutive failures
+  60000 // Close circuit after 1 minute
+);
 
 /**
  * Materialized view refresh statistics
@@ -27,6 +42,7 @@ export interface MVRefreshStats {
 /**
  * Refresh the client_touchpoint_summary_mv materialized view
  * Uses CONCURRENTLY option to allow reads during refresh
+ * Includes retry logic with exponential backoff for transient failures
  * @returns Refresh statistics
  */
 export async function refreshTouchpointSummaryMV(): Promise<MVRefreshStats> {
@@ -38,9 +54,10 @@ export async function refreshTouchpointSummaryMV(): Promise<MVRefreshStats> {
     refreshed_at: new Date().toISOString(),
   };
 
-  try {
-    console.log('[MVRefresh] Starting materialized view refresh');
+  console.log('[MVRefresh] Starting materialized view refresh with retry logic');
 
+  // Retry configuration for MV refresh
+  const retryResult = await retryWithBackoff(async () => {
     // Refresh the materialized view with CONCURRENTLY option
     // This allows reads during refresh (requires unique index)
     await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY client_touchpoint_summary_mv');
@@ -49,25 +66,56 @@ export async function refreshTouchpointSummaryMV(): Promise<MVRefreshStats> {
     const countResult = await pool.query('SELECT COUNT(*) as count FROM client_touchpoint_summary_mv');
     stats.row_count = parseInt(countResult.rows[0].count);
     stats.success = true;
-    stats.duration_ms = Date.now() - startTime;
 
     console.log('[MVRefresh] Materialized view refreshed successfully:', {
       row_count: stats.row_count,
-      duration_ms: stats.duration_ms,
+      duration_ms: Date.now() - startTime,
     });
 
     return stats;
-  } catch (error) {
+  }, {
+    maxRetries: 3,
+    baseDelay: 1000, // Start with 1 second delay
+    maxDelay: 10000, // Max 10 second delay
+    jitter: true,
+    shouldRetry: (error, attempt) => {
+      // Retry on transient errors
+      const errorMessage = error.message.toLowerCase();
+      const isTransientError =
+        errorMessage.includes('connection') ||
+        errorMessage.includes('timeout') ||
+        errorMessage.includes('temporary') ||
+        errorMessage.includes('deadlock') ||
+        errorMessage.includes('could not serialize') ||
+        errorMessage.includes('database is starting up');
+
+      if (!isTransientError) {
+        console.error('[MVRefresh] Non-transient error, not retrying:', {
+          error: error.message,
+          attempt,
+        });
+      }
+
+      return isTransientError;
+    },
+  });
+
+  if (retryResult.success) {
     stats.duration_ms = Date.now() - startTime;
-    stats.error = error instanceof Error ? error.message : 'Unknown error';
-
-    console.error('[MVRefresh] Materialized view refresh failed:', {
-      error: stats.error,
-      duration_ms: stats.duration_ms,
-    });
-
-    throw error;
+    return stats;
   }
+
+  // All retries failed
+  stats.duration_ms = Date.now() - startTime;
+  stats.error = retryResult.error?.message || 'Unknown error after retries';
+
+  console.error('[MVRefresh] Materialized view refresh failed after retries:', {
+    error: stats.error,
+    attempts: retryResult.attempts,
+    totalDurationMs: retryResult.totalDurationMs,
+  });
+
+  throw retryResult.error || new Error(stats.error);
 }
 
 /**
@@ -113,6 +161,7 @@ export async function isMVRefreshNeeded(): Promise<boolean> {
  * Refresh the callable_clients_mv materialized view
  * Uses CONCURRENTLY option to allow reads during refresh
  * This MV is used for the hybrid query optimization (90% of requests)
+ * Includes retry logic with exponential backoff and circuit breaker
  * @returns Refresh statistics
  */
 export async function refreshCallableClientsMV(): Promise<MVRefreshStats> {
@@ -124,39 +173,75 @@ export async function refreshCallableClientsMV(): Promise<MVRefreshStats> {
     refreshed_at: new Date().toISOString(),
   };
 
+  console.log('[MVRefresh] Starting callable_clients_mv refresh with retry logic');
+
   try {
-    console.log('[MVRefresh] Starting callable_clients_mv refresh');
+    // Use circuit breaker to prevent cascade failures
+    await callableClientsMVBreaker.execute(async () => {
+      // Check if MV exists first
+      const mvExistsResult = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables
+          WHERE table_name = 'callable_clients_mv'
+        ) as exists
+      `);
 
-    // Check if MV exists first
-    const mvExistsResult = await pool.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables
-        WHERE table_name = 'callable_clients_mv'
-      ) as exists
-    `);
+      if (!mvExistsResult.rows[0].exists) {
+        console.log('[MVRefresh] callable_clients_mv does not exist, skipping refresh');
+        stats.success = true;
+        stats.duration_ms = Date.now() - startTime;
+        return;
+      }
 
-    if (!mvExistsResult.rows[0].exists) {
-      console.log('[MVRefresh] callable_clients_mv does not exist, skipping refresh');
-      stats.success = true;
-      stats.duration_ms = Date.now() - startTime;
-      return stats;
-    }
+      // Retry configuration for MV refresh
+      const retryResult = await retryWithBackoff(async () => {
+        // Refresh the materialized view with CONCURRENTLY option
+        // This allows reads during refresh (requires unique index)
+        await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY callable_clients_mv');
 
-    // Refresh the materialized view with CONCURRENTLY option
-    // This allows reads during refresh (requires unique index)
-    await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY callable_clients_mv');
+        // Get row count after refresh
+        const countResult = await pool.query('SELECT COUNT(*) as count FROM callable_clients_mv');
+        stats.row_count = parseInt(countResult.rows[0].count);
+        stats.success = true;
 
-    // Get row count after refresh
-    const countResult = await pool.query('SELECT COUNT(*) as count FROM callable_clients_mv');
-    stats.row_count = parseInt(countResult.rows[0].count);
-    stats.success = true;
-    stats.duration_ms = Date.now() - startTime;
+        console.log('[MVRefresh] callable_clients_mv refreshed successfully:', {
+          row_count: stats.row_count,
+          duration_ms: Date.now() - startTime,
+        });
 
-    console.log('[MVRefresh] callable_clients_mv refreshed successfully:', {
-      row_count: stats.row_count,
-      duration_ms: stats.duration_ms,
+        return stats;
+      }, {
+        maxRetries: 3,
+        baseDelay: 1000,
+        maxDelay: 10000,
+        jitter: true,
+        shouldRetry: (error, attempt) => {
+          const errorMessage = error.message.toLowerCase();
+          const isTransientError =
+            errorMessage.includes('connection') ||
+            errorMessage.includes('timeout') ||
+            errorMessage.includes('temporary') ||
+            errorMessage.includes('deadlock') ||
+            errorMessage.includes('could not serialize') ||
+            errorMessage.includes('database is starting up');
+
+          if (!isTransientError) {
+            console.error('[MVRefresh] Non-transient error, not retrying:', {
+              error: error.message,
+              attempt,
+            });
+          }
+
+          return isTransientError;
+        },
+      });
+
+      if (!retryResult.success) {
+        throw retryResult.error || new Error('Refresh failed after retries');
+      }
     });
 
+    stats.duration_ms = Date.now() - startTime;
     return stats;
   } catch (error) {
     stats.duration_ms = Date.now() - startTime;
@@ -165,6 +250,7 @@ export async function refreshCallableClientsMV(): Promise<MVRefreshStats> {
     console.error('[MVRefresh] callable_clients_mv refresh failed:', {
       error: stats.error,
       duration_ms: stats.duration_ms,
+      circuitBreakerState: callableClientsMVBreaker.getState(),
     });
 
     // Don't throw error for callable_clients_mv refresh failure
@@ -176,23 +262,75 @@ export async function refreshCallableClientsMV(): Promise<MVRefreshStats> {
 /**
  * Refresh both materialized views in sequence
  * Calls refreshTouchpointSummaryMV first, then refreshCallableClientsMV
+ * Uses circuit breakers to prevent cascade failures
  * @returns Combined refresh statistics
  */
 export async function refreshAllMaterializedViews(): Promise<{
   touchpoint_summary: MVRefreshStats;
   callable_clients: MVRefreshStats;
 }> {
-  console.log('[MVRefresh] Starting full materialized view refresh sequence');
+  console.log('[MVRefresh] Starting full materialized view refresh sequence with circuit breakers');
+
+  // Initialize with default values to avoid TypeScript errors
+  let touchpointSummaryStats: MVRefreshStats = {
+    success: false,
+    duration_ms: 0,
+    row_count: 0,
+    refreshed_at: new Date().toISOString(),
+  };
+  let callableClientsStats: MVRefreshStats = {
+    success: false,
+    duration_ms: 0,
+    row_count: 0,
+    refreshed_at: new Date().toISOString(),
+  };
 
   // Refresh touchpoint summary MV first (required by callable_clients MV)
-  const touchpointSummaryStats = await refreshTouchpointSummaryMV();
+  try {
+    await touchpointSummaryMVBreaker.execute(async () => {
+      touchpointSummaryStats = await refreshTouchpointSummaryMV();
+    });
+  } catch (error) {
+    console.error('[MVRefresh] Touchpoint summary MV refresh failed, circuit breaker opened:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      circuitBreakerState: touchpointSummaryMVBreaker.getState(),
+    });
+
+    touchpointSummaryStats = {
+      success: false,
+      duration_ms: 0,
+      row_count: 0,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      refreshed_at: new Date().toISOString(),
+    };
+  }
 
   // Then refresh callable clients MV (depends on touchpoint summary MV)
-  const callableClientsStats = await refreshCallableClientsMV();
+  // Note: We always try to refresh callable_clients MV even if touchpoint_summary failed
+  try {
+    await callableClientsMVBreaker.execute(async () => {
+      callableClientsStats = await refreshCallableClientsMV();
+    });
+  } catch (error) {
+    console.error('[MVRefresh] Callable clients MV refresh failed, circuit breaker opened:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      circuitBreakerState: callableClientsMVBreaker.getState(),
+    });
+
+    callableClientsStats = {
+      success: false,
+      duration_ms: 0,
+      row_count: 0,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      refreshed_at: new Date().toISOString(),
+    };
+  }
 
   console.log('[MVRefresh] Full refresh sequence completed:', {
     touchpoint_summary: touchpointSummaryStats.row_count,
     callable_clients: callableClientsStats.row_count,
+    touchpoint_success: touchpointSummaryStats.success,
+    callable_success: callableClientsStats.success,
     total_duration_ms: touchpointSummaryStats.duration_ms + callableClientsStats.duration_ms,
   });
 
