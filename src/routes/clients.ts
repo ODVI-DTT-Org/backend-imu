@@ -1240,10 +1240,11 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         agency_id, user_id, is_starred,
         ext_name, fullname, full_address, account_code, account_number, rank,
         monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
-        unit_code, pcni_acct_code, dob, g_company, g_status, status
+        unit_code, pcni_acct_code, dob, g_company, g_status, status,
+        created_by
       ) VALUES (
         gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
+        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41
       ) RETURNING *`,
       [
         validated.first_name, validated.last_name, validated.middle_name, validated.birth_date,
@@ -1257,7 +1258,8 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         validated.account_number, validated.rank, validated.monthly_pension_amount,
         validated.monthly_pension_gross, validated.atm_number, validated.applicable_republic_act,
         validated.unit_code, validated.pcni_acct_code, validated.dob, validated.g_company,
-        validated.g_status, validated.status
+        validated.g_status, validated.status,
+        user.sub
       ]
     );
 
@@ -1510,8 +1512,8 @@ clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), a
       throw new NotFoundError('Client');
     }
 
-    // Soft delete: Set deleted_at timestamp instead of deleting the record
-    await pool.query('UPDATE clients SET deleted_at = NOW() WHERE id = $1', [id]);
+    // Soft delete: Set deleted_at timestamp and deleted_by user instead of deleting the record
+    await pool.query('UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2', [user.sub, id]);
     return c.json({ message: 'Client deleted successfully' });
   } catch (error) {
     console.error('Delete client error:', error);
@@ -2317,10 +2319,11 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
               province, municipality, barangay, is_starred,
               ext_name, fullname, full_address, account_code, account_number, rank,
               monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
-              unit_code, pcni_acct_code, dob, g_company, g_status, status
+              unit_code, pcni_acct_code, dob, g_company, g_status, status,
+              created_by
             ) VALUES (
               gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, false,
-              $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40
+              $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41
             )`,
             [
               validatedClient.first_name,
@@ -2359,6 +2362,7 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
               validatedClient.g_company || null,
               validatedClient.g_status || null,
               validatedClient.status || 'active',
+              user.sub
             ]
           );
 

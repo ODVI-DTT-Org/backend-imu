@@ -52,20 +52,30 @@ SELECT
 FROM clients c
 LEFT JOIN (
   -- Subquery: Aggregate touchpoint data per client
+  WITH touchpoint_data AS (
+    SELECT
+      client_id,
+      COUNT(*) AS total_count,
+      COUNT(*) FILTER (WHERE status = 'Completed') AS completed_count,
+      MAX(date) AS last_touchpoint_date
+    FROM touchpoints
+    GROUP BY client_id
+  ),
+  last_touchpoint AS (
+    SELECT DISTINCT
+      t.client_id,
+      t.type AS last_touchpoint_type,
+      ROW_NUMBER() OVER (PARTITION BY t.client_id ORDER BY t.date DESC) as rn
+    FROM touchpoints t
+  )
   SELECT
-    client_id,
-    COUNT(*) AS total_count,
-    COUNT(*) FILTER (WHERE status = 'Completed') AS completed_count,
-    -- Get most recent touchpoint details
-    first_value(type) OVER (
-      PARTITION BY client_id
-      ORDER BY date DESC
-      ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-    ) AS last_touchpoint_type,
-    MAX(date) AS last_touchpoint_date
-  FROM touchpoints
-  WHERE deleted_at IS NULL
-  GROUP BY client_id
+    td.client_id,
+    td.total_count,
+    td.completed_count,
+    lt.last_touchpoint_type,
+    td.last_touchpoint_date
+  FROM touchpoint_data td
+  LEFT JOIN last_touchpoint lt ON lt.client_id = td.client_id AND lt.rn = 1
 ) tp ON tp.client_id = c.id
 WHERE c.deleted_at IS NULL;
 
