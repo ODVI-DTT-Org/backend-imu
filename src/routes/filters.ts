@@ -32,11 +32,28 @@ const LABEL_MAP: Record<string, string> = {
   'POTENTIAL': 'Potential',
   'EXISTING': 'Existing',
 
-  // Product types
-  'Pension': 'Pension',
-  'Salary': 'Salary',
-  'Business': 'Business',
-  'Emergency': 'Emergency',
+  // Product types (SSS Pensioner, GSIS Pensioner, Private)
+  'SSS_PENSIONER': 'SSS Pensioner',
+  'GSIS_PENSIONER': 'GSIS Pensioner',
+  'PRIVATE': 'Private',
+
+  // Loan types
+  'PENSION': 'Pension',
+  'SALARY': 'Salary',
+  'BUSINESS': 'Business',
+  'EMERGENCY': 'Emergency',
+
+  // Pension types
+  'OLD_AGE': 'Old Age',
+  'DISABILITY': 'Disability',
+  'RETIREMENT': 'Retirement',
+  'SURVIVOR': 'Survivor',
+  'CARER': 'Carer',
+
+  // Market types
+  'RESIDENTIAL': 'Residential',
+  'COMMERCIAL': 'Commercial',
+  'INDUSTRIAL': 'Industrial',
 
   // User roles
   'admin': 'Admin',
@@ -77,7 +94,7 @@ function formatLabel(rawValue: string | null): string {
  * Prevents SQL injection by whitelisting valid combinations
  */
 const ALLOWED_FILTERS: Record<string, readonly string[]> = {
-  clients: ['client_type', 'product_type', 'market_type', 'pension_type'],
+  clients: ['client_type', 'product_type', 'market_type', 'pension_type', 'loan_type'],
   touchpoints: ['type', 'status', 'reason'],
   users: ['role', 'status'],
   itineraries: ['status'],
@@ -167,7 +184,8 @@ filtersRouter.get('/values', async (c) => {
       const allLabel = `All ${column.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`;
       items.unshift({
         value: 'all',
-        label: allLabel
+        label: allLabel,
+        ...(withCounts && { count: 0 }) // Add count when withCounts is true
       });
     }
 
@@ -296,7 +314,8 @@ filtersRouter.get('/batch', async (c) => {
           const allLabel = `All ${filter.column.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}`;
           items.unshift({
             value: 'all',
-            label: allLabel
+            label: allLabel,
+            ...(withCounts && { count: 0 }) // Add count when withCounts is true
           });
         }
 
