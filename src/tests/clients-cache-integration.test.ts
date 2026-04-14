@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { app } from '../index';
-import { pool } from '../lib/db';
+import { pool } from '../db/index.js';
 import { getClientsCacheService, resetClientsCacheService } from '../services/cache/clients-cache.js';
 import { getClientCacheInvalidation, resetClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 
