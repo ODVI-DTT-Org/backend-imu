@@ -108,3 +108,96 @@ export async function isMVRefreshNeeded(): Promise<boolean> {
   const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
   return lastRefresh < tenMinutesAgo;
 }
+
+/**
+ * Refresh the callable_clients_mv materialized view
+ * Uses CONCURRENTLY option to allow reads during refresh
+ * This MV is used for the hybrid query optimization (90% of requests)
+ * @returns Refresh statistics
+ */
+export async function refreshCallableClientsMV(): Promise<MVRefreshStats> {
+  const startTime = Date.now();
+  const stats: MVRefreshStats = {
+    success: false,
+    duration_ms: 0,
+    row_count: 0,
+    refreshed_at: new Date().toISOString(),
+  };
+
+  try {
+    console.log('[MVRefresh] Starting callable_clients_mv refresh');
+
+    // Check if MV exists first
+    const mvExistsResult = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_name = 'callable_clients_mv'
+      ) as exists
+    `);
+
+    if (!mvExistsResult.rows[0].exists) {
+      console.log('[MVRefresh] callable_clients_mv does not exist, skipping refresh');
+      stats.success = true;
+      stats.duration_ms = Date.now() - startTime;
+      return stats;
+    }
+
+    // Refresh the materialized view with CONCURRENTLY option
+    // This allows reads during refresh (requires unique index)
+    await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY callable_clients_mv');
+
+    // Get row count after refresh
+    const countResult = await pool.query('SELECT COUNT(*) as count FROM callable_clients_mv');
+    stats.row_count = parseInt(countResult.rows[0].count);
+    stats.success = true;
+    stats.duration_ms = Date.now() - startTime;
+
+    console.log('[MVRefresh] callable_clients_mv refreshed successfully:', {
+      row_count: stats.row_count,
+      duration_ms: stats.duration_ms,
+    });
+
+    return stats;
+  } catch (error) {
+    stats.duration_ms = Date.now() - startTime;
+    stats.error = error instanceof Error ? error.message : 'Unknown error';
+
+    console.error('[MVRefresh] callable_clients_mv refresh failed:', {
+      error: stats.error,
+      duration_ms: stats.duration_ms,
+    });
+
+    // Don't throw error for callable_clients_mv refresh failure
+    // It's an optimization, not critical for functionality
+    return stats;
+  }
+}
+
+/**
+ * Refresh both materialized views in sequence
+ * Calls refreshTouchpointSummaryMV first, then refreshCallableClientsMV
+ * @returns Combined refresh statistics
+ */
+export async function refreshAllMaterializedViews(): Promise<{
+  touchpoint_summary: MVRefreshStats;
+  callable_clients: MVRefreshStats;
+}> {
+  console.log('[MVRefresh] Starting full materialized view refresh sequence');
+
+  // Refresh touchpoint summary MV first (required by callable_clients MV)
+  const touchpointSummaryStats = await refreshTouchpointSummaryMV();
+
+  // Then refresh callable clients MV (depends on touchpoint summary MV)
+  const callableClientsStats = await refreshCallableClientsMV();
+
+  console.log('[MVRefresh] Full refresh sequence completed:', {
+    touchpoint_summary: touchpointSummaryStats.row_count,
+    callable_clients: callableClientsStats.row_count,
+    total_duration_ms: touchpointSummaryStats.duration_ms + callableClientsStats.duration_ms,
+  });
+
+  return {
+    touchpoint_summary: touchpointSummaryStats,
+    callable_clients: callableClientsStats,
+  };
+}

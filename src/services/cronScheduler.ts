@@ -9,7 +9,7 @@
 import cron from 'node-cron';
 import { refreshActionItemsView } from './actionItemsRefreshService.js';
 import { warmAllAssignedClientsCache } from './cache-warming.js';
-import { refreshTouchpointSummaryMV } from './touchpoint-mv-refresh.js';
+import { refreshTouchpointSummaryMV, refreshAllMaterializedViews } from './touchpoint-mv-refresh.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -25,7 +25,7 @@ const SCHEDULED_TASKS = {
   // Refresh touchpoint summary materialized view every 5 minutes
   touchpointMVRefresh: {
     schedule: '*/5 * * * *', // Every 5 minutes
-    description: 'Refresh client_touchpoint_summary_mv materialized view',
+    description: 'Refresh all client-related materialized views (touchpoint_summary + callable_clients)',
     task: 'touchpointMVRefresh',
   },
   // Warm assigned clients cache daily at 6 AM
@@ -132,8 +132,14 @@ function startTouchpointMVRefreshJob(): void {
   const job = cron.schedule(task.schedule, async () => {
     try {
       logger.info('scheduler', `Executing scheduled task: ${task.task}`);
-      await refreshTouchpointSummaryMV();
-      logger.info('scheduler', `Successfully executed scheduled task: ${task.task}`);
+      const stats = await refreshAllMaterializedViews();
+      logger.info('scheduler', `Successfully executed scheduled task: ${task.task}`, {
+        stats: {
+          touchpoint_summary: stats.touchpoint_summary.row_count,
+          callable_clients: stats.callable_clients.row_count,
+          total_duration_ms: stats.touchpoint_summary.duration_ms + stats.callable_clients.duration_ms,
+        },
+      });
     } catch (error: any) {
       logger.error('scheduler', `Failed to execute scheduled task: ${task.task}`, {
         error: error.message,
@@ -228,7 +234,7 @@ export async function triggerTask(taskName: string): Promise<{
         await refreshActionItemsView();
         break;
       case 'touchpointMVRefresh':
-        result = await refreshTouchpointSummaryMV();
+        result = await refreshAllMaterializedViews();
         break;
       case 'cacheWarming':
         result = await warmAllAssignedClientsCache();
