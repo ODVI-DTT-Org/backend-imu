@@ -19,6 +19,8 @@ import {
   getDateRangeCondition,
   validateDateRange,
   getRecordCount,
+  getReportExportConfig,
+  getReportQuery,
 } from '../utils/csv-export.js';
 
 const reports = new Hono();
@@ -1020,57 +1022,9 @@ reports.get('/preview-count', authMiddleware, requirePermission('reports', 'read
       throw new AuthorizationError('Unauthorized');
     }
 
-    let countQuery: string;
-    let params: any[] = [];
-
-    switch (reportType) {
-      case 'releases': {
-        let whereClause = 'WHERE 1=1';
-        let paramIndex = 1;
-
-        if (startDate || endDate) {
-          const dateCondition = getDateRangeCondition(startDate, endDate, 'r.created_at');
-          whereClause += ` AND ${dateCondition.condition}`;
-          params.push(...dateCondition.params);
-          paramIndex += dateCondition.params.length;
-        }
-
-        countQuery = `
-          SELECT COUNT(*) as count
-          FROM releases r
-          JOIN clients c ON c.id = r.client_id
-          JOIN users u ON u.id = r.user_id
-          ${whereClause}
-        `;
-        break;
-      }
-
-      case 'visits': {
-        let whereClause = 'WHERE 1=1';
-        let paramIndex = 1;
-
-        if (startDate || endDate) {
-          const dateCondition = getDateRangeCondition(startDate, endDate, 'v.created_at');
-          whereClause += ` AND ${dateCondition.condition}`;
-          params.push(...dateCondition.params);
-          paramIndex += dateCondition.params.length;
-        }
-
-        countQuery = `
-          SELECT COUNT(*) as count
-          FROM visits v
-          JOIN clients c ON c.id = v.client_id
-          JOIN users u ON u.id = v.user_id
-          ${whereClause}
-        `;
-        break;
-      }
-
-      default:
-        throw new ValidationError('Invalid report type');
-    }
-
-    const count = await getRecordCount(countQuery, params);
+    // Get report query using helper
+    const { query, params } = getReportQuery(reportType as 'releases' | 'visits', startDate, endDate);
+    const count = await getRecordCount(query, params);
 
     return c.json({
       type: reportType,
@@ -1104,175 +1058,10 @@ reports.get('/export/csv', authMiddleware, requirePermission('reports', 'export'
       throw new AuthorizationError('Unauthorized');
     }
 
-    let csvData: { filename: string; content: string; mime_type: string };
-
-    switch (reportType) {
-      case 'releases': {
-        let whereClause = 'WHERE 1=1';
-        const params: any[] = [];
-        let paramIndex = 1;
-
-        if (startDate || endDate) {
-          const dateCondition = getDateRangeCondition(startDate, endDate, 'r.created_at');
-          whereClause += ` AND ${dateCondition.condition}`;
-          params.push(...dateCondition.params);
-          paramIndex += dateCondition.params.length;
-        }
-
-        const query = `
-          SELECT
-            r.id,
-            c.first_name,
-            c.middle_name,
-            c.last_name,
-            u.first_name as agent_first_name,
-            u.last_name as agent_last_name,
-            r.product_type,
-            r.loan_type,
-            r.amount,
-            r.status,
-            r.approval_notes,
-            r.approved_by,
-            r.approved_at,
-            r.created_at
-          FROM releases r
-          JOIN clients c ON c.id = r.client_id
-          JOIN users u ON u.id = r.user_id
-          ${whereClause}
-          ORDER BY r.created_at DESC
-          LIMIT 10000
-        `;
-
-        csvData = await exportToCsv(query, params, {
-          filename: `releases_${startDate || 'all'}_${endDate || 'all'}`,
-          headers: [
-            'ID',
-            'Client First Name',
-            'Client Middle Name',
-            'Client Last Name',
-            'Agent First Name',
-            'Agent Last Name',
-            'Product Type',
-            'Loan Type',
-            'Amount',
-            'Status',
-            'Approval Notes',
-            'Approved By',
-            'Approved At',
-            'Created At',
-          ],
-          rowMapper: (row) => [
-            row.id,
-            row.first_name,
-            row.middle_name,
-            row.last_name,
-            row.agent_first_name,
-            row.agent_last_name,
-            row.product_type,
-            row.loan_type,
-            row.amount,
-            row.status,
-            row.approval_notes,
-            row.approved_by,
-            row.approved_at,
-            row.created_at,
-          ],
-        });
-        break;
-      }
-
-      case 'visits': {
-        let whereClause = 'WHERE 1=1';
-        const params: any[] = [];
-        let paramIndex = 1;
-
-        if (startDate || endDate) {
-          const dateCondition = getDateRangeCondition(startDate, endDate, 'v.created_at');
-          whereClause += ` AND ${dateCondition.condition}`;
-          params.push(...dateCondition.params);
-          paramIndex += dateCondition.params.length;
-        }
-
-        const query = `
-          SELECT
-            v.id,
-            c.first_name,
-            c.middle_name,
-            c.last_name,
-            u.first_name as agent_first_name,
-            u.last_name as agent_last_name,
-            v.type,
-            v.time_in,
-            v.time_out,
-            v.odometer_arrival,
-            v.odometer_departure,
-            v.photo_url,
-            v.notes,
-            v.reason,
-            v.status,
-            v.address,
-            v.latitude,
-            v.longitude,
-            v.created_at
-          FROM visits v
-          JOIN clients c ON c.id = v.client_id
-          JOIN users u ON u.id = v.user_id
-          ${whereClause}
-          ORDER BY v.created_at DESC
-          LIMIT 10000
-        `;
-
-        csvData = await exportToCsv(query, params, {
-          filename: `visits_${startDate || 'all'}_${endDate || 'all'}`,
-          headers: [
-            'ID',
-            'Client First Name',
-            'Client Middle Name',
-            'Client Last Name',
-            'Agent First Name',
-            'Agent Last Name',
-            'Type',
-            'Time In',
-            'Time Out',
-            'Odometer Arrival',
-            'Odometer Departure',
-            'Photo URL',
-            'Notes',
-            'Reason',
-            'Status',
-            'Address',
-            'Latitude',
-            'Longitude',
-            'Created At',
-          ],
-          rowMapper: (row) => [
-            row.id,
-            row.first_name,
-            row.middle_name,
-            row.last_name,
-            row.agent_first_name,
-            row.agent_last_name,
-            row.type,
-            row.time_in,
-            row.time_out,
-            row.odometer_arrival,
-            row.odometer_departure,
-            row.photo_url,
-            row.notes,
-            row.reason,
-            row.status,
-            row.address,
-            row.latitude,
-            row.longitude,
-            row.created_at,
-          ],
-        });
-        break;
-      }
-
-      default:
-        throw new ValidationError('Invalid report type');
-    }
+    // Get report query and config using helpers
+    const { query, params } = getReportQuery(reportType as 'releases' | 'visits', startDate, endDate);
+    const config = getReportExportConfig(reportType as 'releases' | 'visits', startDate, endDate);
+    const csvData = await exportToCsv(query, params, config);
 
     return c.body(csvData.content, 200, {
       'Content-Type': csvData.mime_type,

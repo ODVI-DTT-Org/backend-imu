@@ -190,3 +190,189 @@ export async function getRecordCount(
   const result = await pool.query(countQuery, params);
   return parseInt(result.rows[0].count);
 }
+
+/**
+ * Report export configuration
+ */
+export interface ReportExportConfig {
+  filename: string;
+  headers: string[];
+  rowMapper: (row: any) => string[];
+}
+
+/**
+ * Get report export configuration by type
+ */
+export function getReportExportConfig(
+  reportType: 'releases' | 'visits',
+  startDate?: string,
+  endDate?: string
+): ReportExportConfig {
+  const dateSuffix = `${startDate || 'all'}_${endDate || 'all'}`;
+
+  switch (reportType) {
+    case 'releases':
+      return {
+        filename: `releases_${dateSuffix}`,
+        headers: [
+          'ID',
+          'Client First Name',
+          'Client Middle Name',
+          'Client Last Name',
+          'Agent First Name',
+          'Agent Last Name',
+          'Product Type',
+          'Loan Type',
+          'Amount',
+          'Status',
+          'Approval Notes',
+          'Approved By',
+          'Approved At',
+          'Created At',
+        ],
+        rowMapper: (row) => [
+          row.id,
+          row.first_name,
+          row.middle_name,
+          row.last_name,
+          row.agent_first_name,
+          row.agent_last_name,
+          row.product_type,
+          row.loan_type,
+          row.amount,
+          row.status,
+          row.approval_notes,
+          row.approved_by,
+          row.approved_at,
+          row.created_at,
+        ],
+      };
+
+    case 'visits':
+      return {
+        filename: `visits_${dateSuffix}`,
+        headers: [
+          'ID',
+          'Client First Name',
+          'Client Middle Name',
+          'Client Last Name',
+          'Agent First Name',
+          'Agent Last Name',
+          'Type',
+          'Time In',
+          'Time Out',
+          'Odometer Arrival',
+          'Odometer Departure',
+          'Photo URL',
+          'Notes',
+          'Reason',
+          'Status',
+          'Address',
+          'Latitude',
+          'Longitude',
+          'Created At',
+        ],
+        rowMapper: (row) => [
+          row.id,
+          row.first_name,
+          row.middle_name,
+          row.last_name,
+          row.agent_first_name,
+          row.agent_last_name,
+          row.type,
+          row.time_in,
+          row.time_out,
+          row.odometer_arrival,
+          row.odometer_departure,
+          row.photo_url,
+          row.notes,
+          row.reason,
+          row.status,
+          row.address,
+          row.latitude,
+          row.longitude,
+          row.created_at,
+        ],
+      };
+
+    default:
+      throw new Error('Invalid report type');
+  }
+}
+
+/**
+ * Get report query by type
+ */
+export function getReportQuery(
+  reportType: 'releases' | 'visits',
+  startDate?: string,
+  endDate?: string
+): { query: string; params: any[] } {
+  const dateCondition = getDateRangeCondition(startDate, endDate);
+
+  switch (reportType) {
+    case 'releases':
+      return {
+        query: `
+          SELECT
+            r.id,
+            c.first_name,
+            c.middle_name,
+            c.last_name,
+            u.first_name as agent_first_name,
+            u.last_name as agent_last_name,
+            r.product_type,
+            r.loan_type,
+            r.amount,
+            r.status,
+            r.approval_notes,
+            r.approved_by,
+            r.approved_at,
+            r.created_at
+          FROM releases r
+          JOIN clients c ON c.id = r.client_id
+          JOIN users u ON u.id = r.user_id
+          ${dateCondition.condition ? `WHERE ${dateCondition.condition}` : 'WHERE 1=1'}
+          ORDER BY r.created_at DESC
+          LIMIT 10000
+        `,
+        params: dateCondition.params,
+      };
+
+    case 'visits':
+      return {
+        query: `
+          SELECT
+            v.id,
+            c.first_name,
+            c.middle_name,
+            c.last_name,
+            u.first_name as agent_first_name,
+            u.last_name as agent_last_name,
+            v.type,
+            v.time_in,
+            v.time_out,
+            v.odometer_arrival,
+            v.odometer_departure,
+            v.photo_url,
+            v.notes,
+            v.reason,
+            v.status,
+            v.address,
+            v.latitude,
+            v.longitude,
+            v.created_at
+          FROM visits v
+          JOIN clients c ON c.id = v.client_id
+          JOIN users u ON u.id = v.user_id
+          ${dateCondition.condition ? `WHERE ${dateCondition.condition}` : 'WHERE 1=1'}
+          ORDER BY v.created_at DESC
+          LIMIT 10000
+        `,
+        params: dateCondition.params,
+      };
+
+    default:
+      throw new Error('Invalid report type');
+  }
+}
