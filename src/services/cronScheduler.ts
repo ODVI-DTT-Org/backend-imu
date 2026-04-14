@@ -8,6 +8,8 @@
 
 import cron from 'node-cron';
 import { refreshActionItemsView } from './actionItemsRefreshService.js';
+import { warmAllAssignedClientsCache } from './cache-warming.js';
+import { refreshTouchpointSummaryMV } from './touchpoint-mv-refresh.js';
 import { logger } from '../utils/logger.js';
 
 /**
@@ -20,13 +22,18 @@ const SCHEDULED_TASKS = {
     description: 'Refresh action_items materialized view',
     task: 'actionItemsRefresh',
   },
-  // Add more scheduled tasks here as needed
-  // Example: daily cleanup at midnight
-  // dailyCleanup: {
-  //   schedule: '0 0 * * *',
-  //   description: 'Daily cleanup task',
-  //   task: 'dailyCleanup',
-  // },
+  // Refresh touchpoint summary materialized view every 5 minutes
+  touchpointMVRefresh: {
+    schedule: '*/5 * * * *', // Every 5 minutes
+    description: 'Refresh client_touchpoint_summary_mv materialized view',
+    task: 'touchpointMVRefresh',
+  },
+  // Warm assigned clients cache daily at 6 AM
+  cacheWarming: {
+    schedule: '0 6 * * *', // Daily at 6:00 AM
+    description: 'Warm assigned clients cache for all Caravan/Tele users',
+    task: 'cacheWarming',
+  },
 };
 
 /**
@@ -45,6 +52,12 @@ export function startScheduler(): void {
 
   // Start action items refresh job
   startActionItemsRefreshJob();
+
+  // Start touchpoint MV refresh job
+  startTouchpointMVRefreshJob();
+
+  // Start cache warming job
+  startCacheWarmingJob();
 
   logger.info('scheduler', 'Cron job scheduler started successfully', {
     activeJobs: Array.from(activeJobs.keys()),
@@ -105,6 +118,79 @@ function startActionItemsRefreshJob(): void {
 }
 
 /**
+ * Start the touchpoint materialized view refresh job
+ */
+function startTouchpointMVRefreshJob(): void {
+  const task = SCHEDULED_TASKS.touchpointMVRefresh;
+
+  logger.info('scheduler', `Starting scheduled task: ${task.task}`, {
+    schedule: task.schedule,
+    description: task.description,
+  });
+
+  // Create and start the cron job
+  const job = cron.schedule(task.schedule, async () => {
+    try {
+      logger.info('scheduler', `Executing scheduled task: ${task.task}`);
+      await refreshTouchpointSummaryMV();
+      logger.info('scheduler', `Successfully executed scheduled task: ${task.task}`);
+    } catch (error: any) {
+      logger.error('scheduler', `Failed to execute scheduled task: ${task.task}`, {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  });
+
+  // Register the active job
+  activeJobs.set(task.task, job);
+
+  logger.info('scheduler', `Started cron job: ${task.task}`, {
+    schedule: task.schedule,
+  });
+}
+
+/**
+ * Start the cache warming job
+ */
+function startCacheWarmingJob(): void {
+  const task = SCHEDULED_TASKS.cacheWarming;
+
+  logger.info('scheduler', `Starting scheduled task: ${task.task}`, {
+    schedule: task.schedule,
+    description: task.description,
+  });
+
+  // Create and start the cron job
+  const job = cron.schedule(task.schedule, async () => {
+    try {
+      logger.info('scheduler', `Executing scheduled task: ${task.task}`);
+      const stats = await warmAllAssignedClientsCache();
+      logger.info('scheduler', `Successfully executed scheduled task: ${task.task}`, {
+        stats: {
+          total_users: stats.total_users,
+          successful_warms: stats.successful_warms,
+          total_client_ids_cached: stats.total_client_ids_cached,
+          duration_ms: stats.duration_ms,
+        },
+      });
+    } catch (error: any) {
+      logger.error('scheduler', `Failed to execute scheduled task: ${task.task}`, {
+        error: error.message,
+        stack: error.stack,
+      });
+    }
+  });
+
+  // Register the active job
+  activeJobs.set(task.task, job);
+
+  logger.info('scheduler', `Started cron job: ${task.task}`, {
+    schedule: task.schedule,
+  });
+}
+
+/**
  * Get scheduler status
  *
  * Returns information about the scheduler and its active jobs.
@@ -130,13 +216,22 @@ export function getSchedulerStatus(): {
 export async function triggerTask(taskName: string): Promise<{
   success: boolean;
   message: string;
+  result?: any;
 }> {
   try {
     logger.info('scheduler', `Manually triggering task: ${taskName}`);
 
+    let result: any;
+
     switch (taskName) {
       case 'actionItemsRefresh':
         await refreshActionItemsView();
+        break;
+      case 'touchpointMVRefresh':
+        result = await refreshTouchpointSummaryMV();
+        break;
+      case 'cacheWarming':
+        result = await warmAllAssignedClientsCache();
         break;
       default:
         throw new Error(`Unknown task: ${taskName}`);
@@ -145,6 +240,7 @@ export async function triggerTask(taskName: string): Promise<{
     return {
       success: true,
       message: `Task ${taskName} executed successfully`,
+      result,
     };
   } catch (error: any) {
     logger.error('scheduler', `Failed to trigger task: ${taskName}`, {

@@ -16,6 +16,7 @@ import {
   NotFoundError,
   AuthorizationError,
 } from '../errors/index.js';
+import { getClientsCacheService } from '../services/cache/clients-cache.js';
 
 const clients = new Hono();
 
@@ -360,23 +361,32 @@ clients.get('/', authMiddleware, async (c) => {
       )`;
     }
 
+    // OPTIMIZED: Use materialized view instead of expensive CTE
+    // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
+    // and pre-computes all touchpoint aggregations, eliminating expensive COUNT/GROUP_BY queries
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        c.id as client_id,
-        CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
-        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
-        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
-        CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
-          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
-        ).join(' ')}
-          ELSE NULL
-        END as next_touchpoint_type,
+        mv.client_id,
+        mv.completed_count,
+        mv.total_count,
+        mv.next_touchpoint_type,
+        t.type as last_touchpoint_type,
+        t.user_id as last_touchpoint_user_id,
         c.loan_released
-      FROM clients c
-      ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
-      LEFT JOIN touchpoints t ON t.client_id = c.id
+      FROM client_touchpoint_summary_mv mv
+      INNER JOIN clients c ON c.id = mv.client_id
+      LEFT JOIN LATERAL (
+        SELECT t.type, t.user_id
+        FROM touchpoints t
+        WHERE t.client_id = mv.client_id AND t.deleted_at IS NULL
+        ORDER BY t.date DESC
+        LIMIT 1
+      ) t ON true
       WHERE c.deleted_at IS NULL
-      GROUP BY c.id, c.loan_released
+      ${shouldFilterByArea ? `AND EXISTS (
+        SELECT 1 FROM user_areas ua
+        WHERE c.province = ua.province AND c.municipality = ua.municipality
+      )` : ''}
     )`;
 
     // Build WITH clause with user_areas CTE if needed
@@ -708,6 +718,21 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Default to 'callable' if touchpoint_status not provided
     const effectiveTouchpointStatus = touchpointStatus || 'callable';
 
+    // ============================================
+    // CACHE LAYER: Get assigned client IDs from cache
+    // ============================================
+    // For Caravan/Tele with area filtering, try cache first
+    // This avoids expensive area-based queries on every request
+    let cachedClientIds: string[] | null = null;
+    const clientsCache = getClientsCacheService();
+
+    if (shouldFilterByArea && !search && !clientType && !productType && !agencyId && !municipality && !province) {
+      // Only use cache when no additional filters are present
+      // (cache stores base assigned client IDs for the user)
+      cachedClientIds = await clientsCache.getAssignedClientIds(user.sub);
+      console.debug(`[AssignedClients] Cache ${cachedClientIds ? 'HIT' : 'MISS'} for user ${user.sub}`);
+    }
+
     // Build WHERE clause conditions for basic client filtering
     const baseWhereConditions: string[] = [];
     const baseParams: any[] = [];
@@ -788,23 +813,32 @@ clients.get('/assigned', authMiddleware, async (c) => {
       )`;
     }
 
+    // OPTIMIZED: Use materialized view instead of expensive CTE
+    // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
+    // and pre-computes all touchpoint aggregations, eliminating expensive COUNT/GROUP_BY queries
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        c.id as client_id,
-        CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
-        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
-        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
-        CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
-          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
-        ).join(' ')}
-          ELSE NULL
-        END as next_touchpoint_type,
+        mv.client_id,
+        mv.completed_count,
+        mv.total_count,
+        mv.next_touchpoint_type,
+        t.type as last_touchpoint_type,
+        t.user_id as last_touchpoint_user_id,
         c.loan_released
-      FROM clients c
-      ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
-      LEFT JOIN touchpoints t ON t.client_id = c.id
+      FROM client_touchpoint_summary_mv mv
+      INNER JOIN clients c ON c.id = mv.client_id
+      LEFT JOIN LATERAL (
+        SELECT t.type, t.user_id
+        FROM touchpoints t
+        WHERE t.client_id = mv.client_id AND t.deleted_at IS NULL
+        ORDER BY t.date DESC
+        LIMIT 1
+      ) t ON true
       WHERE c.deleted_at IS NULL
-      GROUP BY c.id, c.loan_released
+      ${shouldFilterByArea ? `AND EXISTS (
+        SELECT 1 FROM user_areas ua
+        WHERE c.province = ua.province AND c.municipality = ua.municipality
+      )` : ''}
     )`;
 
     // Build WITH clause with user_areas CTE if needed
@@ -944,6 +978,30 @@ clients.get('/assigned', authMiddleware, async (c) => {
     `;
 
     const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
+
+    // ============================================
+    // CACHE POPULATION: Populate cache on miss
+    // ============================================
+    // If cache was empty, populate it with the client IDs from this query
+    // Only cache when no additional filters were present (base assigned clients)
+    if (shouldFilterByArea && !cachedClientIds && !search && !clientType && !productType && !agencyId && !municipality && !province) {
+      // Extract client IDs from the result
+      const clientIds = result.rows.map(row => row.id);
+      if (clientIds.length > 0) {
+        // Get user's assigned areas for caching
+        const areasQuery = `
+          SELECT DISTINCT province, municipality
+          FROM user_locations
+          WHERE user_id = $1 AND deleted_at IS NULL
+        `;
+        const areasResult = await pool.query(areasQuery, [user.sub]);
+        const areas = areasResult.rows.map(row => `${row.province}:${row.municipality}`);
+
+        // Populate cache
+        await clientsCache.setAssignedClientIds(user.sub, clientIds, areas);
+        console.debug(`[AssignedClients] Cached ${clientIds.length} client IDs for user ${user.sub}`);
+      }
+    }
 
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;

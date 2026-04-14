@@ -46,11 +46,23 @@ export class RedisCacheService {
     if (this.enabled) {
       const url = redisUrl || process.env.REDIS_URL || 'redis://localhost:6379/0';
       this.client = new Redis(url, {
+        // Connection pool settings
         maxRetriesPerRequest: 3,
         retryStrategy: (times) => {
           const delay = Math.min(times * 50, 2000);
           return delay;
         },
+        // Enable ready check for better connection reliability
+        enableReadyCheck: true,
+        // Disable offline queue to fail fast when Redis is down
+        // This prevents memory buildup when Redis is unavailable
+        enableOfflineQueue: false,
+        // Keep connection alive with periodic pings
+        keepAlive: 30000,
+        // Connection name for debugging in Redis
+        connectionName: 'imu-backend-cache',
+        // Show friendly error stack traces
+        showFriendlyErrorStack: true,
       });
 
       this.client.on('error', (err) => {
