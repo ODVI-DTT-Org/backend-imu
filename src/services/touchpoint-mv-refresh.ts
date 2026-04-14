@@ -28,6 +28,11 @@ const callableClientsMVBreaker = new CircuitBreaker(
   60000 // Close circuit after 1 minute
 );
 
+const adminClientsMVBreaker = new CircuitBreaker(
+  5, // Open circuit after 5 consecutive failures
+  60000 // Close circuit after 1 minute
+);
+
 /**
  * Materialized view refresh statistics
  */
@@ -260,14 +265,116 @@ export async function refreshCallableClientsMV(): Promise<MVRefreshStats> {
 }
 
 /**
- * Refresh both materialized views in sequence
- * Calls refreshTouchpointSummaryMV first, then refreshCallableClientsMV
+ * Refresh the admin_clients_mv materialized view
+ * Uses CONCURRENTLY option to allow reads during refresh
+ * This MV is used for admin dashboard queries (stats, analytics, client lists)
+ * Includes retry logic with exponential backoff and circuit breaker
+ * @returns Refresh statistics
+ */
+export async function refreshAdminClientsMV(): Promise<MVRefreshStats> {
+  const startTime = Date.now();
+  const stats: MVRefreshStats = {
+    success: false,
+    duration_ms: 0,
+    row_count: 0,
+    refreshed_at: new Date().toISOString(),
+  };
+
+  console.log('[MVRefresh] Starting admin_clients_mv refresh with retry logic');
+
+  try {
+    // Use circuit breaker to prevent cascade failures
+    await adminClientsMVBreaker.execute(async () => {
+      // Check if MV exists first
+      const mvExistsResult = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables
+          WHERE table_name = 'admin_clients_mv'
+        ) as exists
+      `);
+
+      if (!mvExistsResult.rows[0].exists) {
+        console.log('[MVRefresh] admin_clients_mv does not exist, skipping refresh');
+        stats.success = true;
+        stats.duration_ms = Date.now() - startTime;
+        return;
+      }
+
+      // Retry configuration for MV refresh
+      const retryResult = await retryWithBackoff(async () => {
+        // Refresh the materialized view with CONCURRENTLY option
+        await pool.query('REFRESH MATERIALIZED VIEW CONCURRENTLY admin_clients_mv');
+
+        // Get row count after refresh
+        const countResult = await pool.query('SELECT COUNT(*) as count FROM admin_clients_mv');
+        stats.row_count = parseInt(countResult.rows[0].count);
+        stats.success = true;
+
+        console.log('[MVRefresh] admin_clients_mv refreshed successfully:', {
+          row_count: stats.row_count,
+          duration_ms: Date.now() - startTime,
+        });
+
+        return stats;
+      }, {
+        maxRetries: 3,
+        baseDelay: 1000,
+        maxDelay: 10000,
+        jitter: true,
+        shouldRetry: (error, attempt) => {
+          const errorMessage = error.message.toLowerCase();
+          const isTransientError =
+            errorMessage.includes('connection') ||
+            errorMessage.includes('timeout') ||
+            errorMessage.includes('temporary') ||
+            errorMessage.includes('deadlock') ||
+            errorMessage.includes('could not serialize') ||
+            errorMessage.includes('database is starting up');
+
+          if (!isTransientError) {
+            console.error('[MVRefresh] Non-transient error, not retrying:', {
+              error: error.message,
+              attempt,
+            });
+          }
+
+          return isTransientError;
+        },
+      });
+
+      if (!retryResult.success) {
+        throw retryResult.error || new Error('Refresh failed after retries');
+      }
+    });
+
+    stats.duration_ms = Date.now() - startTime;
+    return stats;
+  } catch (error) {
+    stats.duration_ms = Date.now() - startTime;
+    stats.error = error instanceof Error ? error.message : 'Unknown error';
+
+    console.error('[MVRefresh] admin_clients_mv refresh failed:', {
+      error: stats.error,
+      duration_ms: stats.duration_ms,
+      circuitBreakerState: adminClientsMVBreaker.getState(),
+    });
+
+    // Don't throw error for admin_clients_mv refresh failure
+    // It's an optimization, not critical for functionality
+    return stats;
+  }
+}
+
+/**
+ * Refresh all materialized views in sequence
+ * Calls refreshTouchpointSummaryMV, refreshCallableClientsMV, refreshAdminClientsMV
  * Uses circuit breakers to prevent cascade failures
  * @returns Combined refresh statistics
  */
 export async function refreshAllMaterializedViews(): Promise<{
   touchpoint_summary: MVRefreshStats;
   callable_clients: MVRefreshStats;
+  admin_clients: MVRefreshStats;
 }> {
   console.log('[MVRefresh] Starting full materialized view refresh sequence with circuit breakers');
 
@@ -279,6 +386,12 @@ export async function refreshAllMaterializedViews(): Promise<{
     refreshed_at: new Date().toISOString(),
   };
   let callableClientsStats: MVRefreshStats = {
+    success: false,
+    duration_ms: 0,
+    row_count: 0,
+    refreshed_at: new Date().toISOString(),
+  };
+  let adminClientsStats: MVRefreshStats = {
     success: false,
     duration_ms: 0,
     row_count: 0,
@@ -326,16 +439,40 @@ export async function refreshAllMaterializedViews(): Promise<{
     };
   }
 
+  // Finally refresh admin clients MV (independent, used for admin dashboard)
+  // Note: We always try to refresh admin_clients MV even if others failed
+  try {
+    await adminClientsMVBreaker.execute(async () => {
+      adminClientsStats = await refreshAdminClientsMV();
+    });
+  } catch (error) {
+    console.error('[MVRefresh] Admin clients MV refresh failed, circuit breaker opened:', {
+      error: error instanceof Error ? error.message : 'Unknown error',
+      circuitBreakerState: adminClientsMVBreaker.getState(),
+    });
+
+    adminClientsStats = {
+      success: false,
+      duration_ms: 0,
+      row_count: 0,
+      error: error instanceof Error ? error.message : 'Unknown error',
+      refreshed_at: new Date().toISOString(),
+    };
+  }
+
   console.log('[MVRefresh] Full refresh sequence completed:', {
     touchpoint_summary: touchpointSummaryStats.row_count,
     callable_clients: callableClientsStats.row_count,
+    admin_clients: adminClientsStats.row_count,
     touchpoint_success: touchpointSummaryStats.success,
     callable_success: callableClientsStats.success,
-    total_duration_ms: touchpointSummaryStats.duration_ms + callableClientsStats.duration_ms,
+    admin_success: adminClientsStats.success,
+    total_duration_ms: touchpointSummaryStats.duration_ms + callableClientsStats.duration_ms + adminClientsStats.duration_ms,
   });
 
   return {
     touchpoint_summary: touchpointSummaryStats,
     callable_clients: callableClientsStats,
+    admin_clients: adminClientsStats,
   };
 }

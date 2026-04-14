@@ -68,10 +68,12 @@ export interface MVHealth {
   views: {
     touchpointSummary: MVStatus;
     callableClients: MVStatus;
+    adminClients: MVStatus;
   };
   lastRefresh?: {
     touchpointSummary: string;
     callableClients: string;
+    adminClients: string;
   };
 }
 
@@ -251,12 +253,18 @@ async function checkMV(config: HealthCheckConfig): Promise<MVHealth> {
       config.mvMaxAge || 15
     );
 
+    // Check admin clients MV
+    const adminClients = await checkSingleMV(
+      'admin_clients_mv',
+      config.mvMaxAge || 15
+    );
+
     // Determine overall status
     let status: 'healthy' | 'degraded' | 'unhealthy' = 'healthy';
-    if (touchpointSummary.status === 'stale' || callableClients.status === 'stale') {
+    if (touchpointSummary.status === 'stale' || callableClients.status === 'stale' || adminClients.status === 'stale') {
       status = 'degraded';
     }
-    if (touchpointSummary.status === 'error' || callableClients.status === 'error') {
+    if (touchpointSummary.status === 'error' || callableClients.status === 'error' || adminClients.status === 'error') {
       status = 'unhealthy';
     }
 
@@ -265,10 +273,12 @@ async function checkMV(config: HealthCheckConfig): Promise<MVHealth> {
       views: {
         touchpointSummary,
         callableClients,
+        adminClients,
       },
       lastRefresh: {
         touchpointSummary: touchpointSummary.lastRefresh || 'N/A',
         callableClients: callableClients.lastRefresh || 'N/A',
+        adminClients: adminClients.lastRefresh || 'N/A',
       },
     };
   } catch (error) {
@@ -280,6 +290,10 @@ async function checkMV(config: HealthCheckConfig): Promise<MVHealth> {
           status: 'error',
         },
         callableClients: {
+          exists: false,
+          status: 'error',
+        },
+        adminClients: {
           exists: false,
           status: 'error',
         },
