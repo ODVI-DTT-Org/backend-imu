@@ -73,7 +73,7 @@ export class ClientCacheInvalidation {
     // If touchpoint created, user's assigned client IDs may change
     // (e.g., first touchpoint assigns client to user)
     if (userId) {
-      this.invalidateUserCache(userId).catch((error) => {
+      this.clientsCache.invalidateUserCache(userId).catch((error) => {
         console.error(`[ClientCacheInvalidation] Failed to invalidate user cache:`, error);
       });
     }

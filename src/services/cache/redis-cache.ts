@@ -61,8 +61,6 @@ export class RedisCacheService {
         keepAlive: 30000,
         // Connection name for debugging in Redis
         connectionName: 'imu-backend-cache',
-        // Limit pipeline size to prevent memory overload
-        maxLoadingChunkSize: 100,
         // Show friendly error stack traces
         showFriendlyErrorStack: true,
       });
