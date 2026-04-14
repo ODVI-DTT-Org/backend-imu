@@ -16,6 +16,7 @@ import {
   NotFoundError,
   AuthorizationError,
 } from '../errors/index.js';
+import { getClientsCacheService } from '../services/cache/clients-cache.js';
 
 const clients = new Hono();
 
@@ -717,6 +718,21 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Default to 'callable' if touchpoint_status not provided
     const effectiveTouchpointStatus = touchpointStatus || 'callable';
 
+    // ============================================
+    // CACHE LAYER: Get assigned client IDs from cache
+    // ============================================
+    // For Caravan/Tele with area filtering, try cache first
+    // This avoids expensive area-based queries on every request
+    let cachedClientIds: string[] | null = null;
+    const clientsCache = getClientsCacheService();
+
+    if (shouldFilterByArea && !search && !clientType && !productType && !agencyId && !municipality && !province) {
+      // Only use cache when no additional filters are present
+      // (cache stores base assigned client IDs for the user)
+      cachedClientIds = await clientsCache.getAssignedClientIds(user.sub);
+      console.debug(`[AssignedClients] Cache ${cachedClientIds ? 'HIT' : 'MISS'} for user ${user.sub}`);
+    }
+
     // Build WHERE clause conditions for basic client filtering
     const baseWhereConditions: string[] = [];
     const baseParams: any[] = [];
@@ -962,6 +978,30 @@ clients.get('/assigned', authMiddleware, async (c) => {
     `;
 
     const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
+
+    // ============================================
+    // CACHE POPULATION: Populate cache on miss
+    // ============================================
+    // If cache was empty, populate it with the client IDs from this query
+    // Only cache when no additional filters were present (base assigned clients)
+    if (shouldFilterByArea && !cachedClientIds && !search && !clientType && !productType && !agencyId && !municipality && !province) {
+      // Extract client IDs from the result
+      const clientIds = result.rows.map(row => row.id);
+      if (clientIds.length > 0) {
+        // Get user's assigned areas for caching
+        const areasQuery = `
+          SELECT DISTINCT province, municipality
+          FROM user_locations
+          WHERE user_id = $1 AND deleted_at IS NULL
+        `;
+        const areasResult = await pool.query(areasQuery, [user.sub]);
+        const areas = areasResult.rows.map(row => `${row.province}:${row.municipality}`);
+
+        // Populate cache
+        await clientsCache.setAssignedClientIds(user.sub, clientIds, areas);
+        console.debug(`[AssignedClients] Cached ${clientIds.length} client IDs for user ${user.sub}`);
+      }
+    }
 
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
