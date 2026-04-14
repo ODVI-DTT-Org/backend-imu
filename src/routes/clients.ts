@@ -158,6 +158,10 @@ function mapRowToClient(row: Record<string, any>) {
     g_company: row.g_company,
     g_status: row.g_status,
     status: row.status,
+    // Audit fields
+    created_by: row.created_by,
+    deleted_by: row.deleted_by,
+    deleted_at: row.deleted_at,
     created: row.created_at,
     updated: row.updated_at,
     expand: row.psgc_id ? {
