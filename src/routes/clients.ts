@@ -360,23 +360,32 @@ clients.get('/', authMiddleware, async (c) => {
       )`;
     }
 
+    // OPTIMIZED: Use materialized view instead of expensive CTE
+    // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
+    // and pre-computes all touchpoint aggregations, eliminating expensive COUNT/GROUP_BY queries
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        c.id as client_id,
-        CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
-        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
-        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
-        CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
-          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
-        ).join(' ')}
-          ELSE NULL
-        END as next_touchpoint_type,
+        mv.client_id,
+        mv.completed_count,
+        mv.total_count,
+        mv.next_touchpoint_type,
+        t.type as last_touchpoint_type,
+        t.user_id as last_touchpoint_user_id,
         c.loan_released
-      FROM clients c
-      ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
-      LEFT JOIN touchpoints t ON t.client_id = c.id
+      FROM client_touchpoint_summary_mv mv
+      INNER JOIN clients c ON c.id = mv.client_id
+      LEFT JOIN LATERAL (
+        SELECT t.type, t.user_id
+        FROM touchpoints t
+        WHERE t.client_id = mv.client_id AND t.deleted_at IS NULL
+        ORDER BY t.date DESC
+        LIMIT 1
+      ) t ON true
       WHERE c.deleted_at IS NULL
-      GROUP BY c.id, c.loan_released
+      ${shouldFilterByArea ? `AND EXISTS (
+        SELECT 1 FROM user_areas ua
+        WHERE c.province = ua.province AND c.municipality = ua.municipality
+      )` : ''}
     )`;
 
     // Build WITH clause with user_areas CTE if needed
@@ -788,23 +797,32 @@ clients.get('/assigned', authMiddleware, async (c) => {
       )`;
     }
 
+    // OPTIMIZED: Use materialized view instead of expensive CTE
+    // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
+    // and pre-computes all touchpoint aggregations, eliminating expensive COUNT/GROUP_BY queries
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        c.id as client_id,
-        CAST(COUNT(DISTINCT t.touchpoint_number) AS INTEGER) as completed_count,
-        (SELECT t2.type FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_type,
-        (SELECT t2.user_id FROM touchpoints t2 WHERE t2.client_id = c.id ORDER BY t2.touchpoint_number DESC LIMIT 1) as last_touchpoint_user_id,
-        CASE ${TOUCHPOINT_SEQUENCE.map((type, index) =>
-          `WHEN COUNT(DISTINCT t.touchpoint_number) = ${index + 1} THEN '${type}'`
-        ).join(' ')}
-          ELSE NULL
-        END as next_touchpoint_type,
+        mv.client_id,
+        mv.completed_count,
+        mv.total_count,
+        mv.next_touchpoint_type,
+        t.type as last_touchpoint_type,
+        t.user_id as last_touchpoint_user_id,
         c.loan_released
-      FROM clients c
-      ${shouldFilterByArea ? `JOIN user_areas ua ON c.province = ua.province AND c.municipality = ua.municipality` : ''}
-      LEFT JOIN touchpoints t ON t.client_id = c.id
+      FROM client_touchpoint_summary_mv mv
+      INNER JOIN clients c ON c.id = mv.client_id
+      LEFT JOIN LATERAL (
+        SELECT t.type, t.user_id
+        FROM touchpoints t
+        WHERE t.client_id = mv.client_id AND t.deleted_at IS NULL
+        ORDER BY t.date DESC
+        LIMIT 1
+      ) t ON true
       WHERE c.deleted_at IS NULL
-      GROUP BY c.id, c.loan_released
+      ${shouldFilterByArea ? `AND EXISTS (
+        SELECT 1 FROM user_areas ua
+        WHERE c.province = ua.province AND c.municipality = ua.municipality
+      )` : ''}
     )`;
 
     // Build WITH clause with user_areas CTE if needed
