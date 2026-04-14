@@ -1,0 +1,446 @@
+╔══════════════════════════════════════════════════════════════════════════════╗
+║                     IMU PRODUCTION DATABASE SCHEMA                              ║
+║                        Entity Relationship Diagram                           ║
+║                                                                              ║
+║  Database: PostgreSQL 14+                                                    ║
+║  Schema: public                                                              ║
+║  Total Tables: 27                                                            ║
+║  Total Foreign Keys: 50+ (after fixes)                                      ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  🔐 AUTHENTICATION & AUTHORIZATION (RBAC)                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│     users        │         │      roles       │         │   permissions    │
+├─────────────────┤         ├──────────────────┤         ├─────────────────┤
+│ id (PK)         │<───────││ id (PK)          │<───────││ id (PK)          │
+│ email (UQ)      │         ││ name             │         ││ resource         │
+│ password_hash   │         ││ slug (UQ)        │         ││ action           │
+│ first_name      │         ││ description      │         ││ constraint_name  │
+│ last_name       │         ││ level            │         ││ description      │
+│ middle_name     │         ││ is_system        │         └─────────────────┘
+│ role            │         └──────────────────┘                 │
+│ phone           │                                             │
+│ avatar_url      │         ┌──────────────────┐                 │
+│ is_active       │         │   user_roles     │                 │
+│ last_login_at   │         ├──────────────────┤                 │
+│ created_at      │    ┌────││ id (PK)          │                 │
+│ updated_at      │    │    ││ user_id (FK)    │──┐              │
+│ created_by      │    │    ││ role_id (FK)    │  │              │
+│ updated_by      │    │    ││ is_active        │  │              │
+│ last_login_ip   │    │    ││ expires_at       │  │              │
+└─────────────────┘    │    └──────────────────┘  │              │
+                       │                         │              │
+                       │    ┌──────────────────┐   │              │
+                       └────│  role_permissions  │───┘              │
+                            ├──────────────────┤                  │
+                            ││ id (PK)          │                  │
+                            ││ role_id (FK)     │                  │
+                            ││ permission_id(FK)│                  │
+                            └──────────────────┘                  │
+                                                                  │
+                                  ┌───────────────────────────────┘
+                                  │
+                                  ▼
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  👥 CLIENT MANAGEMENT                                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│     clients      │         │     agencies     │         │   user_profiles │
+├─────────────────┤         ├──────────────────┤         ├─────────────────┤
+│ id (PK)         │         │ id (PK)          │         │ id (PK)         │
+│ first_name      │    ┌────││ name             │         │ user_id (UQ)    │
+│ last_name       │    │    ││ code (UQ)        │         │ name            │
+│ middle_name     │    │    ││ address          │         │ email           │
+│ email           │    │    ││ created_at       │         │ role            │
+│ phone           │    │    └──────────────────┘         │ avatar_url      │
+│ agency_id (FK)  │────┘                                  │ updated_at      │
+│ user_id (FK)    │                                           └─────────────────┘
+│ is_starred      │
+│ psgc_id         │         ┌──────────────────┐
+│ region          │         │      psgc        │
+│ province        │         ├──────────────────┤
+│ municipality    │    ┌────││ id (PK)          │
+│ barangay        │    │    ││ region           │
+│ full_name*      │    │    ││ province         │
+│ client_type     │    │    ││ mun_city_kind    │
+│ product_type    │    │    ││ mun_city         │
+│ market_type     │    │    ││ barangay         │
+│ pension_type    │    │    ││ pin_location      │
+│ udi             │    │    └──────────────────┘
+│ loan_released   │    │
+│ created_at      │    │
+│ updated_at      │    │
+│ deleted_at      │    │
+│ created_by (FK) │────┘
+│ updated_by (FK) │─────┘
+└─────────────────┘
+       │
+       ├───┐
+       │   │
+       ▼   ▼
+┌─────────────────────┐         ┌──────────────────────┐
+│     addresses       │         │    phone_numbers      │
+├─────────────────────┤         ├──────────────────────┤
+│ id (PK)              │         │ id (PK)               │
+│ client_id (FK)      │────────▶│ client_id (FK)        │
+│ label                │         │ number                │
+│ street               │         │ label                 │
+│ barangay            │         │ is_primary            │
+│ city                 │         │ created_at            │
+│ province             │         │ deleted_at            │
+│ postal_code          │         │ updated_at            │
+│ latitude             │         └──────────────────────┘
+│ longitude            │
+│ is_primary           │
+│ psgc_id              │
+│ street_address       │
+│ created_at           │
+│ deleted_at           │
+│ updated_at           │
+└─────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  📍 DATABASE NORMALIZATION (Feature 1)                                             │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│      visits      │         │      calls       │         │     releases     │
+├─────────────────┤         ├──────────────────┤         ├─────────────────┤
+│ id (PK)         │         │ id (PK)          │         │ id (PK)          │
+│ client_id (FK)  │────────▶│ client_id (FK)   │────────▶│ client_id (FK)   │
+│ user_id (FK)    │────────▶│ user_id (FK)     │         │ user_id (FK)    │
+│ type            │         │ phone_number     │         │ visit_id (FK)   │──────┐
+│ time_arrival    │         │ dial_time        │         │ product_type     │      │
+│ time_departure  │         │ duration         │         │ loan_type        │      │
+│ odometer_arrival│         │ notes            │         │ amount           │      │
+│ odometer_depart │         │ reason           │         │ approval_notes   │      │
+│ photo_url*      │         │ status           │         │ status           │      │
+│ notes           │         │ created_at       │         │ approved_by (FK)│──────┘
+│ reason          │         │ updated_at       │         │ approved_at      │
+│ status          │         └──────────────────┘         │ created_at       │
+│ address         │                                         │ updated_at       │
+│ latitude        │                                         │                 │
+│ longitude       │                                         │                 │
+│ created_at      │                                         │                 │
+│ updated_at      │                                         │                 │
+└─────────────────┘                                         │                 │
+                                                             │                 │
+                                                             ▼                 │
+                                                    ┌──────────────────────┐
+                                                    │  approved_by (FK)    │
+                                                    │  ┌─────────────────┐│
+                                                    └──││      users      ││
+                                                      └─────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  📋 ITINERARY & TOUCHPOINTS MANAGEMENT                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│    itineraries   │         │   touchpoints    │         │   approvals      │
+├─────────────────┤         ├──────────────────┤         ├─────────────────┤
+│ id (PK)         │         │ id (PK)          │         │ id (PK)          │
+│ user_id (FK)    │────────▶│ client_id (FK)   │────────▶│ client_id (FK)   │
+│ client_id (FK)  │────────▶│ user_id (FK)     │         │ user_id (FK)     │
+│ scheduled_date  │         │ touchpoint_number│         │ type             │
+│ scheduled_time  │         │ type             │         │ status           │
+│ status          │         │ visit_id (FK)    │─────────┐│ reason           │
+│ priority        │         │ call_id (FK)     │         │ notes            │
+│ notes           │         │ date             │         │ approved_by (FK) │───────┤
+│ created_by (FK) │         │ status           │         │ approved_at      │       │
+│ created_at      │         │ next_visit_date  │         │ rejected_by (FK) │───────┤
+│ updated_at      │         │ notes            │         │ rejected_at      │       │
+└─────────────────┘         │ created_at       │         │ rejection_reason │       │
+                             │ updated_at       │         │ created_at       │       │
+                             └──────────────────┘         │ updated_at       │       │
+                                                            └─────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  📊 MONITORING & REPORTING                                                              │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│    attendance   │         │   audit_logs     │         │   error_logs     │
+├─────────────────┤         ├──────────────────┤         ├─────────────────┤
+│ id (PK)         │         │ id (PK)          │         │ id (PK)          │
+│ user_id (FK)    │────────▶│ user_id (FK)     │         │ request_id (UQ)  │
+│ date            │         │ action           │         │ timestamp        │
+│ time_in         │         │ entity           │         │ code             │
+│ time_out        │         │ entity_id        │         │ message          │
+│ location_in_lat │         │ old_values       │         │ status_code     │
+│ location_in_lng │         │ new_values       │         │ path             │
+│ location_out_lat│         │ ip_address       │         │ method           │
+│ location_out_lng│         │ user_agent       │         │ user_id (FK)    │
+│ notes           │         │ metadata         │         │ stack_trace      │
+│ created_at      │         │ created_at       │         │ resolved         │
+└─────────────────┘         └──────────────────┘         │ device_info      │
+                                                          └─────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌─────────────────┐
+│ background_jobs │         │   report_jobs    │         │ scheduled_reports│
+├─────────────────┤         ├──────────────────┤         ├─────────────────┤
+│ id (PK)         │         │ id (PK)          │         │ id (PK)          │
+│ type            │         │ report_type      │         │ name             │
+│ status          │         │ status           │         │ report_type      │
+│ params          │         │ params           │         │ frequency       │
+│ result          │         │ result           │         │ params           │
+│ error           │         │ error_message    │         │ is_active        │
+│ progress        │         │ created_by (FK)  │─────────┐│ created_by (FK) │─────────┐
+│ created_at      │         │ created_at       │         │ created_at      │         │
+│ started_at      │         │ updated_at       │         │ updated_at      │         │
+│ completed_at    │         │ started_at       │         │ last_run_at     │         │
+│ created_by (FK) │─────────┘│ completed_at     │         │ next_run_at     │         │
+└─────────────────┘         │ file_url         │         └─────────────────┘
+                             └──────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  👥 GROUP MANAGEMENT                                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐         ┌──────────────────┐
+│     groups      │         │  group_members   │         │ group_municipalities
+├─────────────────┤         ├──────────────────┤         ├──────────────────┤
+│ id (PK)         │────────▶│ id (PK)          │────────▶│ id (PK)          │
+│ name            │         │ group_id (FK)    │         │ group_id (FK)    │
+│ description     │         │ client_id (FK)   │         │ created_at       │
+│ area_manager_id │         │ joined_at        │         │ province         │
+│   (FK)          │         └──────────────────┘         │ municipality     │
+│ assistant_area  │                                           └──────────────────┘
+│   _manager_id   │
+│   (FK)          │
+│ caravan_id (FK) │
+│ created_at      │
+└─────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  🗂️ FILE MANAGEMENT                                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐
+│     files       │
+├─────────────────┤
+│ id (PK)         │
+│ filename        │
+│ original_filename│
+│ mime_type       │
+│ size            │
+│ url             │
+│ storage_key     │
+│ uploaded_by (FK) │───────────┐
+│ entity_type     │             │
+│ entity_id       │             │
+│ created_at      │             │
+│ updated_at      │             │
+│ hash            │             │
+└─────────────────┘             │
+                                  ▼
+                          ┌──────────────────────┐
+                          │  uploaded_by (FK)    │
+                          │  ┌─────────────────┐│
+                          └──││      users      ││
+                            └─────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  🎯 PERFORMANCE & TARGETS                                                                │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐
+│     targets     │
+├─────────────────┤
+│ id (PK)         │
+│ user_id (FK)    │───────────┐
+│ period          │             │
+│ year            │             │
+│ month           │             │
+│ quarter         │             │
+│ week            │             │
+│ target_clients  │             │
+│ target_touchpoints│            │
+│ target_visits   │             │
+│ target_calls    │             │
+│ created_at      │             │
+│ updated_at      │             │
+│ created_by (FK) │─────────────┘
+└─────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│  🔧 SYSTEM & CONFIGURATION                                                               │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────┐         ┌──────────────────┐
+│  feature_flags  │         │ touchpoint_reasons│
+├─────────────────┤         ├──────────────────┤
+│ id (PK)         │         │ id (PK)          │
+│ name (UQ)       │         │ reason_code (UQ) │
+│ description     │         │ label            │
+│ enabled         │         │ touchpoint_type  │
+│ user_whitelist  │         │ role             │
+│ role_whitelist  │         │ category         │
+│ env_whitelist   │         │ sort_order       │
+│ percentage      │         │ is_active        │
+│ created_at      │         │ created_at       │
+│ updated_at      │         │ updated_at       │
+└─────────────────┘         └──────────────────┘
+
+┌─────────────────┐
+│ user_locations │
+├─────────────────┤
+│ id (PK)         │
+│ user_id (FK)    │───────────┐
+│ province        │             │
+│ municipality    │             │
+│ assigned_at     │             │
+│ assigned_by (FK)│─────────────┘
+│ deleted_at      │
+│ created_at      │
+│ updated_at      │
+└─────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════════════
+                           LEGEND
+═══════════════════════════════════════════════════════════════════════════════════════════
+
+  ┌──────────────┐
+  │  PK         │  Primary Key
+  └──────────────┘
+
+  ┌──────────────┐
+  │  FK         │  Foreign Key
+  └──────────────┘
+
+  ┌──────────────┐
+  │  UQ         │  Unique Constraint
+  └──────────────┘
+
+  ┌──────────────┐
+  │  *          │  Generated/Computed Column
+  └──────────────┘
+
+  ┌──────────────┐
+  │  ─────────▶ │  One-to-Many Relationship
+  └──────────────┘
+
+  ┌──────────────┐
+  │  ◀────────── │  Many-to-One Relationship
+  └──────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════════════
+                        TABLE RELATIONSHIP SUMMARY
+═══════════════════════════════════════════════════════════════════════════════════════════
+
+┌──────────────────────┬─────────────────────────────────────────────────────────────┐
+│ Table                │ Related Tables (Child → Parent)                          │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ users                │ ← user_roles, user_locations, user_profiles, visits, calls  │
+│                      │   releases, touchpoints, itineraries, approvals, etc.      │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ clients              │ ← addresses, phone_numbers, visits, calls, releases        │
+│                      │   touchpoints, itineraries, approvals, group_members        │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ visits               │ ← releases, touchpoints                                    │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ calls                │ ← touchpoints                                                │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ roles                │ ← user_roles, role_permissions, groups                      │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ permissions           │ ← role_permissions                                          │
+├──────────────────────┼─────────────────────────────────────────────────────────────┤
+│ groups               │ ← group_members, group_municipalities                       │
+└──────────────────────┴─────────────────────────────────────────────────────────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════════════════
+                           TABLE COUNT BY FEATURE
+═══════════════════════════════════════════════════════════════════════════════════════════
+
+  🔐 Authentication & Authorization:  4 tables (users, roles, permissions, user_roles)
+  👥 Client Management:          3 tables (clients, addresses, phone_numbers)
+  📍 Database Normalization:    3 tables (visits, calls, releases)
+  📋 Itinerary & Touchpoints:     2 tables (itineraries, touchpoints)
+  👥 Groups:                     3 tables (groups, group_members, group_municipalities)
+  📊 Monitoring & Reporting:     4 tables (attendance, audit_logs, error_logs, report_jobs)
+  🗂️ Files:                     1 table (files)
+  🎯 Performance:                1 table (targets)
+  🔧 System:                     3 tables (feature_flags, touchpoint_reasons, user_locations)
+  🏢 Reference Data:              2 tables (agencies, psgc)
+  📝 Approvals:                   1 table (approvals)
+  📅 Scheduling:                 1 table (scheduled_reports)
+  ⚙️ Background Jobs:            1 table (background_jobs)
+
+  ─────────────────────────────────────────────────────────────────────────────
+  TOTAL TABLES:  27
+  TOTAL FOREIGN KEYS: 50+ (after applying fixes)
+  TOTAL INDEXES: 70+
+  ══════════════════════════════════════════════════════════════════════════════════════════
+
+
+═══════════════════════════════════════════════════════════════════════════════════════════
+                           KEY RELATIONSHIPS (After Fixes)
+═══════════════════════════════════════════════════════════════════════════════════════════
+
+                    ┌─────────────┐
+                    │    users    │◄────────────────────────────────────────┐
+                    └─────────────┘                                         │
+                      ▲         │                                        │
+                      │         │                                        │
+           ┌────────────┴──────┐        │                                │
+           │                  │        │                                │
+           ▼                  ▼        ▼                                ▼
+    ┌─────────────┐   ┌──────────────┐  ┌──────────────┐         ┌──────────────┐
+    │user_roles   │   │ user_locations│  │user_profiles │         │    clients   │
+    └─────────────┘   └──────────────┘  └──────────────┘         └──────┬───────┘
+           ▲                         │                               │             │
+           │                         │                               │             │
+           └────────────┬────────────┴──────────────┐               │             │
+                      │                           │               │             │
+                      ▼                           ▼               ▼             ▼
+              ┌──────────────┐            ┌──────────────┐    ┌──────────────┐
+              │    roles     │            │  groups      │    │  agencies    │
+              └──────┬───────┘            └──────┬───────┘    └──────┬───────┘
+                     │                        │                   │
+                     ▼                        ▼                   ▼
+              ┌──────────────┐            ┌──────────────┐    ┌──────────────┐
+              │role_permissions│            │group_members │    │   clients    │
+              └──────────────┘            └──────┬───────┘    └──────────────┘
+                                                    │
+                        ┌───────────────────────────────────────┴───────────────┐
+                        │                                                              │
+                        ▼                                                              ▼
+              ┌───────────────────────────────────────────────────────────────────┐
+              │                            clients                              │
+              └───────────────────────────────────────────────────────────────────┘
+                                    │
+              ┌───────────────────────┼───────────────────────┐
+              │                       │                       │
+              ▼                       ▼                       ▼
+       ┌─────────────┐         ┌──────────────┐        ┌──────────────┐
+       │  addresses  │         │ phone_numbers│        │  itineraries │
+       └──────┬──────┘         └──────┬───────┘        └──────┬───────┘
+              │                      │                      │
+              │                      │                      │
+              ▼                      ▼                      ▼
+       ┌──────────────────────────────────────────────────────────────┐
+       │                     One-to-Many                              │
+       │   clients ───────────────────────► addresses/phones       │
+       └──────────────────────────────────────────────────────────────┘
+
+              ┌──────────────────────────────────────────────────────────────┐
+              │                    Many-to-One                              │
+       ┌─────┴──────┐         ┌─────┴──────┐        ┌──────┴───────┐
+       │  visits    │         │   calls    │        │   releases  │
+       └─────┬──────┘         └─────┬──────┘        └──────┬───────┘
+             │                      │                      │
+             └──────────────────────┴──────────────────────┘
+                                    │
+                                    ▼
+                          ┌──────────────────┐
+                          │   touchpoints    │
+                          └──────────────────┘

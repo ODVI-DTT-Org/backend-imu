@@ -46,7 +46,6 @@ const createClientSchema = z.object({
   facebook_link: z.string().max(500).optional(),
   remarks: z.string().max(1000).optional(),
   agency_id: z.string().uuid().optional().nullable(),
-  user_id: z.string().uuid().optional().nullable(),
   is_starred: z.boolean().default(false),
   loan_released: z.boolean().optional().default(false),
   loan_released_at: z.string().max(50).optional(),
@@ -128,7 +127,6 @@ function mapRowToClient(row: Record<string, any>) {
     facebook_link: row.facebook_link,
     remarks: row.remarks,
     agency_id: row.agency_id,
-    user_id: row.user_id,
     // Address fields (from addresses table, mapped to client for easier access)
     street: row.street,
     // PSGC fields
@@ -1354,7 +1352,6 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
       facebook_link: 'facebook_link',
       remarks: 'remarks',
       agency_id: 'agency_id',
-      user_id: 'user_id',
       region: 'region',
       province: 'province',
       municipality: 'municipality',
@@ -1597,7 +1594,7 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     const clientType = c.req.query('client_type');
 
     const offset = (page - 1) * perPage;
-    const conditions: string[] = ['c.user_id IS NULL'];
+    const conditions: string[] = [];
     const params: any[] = [];
     let paramIndex = 1;
 
