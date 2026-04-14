@@ -40,7 +40,7 @@ const bulkDeleteSchema = z.object({
 });
 
 // Helper to map DB row to Caravan type
-// Note: Caravans are now stored in the users table with role IN ('field_agent', 'caravan')
+// Note: Caravans are stored in the users table with role = 'caravan' (renamed from 'field_agent' in migration 008)
 function mapRowToCaravan(row: Record<string, any>) {
   const fullName = `${row.first_name || ''} ${row.last_name || ''}`.trim();
   return {
@@ -153,15 +153,15 @@ caravans.post('/', authMiddleware, requirePermission('caravans', 'create'), audi
     const firstName = nameParts[0];
     const lastName = nameParts.slice(1).join(' ') || '';
 
-    // Create user with field_agent role
+    // Create user with caravan role
     const result = await pool.query(
       `INSERT INTO users (email, password_hash, first_name, last_name, role, phone, is_active)
-       VALUES ($1, '', $2, $3, 'field_agent', $4, COALESCE($5, true))
+       VALUES ($1, '', $2, $3, 'caravan', $4, COALESCE($5, true))
        RETURNING id, email, first_name, last_name, phone, is_active, created_at, updated_at`,
       [validated.email, firstName, lastName, validated.phone, validated.is_active]
     );
 
-    console.log('[Create Caravan] Created field agent user:', {
+    console.log('[Create Caravan] Created caravan user:', {
       userId: result.rows[0].id,
       email: validated.email
     });
@@ -346,7 +346,7 @@ caravans.get('/:id/municipalities', authMiddleware, requirePermission('caravans'
   try {
     const caravanId = c.req.param('id');
 
-    // Verify caravan exists (is a user with field_agent/caravan role)
+    // Verify caravan exists (is a user with caravan role)
     const caravanCheck = await pool.query(
       'SELECT id FROM users WHERE id = $1 AND role = ANY($2)',
       [caravanId, CARAVAN_ROLES]
@@ -442,7 +442,7 @@ caravans.post('/:id/municipalities/bulk/create', authMiddleware, requirePermissi
       count: validated.locations.length
     });
 
-    // Verify caravan exists (is a user with field_agent/caravan role)
+    // Verify caravan exists (is a user with caravan role)
     const caravanCheck = await pool.query(
       'SELECT id FROM users WHERE id = $1 AND role = ANY($2)',
       [caravanId, CARAVAN_ROLES]
@@ -585,7 +585,7 @@ caravans.post('/:id/municipalities/bulk/update', authMiddleware, requirePermissi
       count: validated.locations.length
     });
 
-    // Verify caravan exists (is a user with field_agent/caravan role)
+    // Verify caravan exists (is a user with caravan role)
     const caravanCheck = await pool.query(
       'SELECT id FROM users WHERE id = $1 AND role = ANY($2)',
       [caravanId, CARAVAN_ROLES]

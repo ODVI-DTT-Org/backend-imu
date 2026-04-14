@@ -31,7 +31,7 @@ profile.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c
     const id = c.req.param('id');
 
     // Users can only view their own profile unless admin
-    if (user.role === 'field_agent' && id !== user.sub) {
+    if (user.role === 'caravan' && id !== user.sub) {
       throw new AuthorizationError('Unauthorized');
     }
 
@@ -78,7 +78,7 @@ profile.put('/:id', authMiddleware, requirePermission('users', 'update'), async 
     const validated = updateProfileSchema.parse(body);
 
     // Users can only update their own profile unless admin
-    if (user.role === 'field_agent' && id !== user.sub) {
+    if (user.role === 'caravan' && id !== user.sub) {
       throw new AuthorizationError('Unauthorized');
     }
 
@@ -160,7 +160,7 @@ profile.post('/:id/avatar', authMiddleware, requirePermission('users', 'update')
     const id = c.req.param('id');
 
     // Users can only upload their own avatar unless admin
-    if (user.role === 'field_agent' && id !== user.sub) {
+    if (user.role === 'caravan' && id !== user.sub) {
       throw new AuthorizationError('Unauthorized');
     }
 

@@ -191,7 +191,7 @@ auth.get('/me', authMiddleware, async (c) => {
 auth.post('/register', authRateLimit, async (c) => {
   try {
     const body = await c.req.json();
-    const { email, password, first_name, last_name, role = 'field_agent' } = body;
+    const { email, password, first_name, last_name, role = 'caravan' } = body;
 
     // Hash password
     const password_hash = await hash(password, 10);

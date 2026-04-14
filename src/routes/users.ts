@@ -176,7 +176,7 @@ users.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c) 
     const id = c.req.param('id');
 
     // Users can only view their own profile unless they're admin/staff
-    if (user.role === 'field_agent' && user.sub !== id) {
+    if (user.role === 'caravan' && user.sub !== id) {
       throw new AuthorizationError('You can only view your own profile');
     }
 
@@ -1284,8 +1284,7 @@ users.get('/roles', authMiddleware, async (c) => {
       { value: 'assistant_area_manager', label: 'Assistant Area Manager' },
       { value: 'caravan', label: 'Caravan' },
       { value: 'tele', label: 'Tele' },
-      { value: 'staff', label: 'Staff' },
-      { value: 'field_agent', label: 'Field Agent' }
+      { value: 'staff', label: 'Staff' }
     ];
 
     return c.json({ roles });

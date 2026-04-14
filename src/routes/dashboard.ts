@@ -39,8 +39,8 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const monthEnd = endDate || getLocalDateString(new Date(now.getFullYear(), now.getMonth() + 1, 0));
 
     // Build role-based filter
-    const caravanFilter = user.role === 'field_agent' ? 'AND caravan_id = $3' : '';
-    const caravanParams = user.role === 'field_agent' ? [user.sub] : [];
+    const caravanFilter = user.role === 'caravan' ? 'AND caravan_id = $3' : '';
+    const caravanParams = user.role === 'caravan' ? [user.sub] : [];
 
     // Get client statistics
     const clientStats = await pool.query(
@@ -49,7 +49,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         COUNT(*) FILTER (WHERE client_type = 'EXISTING') as existing_clients,
         COUNT(*) as total_clients
        FROM clients
-       WHERE 1=1 ${user.role === 'field_agent' ? 'AND user_id = $1' : ''}`,
+       WHERE 1=1 ${user.role === 'caravan' ? 'AND user_id = $1' : ''}`,
       caravanParams
     );
 
@@ -107,7 +107,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
        WHERE i.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 'i.user_id')}
        ORDER BY date DESC
        LIMIT 10`,
-      user.role === 'field_agent' ? [user.sub, user.sub] : []
+      user.role === 'caravan' ? [user.sub, user.sub] : []
     );
 
     // Get clients by agency breakdown
@@ -115,7 +115,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       `SELECT a.name as agency_name, COUNT(c.id) as client_count
        FROM clients c
        LEFT JOIN agencies a ON a.id = c.agency_id
-       ${user.role === 'field_agent' ? 'WHERE c.user_id = $1' : ''}
+       ${user.role === 'caravan' ? 'WHERE c.user_id = $1' : ''}
        GROUP BY a.name
        ORDER BY client_count DESC
        LIMIT 5`,
@@ -166,7 +166,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
 dashboard.get('/performance', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
-    const caravanId = c.req.query('caravan_id') || (user.role === 'field_agent' ? user.sub : null);
+    const caravanId = c.req.query('caravan_id') || (user.role === 'caravan' ? user.sub : null);
 
     if (!caravanId) {
       throw new ValidationError('Caravan ID required');

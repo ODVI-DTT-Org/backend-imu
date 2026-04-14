@@ -35,7 +35,7 @@ targets.get('/', authMiddleware, requirePermission('targets', 'read'), async (c)
 
     // Field agents can only see their own targets
     let userId = c.req.query('user_id');
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       userId = user.sub;
     }
 
@@ -90,7 +90,7 @@ targets.get('/current', authMiddleware, requirePermission('targets', 'read'), as
 
     let userId: string = user.sub;
     const queryUserId = c.req.query('user_id');
-    if (user.role !== 'field_agent' && queryUserId) {
+    if (user.role !== 'caravan' && queryUserId) {
       userId = queryUserId;
     }
 
@@ -164,7 +164,7 @@ targets.get('/history', authMiddleware, requirePermission('targets', 'read'), as
 
     let userId: string = user.sub;
     const queryUserId = c.req.query('user_id');
-    if (user.role !== 'field_agent' && queryUserId) {
+    if (user.role !== 'caravan' && queryUserId) {
       userId = queryUserId;
     }
 
@@ -205,7 +205,7 @@ targets.post('/', authMiddleware, requirePermission('targets', 'create'), auditM
     const validated = createTargetSchema.parse(body);
 
     // Only admin/staff can create targets for others
-    if (user.role === 'field_agent' && validated.user_id !== user.sub) {
+    if (user.role === 'caravan' && validated.user_id !== user.sub) {
       throw new AuthorizationError('Cannot create targets for other users');
     }
 
@@ -261,8 +261,8 @@ targets.delete('/:id', authMiddleware, requirePermission('targets', 'delete'), a
       throw new NotFoundError('Target');
     }
 
-    // Field agents can only delete their own targets
-    if (user.role === 'field_agent' && existing.rows[0].user_id !== user.sub) {
+    // Caravans can only delete their own targets
+    if (user.role === 'caravan' && existing.rows[0].user_id !== user.sub) {
       throw new AuthorizationError('Cannot delete targets for other users');
     }
 

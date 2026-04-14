@@ -295,9 +295,9 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     const requestedDate = c.req.query('date');
     const targetDate = requestedDate || getLocalDateString();
 
-    // Allow admin/staff to specify user_id, field agents use their own id
+    // Allow admin/staff to specify user_id, caravan users use their own id
     let caravanId = c.req.query('user_id');
-    if (user.role === 'field_agent' || !caravanId) {
+    if (user.role === 'caravan' || !caravanId) {
       caravanId = user.sub;
     }
 

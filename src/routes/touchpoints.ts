@@ -458,7 +458,7 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
     const touchpoint = result.rows[0];
 
     // Role-based access check
-    if (user.role === 'field_agent' && touchpoint.user_id !== user.sub) {
+    if (user.role === 'caravan' && touchpoint.user_id !== user.sub) {
       return c.json({ message: 'Forbidden' }, 403);
     }
 

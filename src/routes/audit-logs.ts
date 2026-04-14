@@ -109,7 +109,7 @@ auditLogs.get('/entity/:entity/:id', authMiddleware, requirePermission('audit_lo
 
     // Only admin/staff can view all audit logs
     // Regular users can only see their own related audit logs
-    if (user.role === 'field_agent' && !['client', 'touchpoint', 'itinerary'].includes(entity)) {
+    if (user.role === 'caravan' && !['client', 'touchpoint', 'itinerary'].includes(entity)) {
       return unauthorized(c, 'Not authorized to view these audit logs');
     }
 

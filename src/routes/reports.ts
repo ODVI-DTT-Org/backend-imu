@@ -77,7 +77,7 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       whereClause += ` AND t.user_id = $${paramIndex}`;
       params.push(user.sub);
     } else if (caravanId) {
@@ -155,7 +155,7 @@ reports.get('/client-activity', authMiddleware, requirePermission('reports', 're
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       whereClause += ` AND c.user_id = $${paramIndex}`;
       params.push(user.sub);
     }
@@ -176,7 +176,7 @@ reports.get('/client-activity', authMiddleware, requirePermission('reports', 're
     const tpParams: any[] = [startDate, endDate];
     paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       tpWhereClause += ` AND t.user_id = $${paramIndex}`;
       tpParams.push(user.sub);
     }
@@ -227,7 +227,7 @@ reports.get('/touchpoint-summary', authMiddleware, requirePermission('reports', 
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       whereClause += ` AND user_id = $${paramIndex}`;
       params.push(user.sub);
     }
@@ -286,7 +286,7 @@ reports.get('/attendance-summary', authMiddleware, requirePermission('reports', 
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       whereClause += ` AND a.user_id = $${paramIndex}`;
       params.push(user.sub);
     } else if (caravanId) {
@@ -344,7 +344,7 @@ reports.get('/target-achievement', authMiddleware, requirePermission('reports', 
 
     let userId: string = user.sub;
     const queryUserId = c.req.query('user_id');
-    if (user.role !== 'field_agent' && queryUserId) {
+    if (user.role !== 'caravan' && queryUserId) {
       userId = queryUserId;
     }
 
@@ -423,7 +423,7 @@ reports.get('/conversion', authMiddleware, requirePermission('reports', 'read'),
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       whereClause += ` AND c.user_id = $${paramIndex}`;
       params.push(user.sub);
     }
@@ -510,7 +510,7 @@ reports.get('/area-coverage', authMiddleware, requirePermission('reports', 'read
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       whereClause += ` AND t.user_id = $${paramIndex}`;
       params.push(user.sub);
     }
@@ -597,7 +597,7 @@ reports.get('/export', authMiddleware, requirePermission('reports', 'export'), a
     const { startDate, endDate } = getDateRange(period);
 
     // Only admin/staff can export
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       throw new AuthorizationError('Unauthorized');
     }
 
@@ -839,7 +839,7 @@ reports.get('/export/excel', authMiddleware, requirePermission('reports', 'expor
     const { startDate, endDate } = getDateRange(period);
 
     // Only admin/staff can export
-    if (user.role === 'field_agent') {
+    if (user.role === 'caravan') {
       throw new AuthorizationError('Unauthorized');
     }
 

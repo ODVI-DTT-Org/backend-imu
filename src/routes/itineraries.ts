@@ -68,7 +68,7 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
     let paramIndex = 1;
 
     // Role-based filtering - filter by user_id or municipality
-    if (user.role === 'field_agent' || user.role === 'caravan') {
+    if (user.role === 'caravan') {
       // Filter by user_id (itineraries assigned to this user)
       conditions.push(`i.user_id = $${paramIndex}`);
       params.push(user.sub);
@@ -218,8 +218,8 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
 
     const itinerary = result.rows[0];
 
-    // Role-based access check - field agents can only access their own itineraries
-    if (user.role === 'field_agent' || user.role === 'caravan') {
+    // Role-based access check - caravans can only access their own itineraries
+    if (user.role === 'caravan') {
       if (itinerary.user_id !== user.sub) {
         throw new AuthorizationError('You can only access your own itineraries');
       }
@@ -408,8 +408,8 @@ itineraries.put('/:id', authMiddleware, requirePermission('itineraries', 'update
 
     const itinerary = existing.rows[0];
 
-    // For field agents and caravans, verify they own this itinerary
-    if (user.role === 'field_agent' || user.role === 'caravan') {
+    // For caravans, verify they own this itinerary
+    if (user.role === 'caravan') {
       if (itinerary.user_id !== user.sub) {
         throw new AuthorizationError('You can only modify your own itineraries');
       }
@@ -482,8 +482,8 @@ itineraries.delete('/:id', authMiddleware, requirePermission('itineraries', 'del
 
     const itinerary = existing.rows[0];
 
-    // For field agents and caravans, verify they own this itinerary
-    if (user.role === 'field_agent' || user.role === 'caravan') {
+    // For caravans, verify they own this itinerary
+    if (user.role === 'caravan') {
       if (itinerary.user_id !== user.sub) {
         throw new AuthorizationError('You can only modify your own itineraries');
       }
