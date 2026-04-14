@@ -118,3 +118,75 @@ export function formatDateTime(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   return d.toISOString().replace('T', ' ').substring(0, 19); // YYYY-MM-DD HH:MM:SS
 }
+
+/**
+ * Validate date range
+ * @throws Error if end_date is before start_date
+ */
+export function validateDateRange(startDate?: string, endDate?: string): void {
+  if (startDate && endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (end < start) {
+      throw new Error('End date must be on or after start date');
+    }
+  }
+}
+
+/**
+ * Sanitize sensitive data from export
+ * Removes or masks sensitive fields like passwords, tokens, SSN, etc.
+ */
+export function sanitizeSensitiveData(data: any[], sensitiveFields: string[] = []): any[] {
+  const defaultSensitiveFields = [
+    'password',
+    'token',
+    'secret',
+    'api_key',
+    'apikey',
+    'access_token',
+    'refresh_token',
+    'ssn',
+    'social_security',
+    'credit_card',
+    'pin',
+    'otp',
+  ];
+
+  const fieldsToSanitize = [...defaultSensitiveFields, ...sensitiveFields];
+
+  return data.map(row => {
+    const sanitized = { ...row };
+
+    fieldsToSanitize.forEach(field => {
+      const keys = Object.keys(sanitized);
+      keys.forEach(key => {
+        if (key.toLowerCase().includes(field.toLowerCase())) {
+          // Mask sensitive data: show only last 4 characters
+          const value = sanitized[key];
+          if (value && typeof value === 'string' && value.length > 4) {
+            sanitized[key] = '***' + value.slice(-4);
+          } else if (value) {
+            sanitized[key] = '***';
+          }
+        }
+      });
+    });
+
+    return sanitized;
+  });
+}
+
+/**
+ * Get record count for preview
+ */
+export async function getRecordCount(
+  query: string,
+  params: any[]
+): Promise<number> {
+  // Extract the base query for counting
+  const countQuery = `SELECT COUNT(*) as count FROM (${query}) as subquery`;
+  const result = await pool.query(countQuery, params);
+  return parseInt(result.rows[0].count);
+}

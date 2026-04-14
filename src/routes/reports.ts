@@ -17,6 +17,8 @@ import {
 import {
   exportToCsv,
   getDateRangeCondition,
+  validateDateRange,
+  getRecordCount,
 } from '../utils/csv-export.js';
 
 const reports = new Hono();
@@ -1002,6 +1004,89 @@ reports.get('/visits', authMiddleware, requirePermission('reports', 'read'), asy
   }
 });
 
+// GET /api/reports/preview-count - Preview record count for export
+reports.get('/preview-count', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const reportType = c.req.query('type') || 'releases';
+    const startDate = c.req.query('start_date');
+    const endDate = c.req.query('end_date');
+
+    // Validate date range
+    validateDateRange(startDate, endDate);
+
+    // Only admin/staff can preview
+    if (user.role === 'caravan') {
+      throw new AuthorizationError('Unauthorized');
+    }
+
+    let countQuery: string;
+    let params: any[] = [];
+
+    switch (reportType) {
+      case 'releases': {
+        let whereClause = 'WHERE 1=1';
+        let paramIndex = 1;
+
+        if (startDate || endDate) {
+          const dateCondition = getDateRangeCondition(startDate, endDate, 'r.created_at');
+          whereClause += ` AND ${dateCondition.condition}`;
+          params.push(...dateCondition.params);
+          paramIndex += dateCondition.params.length;
+        }
+
+        countQuery = `
+          SELECT COUNT(*) as count
+          FROM releases r
+          JOIN clients c ON c.id = r.client_id
+          JOIN users u ON u.id = r.user_id
+          ${whereClause}
+        `;
+        break;
+      }
+
+      case 'visits': {
+        let whereClause = 'WHERE 1=1';
+        let paramIndex = 1;
+
+        if (startDate || endDate) {
+          const dateCondition = getDateRangeCondition(startDate, endDate, 'v.created_at');
+          whereClause += ` AND ${dateCondition.condition}`;
+          params.push(...dateCondition.params);
+          paramIndex += dateCondition.params.length;
+        }
+
+        countQuery = `
+          SELECT COUNT(*) as count
+          FROM visits v
+          JOIN clients c ON c.id = v.client_id
+          JOIN users u ON u.id = v.user_id
+          ${whereClause}
+        `;
+        break;
+      }
+
+      default:
+        throw new ValidationError('Invalid report type');
+    }
+
+    const count = await getRecordCount(countQuery, params);
+
+    return c.json({
+      type: reportType,
+      start_date: startDate || 'all',
+      end_date: endDate || 'all',
+      record_count: count,
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message === 'End date must be on or after start date') {
+      throw new ValidationError(error.message);
+    }
+    console.error('Preview count error:', error);
+    throw new Error('Failed to get record count');
+  }
+});
+
 // GET /api/reports/export/csv - Export report data as CSV
 reports.get('/export/csv', authMiddleware, requirePermission('reports', 'export'), async (c) => {
   try {
@@ -1010,6 +1095,9 @@ reports.get('/export/csv', authMiddleware, requirePermission('reports', 'export'
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
     const { formatDate: _formatDate } = await import('../utils/csv-export.js');
+
+    // Validate date range
+    validateDateRange(startDate, endDate);
 
     // Only admin/staff can export
     if (user.role === 'caravan') {
@@ -1191,6 +1279,9 @@ reports.get('/export/csv', authMiddleware, requirePermission('reports', 'export'
       'Content-Disposition': `attachment; filename="${csvData.filename}"`,
     });
   } catch (error) {
+    if (error instanceof Error && error.message === 'End date must be on or after start date') {
+      throw new ValidationError(error.message);
+    }
     console.error('Export CSV error:', error);
     throw new Error('Failed to export CSV');
   }
