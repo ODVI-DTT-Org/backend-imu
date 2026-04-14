@@ -380,7 +380,7 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN LATERAL (
         SELECT t.type, t.user_id
         FROM touchpoints t
-        WHERE t.client_id = mv.client_id AND t.deleted_at IS NULL
+        WHERE t.client_id = mv.client_id
         ORDER BY t.date DESC
         LIMIT 1
       ) t ON true
@@ -832,7 +832,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       LEFT JOIN LATERAL (
         SELECT t.type, t.user_id
         FROM touchpoints t
-        WHERE t.client_id = mv.client_id AND t.deleted_at IS NULL
+        WHERE t.client_id = mv.client_id
         ORDER BY t.date DESC
         LIMIT 1
       ) t ON true
