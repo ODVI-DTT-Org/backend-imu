@@ -52,21 +52,20 @@ async function warmUserCache(userId: string): Promise<number | null> {
 
     const areas = areasResult.rows.map(row => `${row.province}:${row.municipality}`);
 
-    // Build area filter for query
-    const areaConditions = areasResult.rows.map((row, index) => {
-      return `(c.province = $${index * 2 + 1} AND c.municipality = $${index * 2 + 2})`;
-    }).join(' OR ');
+    // Extract provinces and municipalities separately for safer query
+    const provinces = [...new Set(areasResult.rows.map(row => row.province))];
+    const municipalities = [...new Set(areasResult.rows.map(row => row.municipality))];
 
-    const areaParams = areasResult.rows.flatMap(row => [row.province, row.municipality]);
-
-    // Get assigned client IDs using the materialized view
+    // Get assigned client IDs using the materialized view with ANY clause (SQL injection safe)
+    // Using unnest to safely filter by province:municipality combinations
     const clientsResult = await pool.query(
       `SELECT DISTINCT mv.client_id
        FROM client_touchpoint_summary_mv mv
        INNER JOIN clients c ON c.id = mv.client_id
        WHERE c.deleted_at IS NULL
-         AND (${areaConditions})`,
-      areaParams
+         AND c.province = ANY($1)
+         AND c.municipality = ANY($2)`,
+      [provinces, municipalities]
     );
 
     const clientIds = clientsResult.rows.map(row => row.client_id);

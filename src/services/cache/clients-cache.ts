@@ -16,6 +16,33 @@ import { getCacheService, RedisCacheService } from './redis-cache.js';
 // Cache key prefixes with version (v1) for future migrations
 const CACHE_PREFIX = 'v1:clients:';
 
+/**
+ * Validate and sanitize cache key input
+ * Removes dangerous characters and limits length to prevent injection attacks
+ * @param key - Raw key input (userId, clientId, etc.)
+ * @returns Sanitized key safe for use in cache keys
+ */
+function validateCacheKey(key: string): string {
+  if (!key || typeof key !== 'string') {
+    throw new Error('Cache key must be a non-empty string');
+  }
+
+  // Remove any character that's not alphanumeric, hyphen, underscore, or dot
+  // This prevents path traversal, command injection, and key collision attacks
+  const sanitized = key.replace(/[^\w-.]/g, '');
+
+  // Limit length to prevent DoS via excessively long keys
+  if (sanitized.length > 100) {
+    return sanitized.substring(0, 100);
+  }
+
+  if (sanitized.length === 0) {
+    throw new Error('Cache key is invalid after sanitization');
+  }
+
+  return sanitized;
+}
+
 // Cache TTL constants (in seconds)
 const CACHE_TTL = {
   ASSIGNED_IDS: 43200,      // 12 hours - assigned client IDs change infrequently
@@ -69,12 +96,13 @@ export class ClientsCacheService {
    * @returns Assigned client IDs or null if not cached
    */
   async getAssignedClientIds(userId: string): Promise<string[] | null> {
-    const key = `${CACHE_PREFIX}user:assigned_ids:${userId}`;
+    const safeUserId = validateCacheKey(userId);
+    const key = `${CACHE_PREFIX}user:assigned_ids:${safeUserId}`;
     try {
       const data = await this.cache.get<AssignedClientsData>(key);
       return data?.client_ids || null;
     } catch (error) {
-      console.error(`[ClientsCache] Get assigned IDs error for user ${userId}:`, error);
+      console.error(`[ClientsCache] Get assigned IDs error for user ${safeUserId}:`, error);
       return null;
     }
   }
@@ -90,7 +118,8 @@ export class ClientsCacheService {
     clientIds: string[],
     areas: string[] = []
   ): Promise<void> {
-    const key = `${CACHE_PREFIX}user:assigned_ids:${userId}`;
+    const safeUserId = validateCacheKey(userId);
+    const key = `${CACHE_PREFIX}user:assigned_ids:${safeUserId}`;
     const data: AssignedClientsData = {
       client_ids: clientIds,
       areas,
@@ -99,9 +128,9 @@ export class ClientsCacheService {
 
     try {
       await this.cache.set(key, data, CACHE_TTL.ASSIGNED_IDS);
-      console.debug(`[ClientsCache] Cached ${clientIds.length} assigned IDs for user ${userId}`);
+      console.debug(`[ClientsCache] Cached ${clientIds.length} assigned IDs for user ${safeUserId}`);
     } catch (error) {
-      console.error(`[ClientsCache] Set assigned IDs error for user ${userId}:`, error);
+      console.error(`[ClientsCache] Set assigned IDs error for user ${safeUserId}:`, error);
     }
   }
 
@@ -111,12 +140,13 @@ export class ClientsCacheService {
    * @returns Assigned areas or null if not cached
    */
   async getAssignedAreas(userId: string): Promise<string[] | null> {
-    const key = `${CACHE_PREFIX}user:assigned_areas:${userId}`;
+    const safeUserId = validateCacheKey(userId);
+    const key = `${CACHE_PREFIX}user:assigned_areas:${safeUserId}`;
     try {
       const data = await this.cache.get<string[]>(key);
       return data;
     } catch (error) {
-      console.error(`[ClientsCache] Get assigned areas error for user ${userId}:`, error);
+      console.error(`[ClientsCache] Get assigned areas error for user ${safeUserId}:`, error);
       return null;
     }
   }
@@ -127,12 +157,13 @@ export class ClientsCacheService {
    * @param areas - Array of areas (provinces/municipalities)
    */
   async setAssignedAreas(userId: string, areas: string[]): Promise<void> {
-    const key = `${CACHE_PREFIX}user:assigned_areas:${userId}`;
+    const safeUserId = validateCacheKey(userId);
+    const key = `${CACHE_PREFIX}user:assigned_areas:${safeUserId}`;
     try {
       await this.cache.set(key, areas, CACHE_TTL.ASSIGNED_AREAS);
-      console.debug(`[ClientsCache] Cached ${areas.length} areas for user ${userId}`);
+      console.debug(`[ClientsCache] Cached ${areas.length} areas for user ${safeUserId}`);
     } catch (error) {
-      console.error(`[ClientsCache] Set assigned areas error for user ${userId}:`, error);
+      console.error(`[ClientsCache] Set assigned areas error for user ${safeUserId}:`, error);
     }
   }
 
@@ -142,11 +173,12 @@ export class ClientsCacheService {
    * @returns Touchpoint summary or null if not cached
    */
   async getTouchpointSummary(clientId: string): Promise<TouchpointSummary | null> {
-    const key = `${CACHE_PREFIX}client:touchpoint_summary:${clientId}`;
+    const safeClientId = validateCacheKey(clientId);
+    const key = `${CACHE_PREFIX}client:touchpoint_summary:${safeClientId}`;
     try {
       return await this.cache.get<TouchpointSummary>(key);
     } catch (error) {
-      console.error(`[ClientsCache] Get touchpoint summary error for client ${clientId}:`, error);
+      console.error(`[ClientsCache] Get touchpoint summary error for client ${safeClientId}:`, error);
       return null;
     }
   }
@@ -157,11 +189,12 @@ export class ClientsCacheService {
    * @param summary - Touchpoint summary data
    */
   async setTouchpointSummary(clientId: string, summary: TouchpointSummary): Promise<void> {
-    const key = `${CACHE_PREFIX}client:touchpoint_summary:${clientId}`;
+    const safeClientId = validateCacheKey(clientId);
+    const key = `${CACHE_PREFIX}client:touchpoint_summary:${safeClientId}`;
     try {
       await this.cache.set(key, summary, CACHE_TTL.TOUCHPOINT_SUMMARY);
     } catch (error) {
-      console.error(`[ClientsCache] Set touchpoint summary error for client ${clientId}:`, error);
+      console.error(`[ClientsCache] Set touchpoint summary error for client ${safeClientId}:`, error);
     }
   }
 
@@ -176,7 +209,9 @@ export class ClientsCacheService {
       return new Map();
     }
 
-    const keys = clientIds.map((id) => `${CACHE_PREFIX}client:touchpoint_summary:${id}`);
+    // Validate all client IDs to prevent injection
+    const safeClientIds = clientIds.map(id => validateCacheKey(id));
+    const keys = safeClientIds.map((id) => `${CACHE_PREFIX}client:touchpoint_summary:${id}`);
     const result = new Map<string, TouchpointSummary>();
 
     try {
@@ -226,18 +261,19 @@ export class ClientsCacheService {
    * @param userId - User ID
    */
   async invalidateUserCache(userId: string): Promise<void> {
+    const safeUserId = validateCacheKey(userId);
     const patterns = [
-      `${CACHE_PREFIX}user:assigned_ids:${userId}`,
-      `${CACHE_PREFIX}user:assigned_areas:${userId}`,
+      `${CACHE_PREFIX}user:assigned_ids:${safeUserId}`,
+      `${CACHE_PREFIX}user:assigned_areas:${safeUserId}`,
     ];
 
     try {
       for (const key of patterns) {
         await this.cache.del(key);
       }
-      console.debug(`[ClientsCache] Invalidated cache for user ${userId}`);
+      console.debug(`[ClientsCache] Invalidated cache for user ${safeUserId}`);
     } catch (error) {
-      console.error(`[ClientsCache] Invalidate user cache error for ${userId}:`, error);
+      console.error(`[ClientsCache] Invalidate user cache error for ${safeUserId}:`, error);
     }
   }
 
@@ -247,7 +283,8 @@ export class ClientsCacheService {
    * @param clientId - Client ID
    */
   async invalidateTouchpointSummary(clientId: string): Promise<void> {
-    const key = `${CACHE_PREFIX}client:touchpoint_summary:${clientId}`;
+    const safeClientId = validateCacheKey(clientId);
+    const key = `${CACHE_PREFIX}client:touchpoint_summary:${safeClientId}`;
     try {
       await this.cache.del(key);
       console.debug(`[ClientsCache] Invalidated touchpoint summary for client ${clientId}`);
@@ -266,12 +303,14 @@ export class ClientsCacheService {
       return;
     }
 
-    const keys = clientIds.map((id) => `${CACHE_PREFIX}client:touchpoint_summary:${id}`);
+    // Validate all client IDs to prevent injection
+    const safeClientIds = clientIds.map(id => validateCacheKey(id));
+    const keys = safeClientIds.map((id) => `${CACHE_PREFIX}client:touchpoint_summary:${id}`);
 
     try {
       const client = this.cache.getClient();
       await client.del(...keys);
-      console.debug(`[ClientsCache] Invalidated ${clientIds.length} touchpoint summaries`);
+      console.debug(`[ClientsCache] Invalidated ${safeClientIds.length} touchpoint summaries`);
     } catch (error) {
       console.error('[ClientsCache] Invalidate touchpoint summaries error:', error);
     }
@@ -315,25 +354,40 @@ export class ClientsCacheService {
    * Uses lock to ensure only one request populates the cache
    * @param cacheKey - The cache key being protected
    * @param fn - Function to execute if cache miss
+   * @param options - Retry options
    * @returns Result from cache or function execution
    */
-  async withLock<T>(cacheKey: string, fn: () => Promise<T>): Promise<T> {
-    const lockAcquired = await this.acquireLock(cacheKey);
+  async withLock<T>(
+    cacheKey: string,
+    fn: () => Promise<T>,
+    options: { maxRetries?: number; baseDelay?: number } = {}
+  ): Promise<T> {
+    const { maxRetries = 5, baseDelay = 100 } = options;
 
-    if (!lockAcquired) {
-      // Lock not acquired, wait briefly and try to get from cache again
-      await this.sleep(100);
-      // Return null to indicate caller should retry
-      throw new Error('Cache lock not acquired - retry recommended');
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      const lockAcquired = await this.acquireLock(cacheKey);
+
+      if (lockAcquired) {
+        try {
+          // Execute the function to populate cache
+          return await fn();
+        } finally {
+          // Always release the lock
+          await this.releaseLock(cacheKey);
+        }
+      }
+
+      // Lock not acquired, use exponential backoff with jitter
+      // This prevents thundering herd problem
+      const exponentialDelay = baseDelay * Math.pow(2, attempt);
+      const jitter = Math.random() * 50; // Add randomness to prevent synchronized retries
+      const delay = exponentialDelay + jitter;
+
+      console.debug(`[ClientsCache] Lock not acquired for ${cacheKey}, retry ${attempt + 1}/${maxRetries} after ${delay.toFixed(0)}ms`);
+      await this.sleep(delay);
     }
 
-    try {
-      // Execute the function to populate cache
-      return await fn();
-    } finally {
-      // Always release the lock
-      await this.releaseLock(cacheKey);
-    }
+    throw new Error(`Cache lock not acquired after ${maxRetries} attempts for ${cacheKey}`);
   }
 
   /**

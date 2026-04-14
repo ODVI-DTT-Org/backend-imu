@@ -34,6 +34,13 @@ POWERSYNC_PUBLIC_KEY=-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----
 POWERSYNC_KEY_ID=imu-production-key-20260401
 POWERSYNC_URL=https://xxx.powersync.journeyapps.com
 
+# Redis Caching (Optional but recommended for production)
+REDIS_URL=redis://localhost:6379/0
+REDIS_ENABLED=true
+REDIS_DB_INDEX=0
+REDIS_KEY_PREFIX=imu:prod:
+REDIS_TLS=true
+
 # Mapbox
 MAPBOX_ACCESS_TOKEN=your-mapbox-public-token
 
@@ -76,6 +83,12 @@ UPLOAD_DIR=./uploads
 # Session
 SESSION_SECRET=your-session-secret
 SESSION_MAX_AGE=28800000
+
+# Redis Cache TTLs (Customize if needed)
+CACHE_TTL_ASSIGNED_CLIENT_IDS=43200  # 12 hours
+CACHE_TTL_TOUCHPOINT_SUMMARY=300     # 5 minutes
+CACHE_TTL_ASSIGNED_AREAS=3600        # 1 hour
+CACHE_TTL_LOCK=10                    # 10 seconds
 ```
 
 ---
@@ -219,6 +232,20 @@ VITE_ENABLE_ANALYTICS=true
 | `POWERSYNC_PUBLIC_KEY` | Yes | - | RSA public key (with escaped newlines) |
 | `POWERSYNC_KEY_ID` | Yes | - | Key identifier for PowerSync |
 | `POWERSYNC_URL` | Yes | - | PowerSync service URL |
+
+### Redis Caching (IMU Client Caching)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `REDIS_URL` | No | - | Redis connection string (`redis://host:port/db`) |
+| `REDIS_ENABLED` | No | true | Enable/disable Redis caching |
+| `REDIS_DB_INDEX` | No | 0 | Redis database index (0-15) |
+| `REDIS_KEY_PREFIX` | No | `imu:` | Cache key prefix for environment isolation |
+| `REDIS_TLS` | No | false | Use TLS for Redis connection |
+| `CACHE_TTL_ASSIGNED_CLIENT_IDS` | No | 43200 | Assigned clients cache TTL (12h in seconds) |
+| `CACHE_TTL_TOUCHPOINT_SUMMARY` | No | 300 | Touchpoint summary cache TTL (5min in seconds) |
+| `CACHE_TTL_ASSIGNED_AREAS` | No | 3600 | Assigned areas cache TTL (1h in seconds) |
+| `CACHE_TTL_LOCK` | No | 10 | Cache stampede prevention lock TTL (10s) |
 
 ### Mapbox
 

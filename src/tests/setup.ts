@@ -24,6 +24,23 @@ fN7XLN3wVWxPfN7XLN3wVWxPfN7XLN3wVWxPfN7XLN3wVWxPfN7XLN3wVWxPfN7X
 LwIDAQAB
 -----END PUBLIC KEY-----`;
 
+// Set PowerSync private key for JWT signing
+process.env.POWERSYNC_PRIVATE_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCvPbHca8W6U3om
+MolCyrA08/IkfsUaMqTSo18/XmlBt+PoWQypN831ss3fBbXE983tcs3fBbXE983tc
+szd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8
+FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8Fl
+cT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9
+ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2
+zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8FlcT9ztc2zd8
+FwIDAQABAoIBAFGmZXR4b9LJqkqw5N4g0yx8qH6tZkd1vPWwBp2sL0Za3pMqxf7R8
+eJKTZ1x4Zq6wZV8XZq8WZr9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmP
+WzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9Z
+mPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq
+9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq
+9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZq9ZmPWzZ
+-----END PRIVATE KEY-----`;
+
 // Set DATABASE_URL to prevent connection errors
 process.env.DATABASE_URL = 'postgresql://test:test@localhost:5432/test_db';
 
