@@ -8,15 +8,18 @@
 
 ## Executive Summary
 
-This document outlines the approved design changes to two critical data flows in the IMU system:
+This document outlines the approved design changes to critical data flows in the IMU system:
 
-1. **Visit Record Only**: Redesigned to create only an itinerary record, NOT a touchpoint
-2. **Loan Release**: Redesigned to skip Touchpoint #7 creation, mark client as loan_released directly
+1. **Visit Record Only**: Redesigned to use `visits` table instead of creating fake touchpoints
+2. **Loan Release**: Two-path design - Admin direct release vs Caravan field visit with approval
+3. **Add Address/Phone**: Role-based approval flow for Caravan/Tele, direct insert for Admin
+4. **Touchpoint Creation**: Unchanged - continues to use touchpoints + visits + itineraries
 
 **Design Decision Summary:**
-- Both approaches simplify the data model by removing unnecessary touchpoint creation
-- Better separation of concerns: touchpoints = 7-step sales process, itineraries = visit tracking
-- Maintains audit trail while reducing data redundancy
+- Clean separation: `touchpoints` = 7-step sales process, `visits` = actual visit records, `itineraries` = scheduled visits
+- Admin bypass: Admin users can directly insert without approval (address, phone, loan release)
+- Caravan/Tele approval: Field agents require approval for client data changes and loan releases
+- No more fake touchpoint records (#0 or #7)
 
 ---
 
@@ -34,148 +37,260 @@ This document outlines the approved design changes to two critical data flows in
 - This is semantically incorrect - loan release is not the same as completing the sales process
 - Creates confusion in reporting and analytics
 
+**Add Address/Phone:**
+- Currently bypasses approval system for Caravan/Tele users
+- Client data changes should require admin oversight
+
 ### Business Requirements
 
 **User Requirements (as stated):**
 1. "visit record only should not create touchpoint, but a visit record only"
-2. "loan release should create a touchpoint but should not be labeled as complete, maybe something for history like 'released loan on...'"
-3. After brainstorming: User approved Approach 1 for both (skip touchpoint creation)
+2. "loan release should be different for admin vs caravan"
+3. "add address and add phone should require approval for caravan/tele"
 
 **Approval Rules:**
-- Loan release: Requires admin approval
-- Visit record only: No approval required
-- Touchpoint creation (1-7): No approval required
+- **Loan Release (Caravan)**: Requires admin approval, creates visit record
+- **Loan Release (Admin)**: No approval required, direct release processing
+- **Add Address/Phone (Caravan/Tele)**: Requires admin approval
+- **Add Address/Phone (Admin)**: No approval required, direct insert
+- **Visit Record Only**: No approval required
+- **Touchpoint Creation**: No approval required
+
+---
+
+## Database Schema Overview
+
+Based on `COMPLETE_SCHEMA.sql`, the relevant tables are:
+
+### Key Tables
+
+**itineraries** - Scheduled/planned visits
+```sql
+CREATE TABLE itineraries (
+  id UUID PRIMARY KEY,
+  user_id UUID REFERENCES users(id),
+  client_id UUID REFERENCES clients(id),
+  scheduled_date DATE NOT NULL,
+  scheduled_time TEXT,
+  status TEXT DEFAULT 'pending',  -- 'pending', 'in_progress', 'completed'
+  priority TEXT DEFAULT 'normal',
+  notes TEXT,
+  created_by UUID REFERENCES users(id),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**visits** - Actual completed visits
+```sql
+CREATE TABLE visits (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+  type TEXT NOT NULL DEFAULT 'regular_visit'
+    CHECK (type IN ('regular_visit', 'release_loan')),
+  time_in TIMESTAMPTZ,
+  time_out TIMESTAMPTZ,
+  odometer_arrival TEXT,
+  odometer_departure TEXT,
+  photo_url TEXT,
+  notes TEXT,
+  reason TEXT,
+  status TEXT,
+  address TEXT,
+  latitude REAL,
+  longitude REAL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**releases** - Loan release records
+```sql
+CREATE TABLE releases (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+  visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+  product_type TEXT NOT NULL
+    CHECK (product_type IN ('PUSU', 'LIKA', 'SUB2K')),
+  loan_type TEXT NOT NULL
+    CHECK (loan_type IN ('NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM')),
+  amount NUMERIC NOT NULL,
+  approval_notes TEXT,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed')),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**approvals** - Approval workflow storage
+```sql
+CREATE TABLE approvals (
+  id UUID PRIMARY KEY,
+  type TEXT NOT NULL,
+  client_id UUID REFERENCES clients(id),
+  user_id UUID REFERENCES users(id),
+  role TEXT,
+  reason TEXT,
+  notes JSONB,
+  status TEXT DEFAULT 'pending',
+  reviewed_by UUID REFERENCES users(id),
+  reviewed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**addresses** - Client addresses
+```sql
+CREATE TABLE addresses (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  type TEXT NOT NULL,
+  street TEXT,
+  barangay TEXT,
+  city_municipality TEXT,
+  province TEXT,
+  postal_code TEXT,
+  psgc_id TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**phone_numbers** - Client phone numbers
+```sql
+CREATE TABLE phone_numbers (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  phone_number TEXT NOT NULL,
+  type TEXT NOT NULL,
+  is_primary BOOLEAN DEFAULT FALSE,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**touchpoints** - Sales process tracking (unchanged)
+```sql
+CREATE TABLE touchpoints (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+  touchpoint_number INTEGER NOT NULL
+    CHECK (touchpoint_number BETWEEN 1 AND 7),
+  type TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL
+    CHECK (status IN ('Interested', 'Undecided', 'Not Interested', 'Completed')),
+  date DATE NOT NULL,
+  -- ... other fields
+);
+```
+
+**clients** - Client records
+```sql
+CREATE TABLE clients (
+  id UUID PRIMARY KEY,
+  -- ... other fields
+  loan_released BOOLEAN DEFAULT FALSE,
+  loan_released_at TIMESTAMPTZ,
+  -- ... other fields
+);
+```
 
 ---
 
 ## Approved Design Changes
 
-### Change 1: Visit Record Only (Itinerary-Only Approach)
+### Change 1: Visit Record Only (Visits Table Approach)
 
 **Current Behavior:**
 ```
 POST /api/my-day/clients/:id/visit
 → Creates touchpoint with touchpoint_number=0 (HACK)
-→ Creates itinerary record
+→ Creates/updates itinerary record
 ```
 
 **New Behavior:**
 ```
 POST /api/my-day/clients/:id/visit
-→ Creates/updates itinerary record ONLY
+→ CREATE visits record (type='regular_visit')
+→ UPDATE itineraries (status='completed')
 → NO touchpoint creation
 ```
 
 **Rationale:**
-- Clean separation: touchpoints = 7-step sales process, itineraries = visit tracking
+- Clean separation: touchpoints = 7-step sales process, visits = actual visit records
 - Eliminates the `touchpoint_number=0` hack
 - Better reflects the actual business activity (general visit vs sales touchpoint)
 
-### Change 2: Loan Release (No Touchpoint #7 Approach)
+### Change 2: Loan Release (Two-Path Approach)
+
+**Path A: Admin Direct Release (NEW)**
+```
+POST /api/approvals/loan-release-v2 (Admin)
+→ CREATE releases record (visit_id=NULL)
+→ UPDATE clients (loan_released=TRUE)
+→ NO approval, NO visit, NO itinerary update
+```
+
+**Path B: Caravan Field Visit with Approval (UPDATED)**
+```
+POST /api/approvals/loan-release-v2 (Caravan)
+→ CREATE visits record (type='release_loan')
+→ UPDATE itineraries (status='in_progress')
+→ CREATE approval request (status='pending')
+
+On Admin Approval:
+→ CREATE releases record (visit_id=<visit_id>)
+→ UPDATE clients (loan_released=TRUE)
+→ UPDATE itineraries (status='completed')
+```
+
+**Rationale:**
+- Admin: Direct release processing (backend office, not at client location)
+- Caravan: Field visit requires approval (at client location, needs authorization)
+- No more fake Touchpoint #7 creation
+- Proper audit trail via visits + releases tables
+
+### Change 3: Add Address/Phone (Role-Based Approval)
 
 **Current Behavior:**
 ```
-POST /api/approvals/loan-release-v2
-→ On approval: Creates Touchpoint #7 (Visit) with status="Completed"
-→ Updates client.loan_released = TRUE
-→ Creates itinerary record
+POST /api/clients/:id/addresses or /phones
+→ Direct insert for all users
+→ NO approval workflow
 ```
 
 **New Behavior:**
 ```
-POST /api/approvals/loan-release-v2
-→ On approval: NO touchpoint creation
-→ Updates client.loan_released = TRUE, client.loan_released_at = NOW()
-→ Creates itinerary record (for audit trail)
-→ Add 'loan_released' to touchpoint status enum (for future use)
+POST /api/clients/:id/addresses or /phones
+
+IF user.role == 'admin':
+  → Direct insert (no approval)
+
+IF user.role == 'caravan' OR user.role == 'tele':
+  → CREATE approval request (status='pending')
+
+  On Admin Approval:
+    → CREATE address/phone record
 ```
 
 **Rationale:**
-- Loan release is an administrative action, not a sales touchpoint
-- Touchpoint #7 should only be created when the 7th sales visit actually occurs
-- Maintains audit trail via itinerary record
+- Admin bypass: Trusted users can directly update client data
+- Caravan/Tele approval: Field agent changes require admin oversight
+- Maintains data integrity while allowing flexibility
 
 ---
 
 ## Architecture Changes
 
-### 1. Database Schema Changes
+### 1. Backend API Changes
 
-#### 1.1 Itinerary Table Enhancements
-
-**New Columns to Add:**
-```sql
-ALTER TABLE itineraries ADD COLUMN IF NOT EXISTS visit_outcome VARCHAR(50);
-ALTER TABLE itineraries ADD COLUMN IF NOT EXISTS actual_time_in TIME;
-ALTER TABLE itineraries ADD COLUMN IF NOT EXISTS actual_time_out TIME;
-ALTER TABLE itineraries ADD COLUMN IF NOT EXISTS gps_latitude DOUBLE PRECISION;
-ALTER TABLE itineraries ADD COLUMN IF NOT EXISTS gps_longitude DOUBLE PRECISION;
-ALTER TABLE itineraries ADD COLUMN IF NOT EXISTS gps_address TEXT;
-```
-
-**Add CHECK Constraint for visit_outcome:**
-```sql
-ALTER TABLE itineraries ADD CONSTRAINT visit_outcome_check
-  CHECK (visit_outcome IN (
-    'successful',
-    'unsuccessful',
-    'client_not_available',
-    'wrong_contact',
-    'rescheduled',
-    'refused',
-    'other'
-  ));
-```
-
-**Rationale:**
-- `visit_outcome`: Better tracking of visit results (beyond simple status)
-- `actual_time_in/out`: Separate from scheduled time (time_in/time_out columns)
-- GPS fields: Capture location data for visit verification
-
-#### 1.2 Touchpoint Status Enum Update
-
-**Current CHECK Constraint:**
-```sql
-CONSTRAINT touchpoint_status_check
-  CHECK (status IN ('Interested', 'Undecided', 'Not Interested', 'Completed'))
-```
-
-**New CHECK Constraint:**
-```sql
--- Drop old constraint
-ALTER TABLE touchpoints DROP CONSTRAINT IF EXISTS touchpoint_status_check;
-
--- Add new constraint with loan_released
-ALTER TABLE touchpoints ADD CONSTRAINT touchpoint_status_check
-  CHECK (status IN (
-    'Interested',
-    'Undecided',
-    'Not Interested',
-    'Completed',
-    'loan_released'
-  ));
-```
-
-**Rationale:**
-- **DECISION: Remove this change** - The 'loan_released' status is not needed since we're not creating touchpoints for loan releases
-- Keep the touchpoint status enum as-is: Interested, Undecided, Not Interested, Completed
-- If loan release context is needed in the future, use the itinerary.status='loan_released' field instead
-
-#### 1.3 Client Table Enhancements (Already Exists)
-
-**Existing Columns (No Changes Needed):**
-```sql
-loan_released BOOLEAN DEFAULT FALSE
-loan_released_at TIMESTAMP
-```
-
-**Note:** These columns already exist and are used by the loan release flow.
-
----
-
-### 2. Backend API Changes
-
-#### 2.1 Visit Record Only Endpoint
+#### 1.1 Visit Record Only Endpoint
 
 **File:** `backend/src/routes/my-day.ts`
 
@@ -191,7 +306,7 @@ myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
     )
   `, [clientId, userId]);
 
-  // Creates itinerary
+  // Creates/updates itinerary
   await client.query(`INSERT INTO itineraries ...`);
 });
 ```
@@ -200,509 +315,804 @@ myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
 ```typescript
 myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
   const schema = z.object({
-    remarks: z.string().optional(),
-    visit_outcome: z.enum(['successful', 'unsuccessful', 'client_not_available', 'wrong_contact', 'rescheduled', 'refused', 'other']).optional(),
-    actual_time_in: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-    actual_time_out: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-    gps_latitude: z.number().optional(),
-    gps_longitude: z.number().optional(),
-    gps_address: z.string().optional(),
+    time_in: z.string().datetime().optional(),
+    time_out: z.string().datetime().optional(),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
+    address: z.string().optional(),
+    photo_url: z.string().optional(),
+    notes: z.string().optional(),
   });
 
   const validated = schema.parse(await c.req.json());
+  const clientId = c.req.param('id');
+  const user = c.get('user');
 
-  // NO touchpoint creation - only itinerary
-  await client.query(`
-    INSERT INTO itineraries (
-      id, client_id, user_id, scheduled_date, scheduled_time_in, scheduled_time_out,
-      actual_time_in, actual_time_out, visit_outcome,
-      gps_latitude, gps_longitude, gps_address,
-      status, remarks, created_at
-    ) VALUES (
-      gen_random_uuid(), $1, $2, CURRENT_DATE, NULL, NULL,
-      $3, $4, $5,
-      $6, $7, $8,
-      'completed', $9, NOW()
-    )
-  `, [
-    clientId, userId,
-    validated.actual_time_in,
-    validated.actual_time_out,
-    validated.visit_outcome,
-    validated.gps_latitude,
-    validated.gps_longitude,
-    validated.gps_address,
-    validated.remarks,
-  ]);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  return c.json({ message: 'Visit recorded successfully' });
+    // CREATE visits record
+    const visitResult = await client.query(`
+      INSERT INTO visits (
+        id, client_id, user_id, type, time_in, time_out,
+        latitude, longitude, address, photo_url, notes
+      ) VALUES (
+        gen_random_uuid(), $1, $2, 'regular_visit', $3, $4, $5, $6, $7, $8, $9
+      ) RETURNING id
+    `, [clientId, user.sub, validated.time_in, validated.time_out,
+        validated.latitude, validated.longitude, validated.address,
+        validated.photo_url, validated.notes]);
+
+    // UPDATE itineraries
+    await client.query(`
+      UPDATE itineraries
+      SET status = 'completed', updated_at = NOW()
+      WHERE client_id = $1
+        AND scheduled_date = CURRENT_DATE
+        AND user_id = $2
+    `, [clientId, user.sub]);
+
+    await client.query('COMMIT');
+
+    return c.json({
+      message: 'Visit recorded successfully',
+      visit_id: visitResult.rows[0].id
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 });
 ```
 
 **Key Changes:**
 - Removed touchpoint creation entirely
-- Added new fields: visit_outcome, actual_time_in/out, GPS data
-- Simplified logic - single INSERT to itineraries table
+- Added visits record creation (type='regular_visit')
+- Updated itineraries status to 'completed'
 
-#### 2.2 Loan Release Approval Handler
+#### 1.2 Loan Release Endpoint (Two Paths)
 
 **File:** `backend/src/routes/approvals.ts`
 
-**Current Implementation (lines 538-592):**
+**Path A: Admin Direct Release (NEW)**
 ```typescript
-if (approval.type === 'loan_release_v2') {
-  // Mark client as loan_released
-  await client.query(`
-    UPDATE clients
-    SET loan_released = TRUE, loan_released_at = NOW()
-    WHERE id = $1
-  `, [clientId]);
+approvals.post('/loan-release-v2', authMiddleware, async (c) => {
+  const user = c.get('user');
 
-  // Create Touchpoint #7 (REMOVE THIS)
-  await client.query(`
-    INSERT INTO touchpoints (
-      id, client_id, user_id, touchpoint_number, type, reason, status, date
-    ) VALUES (
-      gen_random_uuid(), $1, $2, 7, 'Visit', 'Loan Release', 'Completed', CURRENT_DATE
-    )
-  `, [clientId, userId]);
+  // Admin bypass: Direct release
+  if (user.role === 'admin') {
+    const schema = z.object({
+      client_id: z.string().uuid(),
+      udi_number: z.string().min(1).max(50),
+      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
+      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+      amount: z.number().positive(),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
+      address: z.string().optional(),
+      photo_url: z.string().optional(),
+      remarks: z.string().optional(),
+    });
 
-  // Create itinerary
-  await client.query(`INSERT INTO itineraries ...`);
+    const validated = schema.parse(await c.req.json());
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // CREATE releases record (no visit_id)
+      await client.query(`
+        INSERT INTO releases (
+          id, client_id, user_id, visit_id, product_type, loan_type,
+          amount, approval_notes, status
+        ) VALUES (
+          gen_random_uuid(), $1, $2, NULL, $3, $4, $5, $6, 'approved'
+        )
+      `, [validated.client_id, user.sub, validated.product_type,
+          validated.loan_type, validated.amount, validated.remarks]);
+
+      // UPDATE clients
+      await client.query(`
+        UPDATE clients
+        SET loan_released = TRUE, loan_released_at = NOW()
+        WHERE id = $1
+      `, [validated.client_id]);
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Loan release processed successfully',
+        client_id: validated.client_id,
+        loan_released: true,
+        loan_released_at: new Date().toISOString()
+      });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  // Caravan/Tele: Requires approval (see Path B below)
+  // ...
+});
+```
+
+**Path B: Caravan/Tele Approval Flow (UPDATED)**
+```typescript
+// Inside the same endpoint, after admin check:
+else {
+  // Caravan/Tele: Create visit + approval request
+  const schema = z.object({
+    client_id: z.string().uuid(),
+    udi_number: z.string().min(1).max(50),
+    product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
+    loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+    amount: z.number().positive(),
+    time_in: z.string().datetime().optional(),
+    time_out: z.string().datetime().optional(),
+    latitude: z.number().optional(),
+    longitude: z.number().optional(),
+    address: z.string().optional(),
+    photo_url: z.string().optional(),
+    remarks: z.string().optional(),
+  });
+
+  const validated = schema.parse(await c.req.json());
+
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+
+    // CREATE visits record
+    const visitResult = await dbClient.query(`
+      INSERT INTO visits (
+        id, client_id, user_id, type, time_in, time_out,
+        latitude, longitude, address, photo_url, notes
+      ) VALUES (
+        gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9
+      ) RETURNING id
+    `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
+        validated.latitude, validated.longitude, validated.address,
+        validated.photo_url, validated.remarks]);
+
+    const visitId = visitResult.rows[0].id;
+
+    // UPDATE itineraries (stays in_progress)
+    await dbClient.query(`
+      UPDATE itineraries
+      SET status = 'in_progress', updated_at = NOW()
+      WHERE client_id = $1
+        AND scheduled_date = CURRENT_DATE
+        AND user_id = $2
+    `, [validated.client_id, user.sub]);
+
+    // CREATE approval request
+    const approvalResult = await dbClient.query(`
+      INSERT INTO approvals (
+        id, type, client_id, user_id, role, reason, notes, status
+      ) VALUES (
+        gen_random_uuid(), 'loan_release_v2', $1, $2, $3, $4, $5, 'pending'
+      ) RETURNING id
+    `, [validated.client_id, user.sub, user.role,
+        'Loan Release Request',
+        JSON.stringify({
+          visit_id: visitId,
+          udi_number: validated.udi_number,
+          product_type: validated.product_type,
+          loan_type: validated.loan_type,
+          amount: validated.amount,
+          // ... other fields
+        })]);
+
+    await dbClient.query('COMMIT');
+
+    return c.json({
+      message: 'Loan release submitted for approval',
+      approval_id: approvalResult.rows[0].id,
+      status: 'pending'
+    }), 201;
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    throw error;
+  } finally {
+    dbClient.release();
+  }
 }
 ```
+
+**Approval Handler (UPDATED):**
+```typescript
+approvals.post('/:id/approve', authMiddleware, requireRole('admin'), async (c) => {
+  const approvalId = c.req.param('id');
+  const user = c.get('user');
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Get approval details
+    const approvalResult = await client.query(`
+      SELECT * FROM approvals WHERE id = $1
+    `, [approvalId]);
+
+    if (approvalResult.rows.length === 0) {
+      throw new Error('Approval not found');
+    }
+
+    const approval = approvalResult.rows[0];
+
+    // UPDATE approvals
+    await client.query(`
+      UPDATE approvals
+      SET status = 'approved', reviewed_by = $1, reviewed_at = NOW()
+      WHERE id = $2
+    `, [user.sub, approvalId]);
+
+    // Process based on approval type
+    if (approval.type === 'loan_release_v2') {
+      const notes = approval.notes;
+      const visitId = notes.visit_id;
+
+      // CREATE releases record (references visit_id)
+      await client.query(`
+        INSERT INTO releases (
+          id, client_id, user_id, visit_id, product_type, loan_type,
+          amount, approval_notes, status
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'approved'
+        )
+      `, [approval.client_id, approval.user_id, visitId,
+          notes.product_type, notes.loan_type, notes.amount,
+          'Approved by admin']);
+
+      // UPDATE clients
+      await client.query(`
+        UPDATE clients
+        SET loan_released = TRUE, loan_released_at = NOW()
+        WHERE id = $1
+      `, [approval.client_id]);
+
+      // UPDATE itineraries (now completed)
+      await client.query(`
+        UPDATE itineraries
+        SET status = 'completed', updated_at = NOW()
+        WHERE client_id = $1
+          AND scheduled_date = CURRENT_DATE
+          AND user_id = $2
+      `, [approval.client_id, approval.user_id]);
+    }
+
+    else if (approval.type === 'address_add') {
+      const notes = approval.notes;
+
+      // CREATE addresses record
+      await client.query(`
+        INSERT INTO addresses (
+          id, client_id, type, street, barangay, city_municipality,
+          province, postal_code, psgc_id
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+        )
+      `, [approval.client_id, notes.type, notes.street, notes.barangay,
+          notes.city_municipality, notes.province, notes.postal_code,
+          notes.psgc_id]);
+    }
+
+    else if (approval.type === 'phone_add') {
+      const notes = approval.notes;
+
+      // CREATE phone_numbers record
+      await client.query(`
+        INSERT INTO phone_numbers (
+          id, client_id, phone_number, type, is_primary
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4
+        )
+      `, [approval.client_id, notes.phone_number, notes.type, notes.is_primary]);
+    }
+
+    await client.query('COMMIT');
+
+    return c.json({ message: 'Approval processed successfully' });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
+```
+
+#### 1.3 Add Address Endpoint (Role-Based)
+
+**File:** `backend/src/routes/clients.ts`
 
 **New Implementation:**
 ```typescript
-if (approval.type === 'loan_release_v2') {
-  const notes = approval.notes as Record<string, any>;
+clients.post('/:id/addresses', authMiddleware, async (c) => {
+  const clientId = c.req.param('id');
+  const user = c.get('user');
 
-  // Mark client as loan_released
-  await client.query(`
-    UPDATE clients
-    SET loan_released = TRUE, loan_released_at = NOW()
-    WHERE id = $1
-  `, [clientId]);
-
-  // NO touchpoint creation - skip Touchpoint #7
-
-  // Create itinerary record for audit trail
-  await client.query(`
-    INSERT INTO itineraries (
-      id, client_id, user_id, scheduled_date,
-      actual_time_in, actual_time_out,
-      gps_latitude, gps_longitude, gps_address,
-      status, remarks, created_at
-    ) VALUES (
-      gen_random_uuid(), $1, $2, CURRENT_DATE,
-      $3, $4,
-      $5, $6, $7,
-      'loan_released', $8, NOW()
-    )
-  `, [
-    clientId, userId,
-    notes.time_in, notes.time_out,
-    notes.latitude, notes.longitude, notes.address,
-    notes.remarks,
-  ]);
-
-  return c.json({
-    message: 'Loan release approved',
-    client_id: clientId,
-    loan_released: true,
-    loan_released_at: new Date().toISOString(),
+  const schema = z.object({
+    type: z.enum(['home', 'business', 'other']),
+    street: z.string().optional(),
+    barangay: z.string().optional(),
+    city_municipality: z.string().optional(),
+    province: z.string().optional(),
+    postal_code: z.string().optional(),
+    psgc_id: z.string().optional(),
   });
-}
+
+  const validated = schema.parse(await c.req.json());
+
+  const client = await pool.connect();
+  try {
+    // Admin: Direct insert
+    if (user.role === 'admin') {
+      const result = await client.query(`
+        INSERT INTO addresses (
+          id, client_id, type, street, barangay, city_municipality,
+          province, postal_code, psgc_id
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+        ) RETURNING *
+      `, [clientId, validated.type, validated.street, validated.barangay,
+          validated.city_municipality, validated.province, validated.postal_code,
+          validated.psgc_id]);
+
+      return c.json(result.rows[0], 201);
+    }
+
+    // Caravan/Tele: Create approval request
+    else {
+      await client.query('BEGIN');
+
+      await client.query(`
+        INSERT INTO approvals (
+          id, type, client_id, user_id, role, reason, notes, status
+        ) VALUES (
+          gen_random_uuid(), 'address_add', $1, $2, $3, $4, $5, 'pending'
+        ) RETURNING id
+      `, [clientId, user.sub, user.role, 'Add Address Request',
+        JSON.stringify(validated)]);
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Address addition submitted for approval',
+        requires_approval: true
+      });
+    }
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
 ```
 
-**Key Changes:**
-- Removed Touchpoint #7 creation entirely
-- Added status='loan_released' to itinerary record
-- Uses itinerary as audit trail instead of touchpoint
+#### 1.4 Add Phone Endpoint (Role-Based)
 
----
+**File:** `backend/src/routes/clients.ts`
 
-### 3. Mobile App Changes
+**New Implementation:**
+```typescript
+clients.post('/:id/phones', authMiddleware, async (c) => {
+  const clientId = c.req.param('id');
+  const user = c.get('user');
 
-#### 3.1 Visit Record Form (No Changes Required)
+  const schema = z.object({
+    phone_number: z.string().regex(/^09\d{9}$/),
+    type: z.enum(['mobile', 'landline', 'other']),
+    is_primary: z.boolean().default(false),
+  });
 
-**File:** `mobile/imu_flutter/lib/features/my_day/presentation/widgets/visit_form.dart`
+  const validated = schema.parse(await c.req.json());
 
-**Status:** ✅ Already exists and uses correct endpoint
+  const client = await pool.connect();
+  try {
+    // Admin: Direct insert
+    if (user.role === 'admin') {
+      const result = await client.query(`
+        INSERT INTO phone_numbers (
+          id, client_id, phone_number, type, is_primary
+        ) VALUES (
+          gen_random_uuid(), $1, $2, $3, $4
+        ) RETURNING *
+      `, [clientId, validated.phone_number, validated.type, validated.is_primary]);
 
-**Current Implementation:**
-```dart
-// Already uses POST /api/my-day/clients/:id/visit
-await myDayApiService.completeVisit(
-  clientId: widget.client.id!,
-  remarks: _remarks,
-);
-```
+      return c.json(result.rows[0], 201);
+    }
 
-**Action:** No changes needed - endpoint will be updated on backend
+    // Caravan/Tele: Create approval request
+    else {
+      await client.query('BEGIN');
 
-#### 3.2 Release Loan Form (No Changes Required)
+      await client.query(`
+        INSERT INTO approvals (
+          id, type, client_id, user_id, role, reason, notes, status
+        ) VALUES (
+          gen_random_uuid(), 'phone_add', $1, $2, $3, $4, $5, 'pending'
+        ) RETURNING id
+      `, [clientId, user.sub, user.role, 'Add Phone Number Request',
+        JSON.stringify(validated)]);
 
-**File:** `mobile/imu_flutter/lib/features/record_forms/presentation/widgets/release_loan_form.dart`
+      await client.query('COMMIT');
 
-**Status:** ✅ Already updated in previous work
-
-**Current Implementation:**
-```dart
-// Already uses POST /api/approvals/loan-release-v2
-await approvalsApiService.submitLoanReleaseV2(
-  clientId: widget.client.id!,
-  udiNumber: _formData.udiNumber!.trim(),
-  productType: _formData.productType?.apiValue,
-  loanType: _formData.loanType?.apiValue,
-  timeIn: timeInStr,
-  timeOut: timeOutStr,
-  odometerIn: _formData.odometerIn,
-  odometerOut: _formData.odometerOut,
-  latitude: _formData.gpsLatitude,
-  longitude: _formData.gpsLongitude,
-  address: _formData.gpsAddress,
-  photoUrl: _formData.photoPath,
-  remarks: _formData.remarks?.trim().isNotEmpty == true ? _formData.remarks : null,
-);
-```
-
-**Action:** No changes needed - backend handler will be updated
-
----
-
-### 4. API Compatibility & Migration
-
-#### 4.1 Visit Record Endpoint Changes
-
-**Breaking Changes:** None - all new fields are optional
-
-**Backward Compatibility:**
-- Old mobile app versions can still call the endpoint without new fields
-- New fields (`visit_outcome`, `actual_time_in/out`, GPS) are all optional
-- If not provided, these fields will be NULL in database
-
-**Forward Compatibility:**
-- New mobile app versions can provide new fields
-- Backend will accept and store new fields when provided
-- Old backend versions will ignore unknown fields (JSON parse behavior)
-
-**Field Defaults:**
-- `visit_outcome`: NULL if not provided (no default)
-- `actual_time_in`: NULL if not provided
-- `actual_time_out`: NULL if not provided
-- GPS fields: NULL if not provided
-
-**Migration Strategy:**
-- Deploy database migration first (columns are nullable)
-- Deploy backend API changes (new fields optional)
-- Mobile app can be updated later to use new fields
-- No coordinated deployment required
-
-#### 4.2 Existing Data Migration
-
-**Touchpoint #0 Records (Visit Only):**
-- **Problem:** Existing records with `touchpoint_number=0` are legacy "Visit Only" records
-- **Solution:** Migration script converts these to itinerary records and deletes the touchpoints
-- **Impact:** Clients will show correct touchpoint counts after migration (no more "0/7" confusion)
-
-**Touchpoint #7 Records (Loan Release):**
-- **Problem:** Some Touchpoint #7 records may have been created by loan releases
-- **Solution:** Keep these records as-is (they represent actual 7th sales visits)
-- **Future:** New loan releases will NOT create Touchpoint #7
-- **Impact:** No data loss, only new behavior changes
-
-**Detection Query:**
-```sql
--- Find legacy Visit Only touchpoints (before migration)
-SELECT COUNT(*) as visit_only_count
-FROM touchpoints
-WHERE touchpoint_number = 0;
-
--- Find loan release touchpoints (for reference)
-SELECT COUNT(*) as loan_release_count
-FROM touchpoints
-WHERE touchpoint_number = 7
-  AND reason = 'Loan Release';
+      return c.json({
+        message: 'Phone number addition submitted for approval',
+        requires_approval: true
+      });
+    }
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+});
 ```
 
 ---
 
 ## Data Flow Diagrams
 
-### Visit Record Only Flow (New)
+### Flow 1: Visit Record Only
 
 ```
-┌─────────────────┐
-│  Mobile App     │
-│  (Caravan/Tele) │
-└────────┬────────┘
-         │
-         │ POST /api/my-day/clients/:id/visit
-         │ {
-         │   "remarks": "Client not interested",
-         │   "visit_outcome": "unsuccessful",
-         │   "actual_time_in": "09:30",
-         │   "actual_time_out": "09:45",
-         │   "gps_latitude": 14.5995,
-         │   "gps_longitude": 120.9842,
-         │   "gps_address": "Manila, Philippines"
-         │ }
-         ▼
-┌─────────────────────────────────┐
-│  Backend API                    │
-│  (my-day.ts)                    │
-└────────┬────────────────────────┘
-         │
-         │ BEGIN TRANSACTION
-         │
-         ▼
-┌─────────────────────────────────┐
-│  INSERT INTO itineraries        │
-│  - id: gen_random_uuid()        │
-│  - client_id: <client_id>       │
-│  - user_id: <user_id>           │
-│  - scheduled_date: CURRENT_DATE │
-│  - actual_time_in: "09:30"      │
-│  - actual_time_out: "09:45"     │
-│  - visit_outcome: "unsuccessful"│
-│  - gps_latitude: 14.5995        │
-│  - gps_longitude: 120.9842      │
-│  - gps_address: "Manila..."     │
-│  - status: "completed"          │
-│  - remarks: "Client not..."     │
-└────────┬────────────────────────┘
-         │
-         │ COMMIT
-         │
-         ▼
-┌─────────────────────────────────┐
-│  Response                       │
-│  {                              │
-│    "message": "Visit recorded   │
-│              successfully"      │
-│  }                              │
-└─────────────────────────────────┘
-
-❌ NO touchpoint creation
+┌─────────────────────────────────────────────────────────────────┐
+│  FIELD AGENT records a visit                                    │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/my-day/clients/:id/visit
+        { time_in, time_out, latitude, longitude, address, photo_url, notes }
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND:                                                       │
+│  1. CREATE visits (type='regular_visit')                       │
+│  2. UPDATE itineraries (status='completed')                     │
+│  3. ❌ NO touchpoint creation                                   │
+│  4. ❌ NO approval needed                                      │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE:                                                      │
+│  visits: NEW record (regular_visit) ✅                          │
+│  itineraries: status='completed' ✅                             │
+│  touchpoints: NO CHANGES ✅                                     │
+│  approvals: NO CHANGES ✅                                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Loan Release Flow (New)
+### Flow 2: Touchpoint Record (UNCHANGED)
 
 ```
-┌─────────────────┐
-│  Mobile App     │
-│  (Admin Only)   │
-└────────┬────────┘
-         │
-         │ POST /api/approvals/loan-release-v2
-         │ {
-         │   "client_id": "<uuid>",
-         │   "udi_number": "UDI-12345",
-         │   "product_type": "pension",
-         │   "loan_type": "regular",
-         │   "time_in": "10:00",
-         │   "time_out": "10:30",
-         │   "latitude": 14.5995,
-         │   "longitude": 120.9842,
-         │   "address": "Manila...",
-         │   "remarks": "Loan released"
-         │ }
-         ▼
-┌─────────────────────────────────┐
-│  Backend API                    │
-│  (approvals.ts)                 │
-└────────┬────────────────────────┘
-         │
-         │ Creates approval request
-         │ (type='loan_release_v2')
-         │ status='pending'
-         │
-         ▼
-┌─────────────────────────────────┐
-│  Admin approves via web         │
-│  POST /api/approvals/:id/approve│
-└────────┬────────────────────────┘
-         │
-         │ BEGIN TRANSACTION
-         │
-         ▼
-┌─────────────────────────────────┐
-│  UPDATE clients                 │
-│  SET loan_released = TRUE       │
-│      loan_released_at = NOW()   │
-│  WHERE id = $1                  │
-└────────┬────────────────────────┘
-         │
-         ▼
-┌─────────────────────────────────┐
-│  INSERT INTO itineraries        │
-│  - id: gen_random_uuid()        │
-│  - client_id: <client_id>       │
-│  - user_id: <user_id>           │
-│  - scheduled_date: CURRENT_DATE │
-│  - actual_time_in: "10:00"      │
-│  - actual_time_out: "10:30"     │
-│  - gps_latitude: 14.5995        │
-│  - gps_longitude: 120.9842      │
-│  - gps_address: "Manila..."     │
-│  - status: "loan_released"      │
-│  - remarks: "Loan released"     │
-└────────┬────────────────────────┘
-         │
-         │ COMMIT
-         │
-         ▼
-┌─────────────────────────────────┐
-│  Response                       │
-│  {                              │
-│    "message": "Loan release     │
-│              approved",         │
-│    "loan_released": true,       │
-│    "loan_released_at": "..."    │
-│  }                              │
-└─────────────────────────────────┘
-
-❌ NO Touchpoint #7 creation
-✅ Client marked as loan_released
-✅ Audit trail in itineraries
+┌─────────────────────────────────────────────────────────────────┐
+│  FIELD AGENT creates touchpoint                                 │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/touchpoints
+        { touchpoint_number, type, reason, status, ... }
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND:                                                       │
+│  1. CREATE touchpoints (number 1-7)                            │
+│  2. CREATE visits (type='regular_visit')                       │
+│  3. UPDATE itineraries (status='completed')                     │
+│  4. ❌ NO approval needed                                      │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE:                                                      │
+│  touchpoints: NEW record (1-7) ✅                              │
+│  visits: NEW record (regular_visit) ✅                         │
+│  itineraries: status='completed' ✅                             │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
----
+### Flow 3A: Loan Release (Admin - Direct)
 
-## Error Handling
-
-### Database Transaction Rollback
-
-Both endpoints use database transactions to ensure atomicity:
-
-```typescript
-try {
-  await client.query('BEGIN');
-
-  // Multiple operations
-  await client.query('UPDATE clients ...');
-  await client.query('INSERT INTO itineraries ...');
-
-  await client.query('COMMIT');
-} catch (error) {
-  await client.query('ROLLBACK');
-  throw error;
-}
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN submits loan release                                     │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/approvals/loan-release-v2
+        Authorization: Bearer <admin_jwt_token>
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND:                                                       │
+│  1. CREATE releases (visit_id=NULL)                            │
+│  2. UPDATE clients (loan_released=TRUE)                         │
+│  3. ❌ NO approval needed (admin bypass)                        │
+│  4. ❌ NO visit created                                         │
+│  5. ❌ NO itinerary update                                      │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE:                                                      │
+│  releases: NEW record (visit_id=NULL) ✅                        │
+│  clients: loan_released=TRUE ✅                                 │
+│  visits: NO CHANGES ✅                                          │
+│  itineraries: NO CHANGES ✅                                     │
+│  approvals: NO CHANGES ✅                                       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-**Failure Scenarios:**
-1. **Client not found**: Rollback + 404 error
-2. **Invalid GPS data**: Rollback + 400 validation error
-3. **Database connection lost**: Automatic rollback
-4. **Permission denied**: Rollback + 403 error
+### Flow 3B: Loan Release (Caravan - With Approval)
 
-### Validation Errors
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  CARAVAN submits loan release at client location                │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/approvals/loan-release-v2
+        Authorization: Bearer <caravan_jwt_token>
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Submit):                                              │
+│  1. CREATE visits (type='release_loan')                        │
+│  2. UPDATE itineraries (status='in_progress')                   │
+│  3. CREATE approvals (status='pending')                         │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Pending):                                            │
+│  visits: NEW record (release_loan) ✅                          │
+│  itineraries: status='in_progress' ⏳                          │
+│  approvals: status='pending' ⏳                                 │
+│  clients: loan_released=FALSE (unchanged)                      │
+│  releases: (empty)                                             │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN APPROVES                                                 │
+│  POST /api/approvals/:id/approve                               │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Approve):                                             │
+│  1. UPDATE approvals (status='approved')                        │
+│  2. CREATE releases (visit_id=<visit_id>)                      │
+│  3. UPDATE clients (loan_released=TRUE)                         │
+│  4. UPDATE itineraries (status='completed')                      │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Approved):                                           │
+│  releases: NEW record (visit_id=<visit_id>) ✅                 │
+│  clients: loan_released=TRUE ✅                                 │
+│  approvals: status='approved' ✅                                │
+│  visits: (already created) ✅                                  │
+│  itineraries: status='completed' ✅                             │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-**Visit Record Only:**
-- Missing required fields → 400 Bad Request
-- Invalid time format (HH:MM) → 400 Bad Request
-- Invalid GPS coordinates → 400 Bad Request
-- Invalid visit_outcome enum → 400 Bad Request
+### Flow 4A: Add Address (Caravan/Tele - Approval)
 
-**Loan Release:**
-- Missing UDI number → 400 Bad Request
-- UDI number > 50 chars → 400 Bad Request
-- Invalid client_id UUID → 400 Bad Request
-- Client already loan_released → 409 Conflict
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  FIELD AGENT adds address                                       │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/clients/:id/addresses
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Submit):                                              │
+│  1. CREATE approvals (type='address_add', status='pending')     │
+│  2. ❌ NO address record yet                                   │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Pending):                                            │
+│  approvals: NEW record (pending) ⏳                             │
+│  addresses: NO CHANGES (awaiting approval)                      │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN APPROVES                                                 │
+│  POST /api/approvals/:id/approve                               │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Approve):                                             │
+│  1. UPDATE approvals (status='approved')                        │
+│  2. CREATE addresses                                           │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Approved):                                           │
+│  addresses: NEW record ✅                                       │
+│  approvals: status='approved' ✅                                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Flow 4B: Add Address (Admin - Direct)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN adds address                                             │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/clients/:id/addresses
+        Authorization: Bearer <admin_jwt_token>
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND:                                                       │
+│  1. CREATE addresses                                           │
+│  2. ❌ NO approval needed (admin bypass)                        │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE:                                                      │
+│  addresses: NEW record ✅                                       │
+│  approvals: NO CHANGES ✅                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Flow 5A: Add Phone (Caravan/Tele - Approval)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  FIELD AGENT adds phone number                                  │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/clients/:id/phones
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Submit):                                              │
+│  1. CREATE approvals (type='phone_add', status='pending')       │
+│  2. ❌ NO phone record yet                                     │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Pending):                                            │
+│  approvals: NEW record (pending) ⏳                             │
+│  phone_numbers: NO CHANGES (awaiting approval)                  │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN APPROVES                                                 │
+│  POST /api/approvals/:id/approve                               │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Approve):                                             │
+│  1. UPDATE approvals (status='approved')                        │
+│  2. CREATE phone_numbers                                       │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Approved):                                           │
+│  phone_numbers: NEW record ✅                                  │
+│  approvals: status='approved' ✅                                │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Flow 5B: Add Phone (Admin - Direct)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN adds phone number                                        │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/clients/:id/phones
+        Authorization: Bearer <admin_jwt_token>
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND:                                                       │
+│  1. CREATE phone_numbers                                       │
+│  2. ❌ NO approval needed (admin bypass)                        │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE:                                                      │
+│  phone_numbers: NEW record ✅                                  │
+│  approvals: NO CHANGES ✅                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## Migration Plan
 
-### Phase 1: Database Schema Migration
+### Phase 1: No Database Schema Changes Required
 
-**Migration File:** `backend/src/migrations/048_visit_outcome_and_loan_released_status.sql`
+**Note:** The `visits`, `releases`, `itineraries`, `approvals`, `addresses`, and `phone_numbers` tables already exist in `COMPLETE_SCHEMA.sql`. No schema migration is needed.
+
+**Data Migration (One-time cleanup):**
+
+**Migration File:** `backend/src/migrations/048_cleanup_legacy_touchpoints.sql`
 
 ```sql
 -- ============================================================
--- Migration 048: Visit Outcome Fields & Itinerary-Only Flow
+-- Migration 048: Clean Up Legacy Touchpoint Records
 -- ============================================================
 
--- Add new columns to itineraries table
-ALTER TABLE itineraries
-  ADD COLUMN IF NOT EXISTS visit_outcome VARCHAR(50);
+-- Migrate existing touchpoint_number=0 records to visits
+-- This converts old "Visit Only" touchpoints to proper visit records
 
-ALTER TABLE itineraries
-  ADD COLUMN IF NOT EXISTS actual_time_in TIME;
-
-ALTER TABLE itineraries
-  ADD COLUMN IF NOT EXISTS actual_time_out TIME;
-
-ALTER TABLE itineraries
-  ADD COLUMN IF NOT EXISTS gps_latitude DOUBLE PRECISION;
-
-ALTER TABLE itineraries
-  ADD COLUMN IF NOT EXISTS gps_longitude DOUBLE PRECISION;
-
-ALTER TABLE itineraries
-  ADD COLUMN IF NOT EXISTS gps_address TEXT;
-
--- Add CHECK constraint for visit_outcome
-ALTER TABLE itineraries
-  ADD CONSTRAINT visit_outcome_check
-  CHECK (visit_outcome IN (
-    'successful',
-    'unsuccessful',
-    'client_not_available',
-    'wrong_contact',
-    'rescheduled',
-    'refused',
-    'other'
-  ));
-
--- NOTE: No changes to touchpoints table needed
--- Touchpoint status enum remains: Interested, Undecided, Not Interested, Completed
-
--- Add indexes for performance
-CREATE INDEX IF NOT EXISTS idx_itineraries_visit_outcome
-  ON itineraries(visit_outcome);
-
-CREATE INDEX IF NOT EXISTS idx_itineraries_actual_time
-  ON itineraries(actual_time_in, actual_time_out);
-
-CREATE INDEX IF NOT EXISTS idx_itineraries_gps
-  ON itineraries(gps_latitude, gps_longitude);
-
--- Add comments for documentation
-COMMENT ON COLUMN itineraries.visit_outcome IS 'Outcome of the visit (successful, unsuccessful, etc.)';
-COMMENT ON COLUMN itineraries.actual_time_in IS 'Actual time visit started (HH:MM)';
-COMMENT ON COLUMN itineraries.actual_time_out IS 'Actual time visit ended (HH:MM)';
-COMMENT ON COLUMN itineraries.gps_latitude IS 'GPS latitude captured during visit';
-COMMENT ON COLUMN itineraries.gps_longitude IS 'GPS longitude captured during visit';
-COMMENT ON COLUMN itineraries.gps_address IS 'Reverse geocoded address from GPS';
-
--- ============================================================
--- Data Migration: Clean up old touchpoint records
--- ============================================================
-
--- Migrate existing touchpoint_number=0 records to itineraries
--- This converts old "Visit Only" touchpoints to pure itinerary records
-INSERT INTO itineraries (id, client_id, user_id, scheduled_date, status, remarks, created_at)
+-- Step 1: Create visits from legacy touchpoint #0 records
+INSERT INTO visits (
+  id, client_id, user_id, type, time_in, time_out,
+  latitude, longitude, address, photo_url, notes, created_at
+)
 SELECT
   gen_random_uuid(),
   t.client_id,
   t.user_id,
-  t.date,
-  'completed',
-  'Migrated from touchpoint #0: ' || COALESCE(t.remarks, ''),
+  'regular_visit',
+  t.time_in,
+  t.time_out,
+  t.latitude,
+  t.longitude,
+  t.address,
+  t.photo_url,
+  t.remarks,
   t.created_at
 FROM touchpoints t
 WHERE t.touchpoint_number = 0
   AND NOT EXISTS (
-    SELECT 1 FROM itineraries i
-    WHERE i.client_id = t.client_id
-      AND i.user_id = t.user_id
-      AND i.scheduled_date = t.date
-      AND i.status = 'completed'
+    -- Avoid duplicates if migration runs multiple times
+    SELECT 1 FROM visits v
+    WHERE v.client_id = t.client_id
+      AND v.user_id = t.user_id
+      AND v.created_at = t.created_at
+      AND v.type = 'regular_visit'
   );
 
--- Delete migrated touchpoint_number=0 records
+-- Step 2: Update itineraries to completed for migrated visits
+UPDATE itineraries i
+SET status = 'completed', updated_at = NOW()
+WHERE EXISTS (
+  SELECT 1 FROM touchpoints t
+  WHERE t.touchpoint_number = 0
+    AND t.client_id = i.client_id
+    AND t.user_id = i.user_id
+    AND t.date = i.scheduled_date
+)
+AND i.status != 'completed';
+
+-- Step 3: Delete migrated touchpoint #0 records
 DELETE FROM touchpoints
 WHERE touchpoint_number = 0;
 
@@ -710,226 +1120,112 @@ WHERE touchpoint_number = 0;
 DO $$
 DECLARE
   migrated_count INTEGER;
+  deleted_count INTEGER;
 BEGIN
   SELECT COUNT(*) INTO migrated_count
-  FROM touchpoints
-  WHERE touchpoint_number = 0;
+  FROM visits
+  WHERE type = 'regular_visit'
+    AND created_at <= NOW();  -- Approximate check
 
-  RAISE NOTICE 'Migration completed. Migrated % touchpoint #0 records to itineraries.', migrated_count;
+  GET DIAGNOSTICS deleted_count = ROW_COUNT;
+
+  RAISE NOTICE 'Migration 048 completed: Visits created, Touchpoint #0 records deleted.';
 END $$;
 ```
 
 **Rollback Script:**
 ```sql
--- Rollback Migration 048
+-- Rollback Migration 048 (Emergency only)
 
--- Drop indexes
-DROP INDEX IF EXISTS idx_itineraries_visit_outcome;
-DROP INDEX IF EXISTS idx_itineraries_actual_time;
-DROP INDEX IF EXISTS idx_itineraries_gps;
+-- Note: This rollback is for emergency use only
+-- In production, manually verify data before rolling back
 
--- Drop constraint
-ALTER TABLE itineraries
-  DROP CONSTRAINT IF EXISTS visit_outcome_check;
+-- If rollback needed, you would need to:
+-- 1. Manually recreate touchpoint #0 records from visits
+-- 2. Delete the created visits records
+-- 3. Update itineraries back to previous status
 
--- Drop columns
-ALTER TABLE itineraries
-  DROP COLUMN IF EXISTS visit_outcome;
-
-ALTER TABLE itineraries
-  DROP COLUMN IF EXISTS actual_time_in;
-
-ALTER TABLE itineraries
-  DROP COLUMN IF EXISTS actual_time_out;
-
-ALTER TABLE itineraries
-  DROP COLUMN IF EXISTS gps_latitude;
-
-ALTER TABLE itineraries
-  DROP COLUMN IF EXISTS gps_longitude;
-
-ALTER TABLE itineraries
-  DROP COLUMN IF EXISTS gps_address;
-
--- NOTE: No changes to touchpoints table to rollback
+-- This is intentionally complex to prevent accidental rollbacks
 ```
 
 ### Phase 2: Backend API Updates
 
 **Order of Operations:**
-1. Deploy database migration (Phase 1)
+1. Deploy data migration (Phase 1)
 2. Update visit record endpoint (`my-day.ts`)
-3. Update loan release handler (`approvals.ts`)
-4. Run integration tests
-5. Deploy to staging
+3. Update loan release endpoint (`approvals.ts`) - Two-path implementation
+4. Update add address endpoint (`clients.ts`) - Role-based approval
+5. Update add phone endpoint (`clients.ts`) - Role-based approval
+6. Update approval handler (`approvals.ts`) - Support for all approval types
+7. Run integration tests
+8. Deploy to staging
 
 ### Phase 3: Testing & Verification
 
 **Integration Tests:**
-- Test visit record only creates itinerary, not touchpoint
-- Test loan release marks client loan_released, creates itinerary, not touchpoint
+- Test visit record only creates visit + updates itinerary, no touchpoint
+- Test loan release (admin) creates release directly, no visit/approval
+- Test loan release (caravan) creates visit + approval, on approval creates release
+- Test add address (admin) direct insert
+- Test add address (caravan) creates approval, on approval creates address
+- Test add phone (admin) direct insert
+- Test add phone (caravan) creates approval, on approval creates phone
 - Test rollback scenarios
-- Test GPS data capture
-- Test visit_outcome validation
 
-**Manual Testing:**
-1. Create visit record from mobile app
-2. Verify itinerary record created with all fields
-3. Verify NO touchpoint created
-4. Submit loan release for approval
-5. Approve loan release
-6. Verify client.loan_released = TRUE
-7. Verify NO Touchpoint #7 created
-8. Verify itinerary record created with status='loan_released'
+**Manual Testing Checklist:**
+1. **Visit Record Only:**
+   - [ ] Create visit from mobile app
+   - [ ] Verify visits record created with type='regular_visit'
+   - [ ] Verify itinerary marked completed
+   - [ ] Verify NO touchpoint created
 
----
+2. **Loan Release (Admin):**
+   - [ ] Submit loan release as admin
+   - [ ] Verify releases record created (visit_id=NULL)
+   - [ ] Verify client marked loan_released=TRUE
+   - [ ] Verify NO visit created
+   - [ ] Verify NO approval created
 
-## Rollback Plan
+3. **Loan Release (Caravan):**
+   - [ ] Submit loan release as caravan
+   - [ ] Verify visits record created (type='release_loan')
+   - [ ] Verify itinerary status='in_progress'
+   - [ ] Verify approval created (status='pending')
+   - [ ] Approve as admin
+   - [ ] Verify releases record created (visit_id populated)
+   - [ ] Verify client marked loan_released=TRUE
+   - [ ] Verify itinerary status='completed'
+   - [ ] Verify NO touchpoint created
 
-If issues arise after deployment:
+4. **Add Address (Admin):**
+   - [ ] Add address as admin
+   - [ ] Verify address created immediately
+   - [ ] Verify NO approval created
 
-### Option 1: Feature Flags
-```typescript
-// Add feature flag to temporarily revert
-const USE_NEW_VISIT_FLOW = process.env.USE_NEW_VISIT_FLOW !== 'false';
+5. **Add Address (Caravan):**
+   - [ ] Add address as caravan
+   - [ ] Verify approval created (status='pending')
+   - [ ] Verify NO address created yet
+   - [ ] Approve as admin
+   - [ ] Verify address created
 
-if (USE_NEW_VISIT_FLOW) {
-  // New implementation (itinerary only)
-} else {
-  // Old implementation (creates touchpoint)
-}
-```
+6. **Add Phone (Admin):**
+   - [ ] Add phone as admin
+   - [ ] Verify phone created immediately
+   - [ ] Verify NO approval created
 
-### Option 2: Code Rollback
-1. Revert backend changes to `my-day.ts` and `approvals.ts`
-2. Redeploy previous version
-3. Database schema can remain (new columns are optional)
-
-### Option 3: Data Migration
-If existing data needs correction:
-```sql
--- Fix any incorrectly created touchpoints
-DELETE FROM touchpoints
-WHERE touchpoint_number = 0
-  AND reason = 'Visit Only';
-
--- Fix loan release touchpoints (if any)
-DELETE FROM touchpoints
-WHERE touchpoint_number = 7
-  AND reason = 'Loan Release';
-```
-
----
-
-## Performance Considerations
-
-### Database Indexes
-
-**New Indexes Added:**
-```sql
-CREATE INDEX idx_itineraries_visit_outcome ON itineraries(visit_outcome);
-CREATE INDEX idx_itineraries_actual_time ON itineraries(actual_time_in, actual_time_out);
-CREATE INDEX idx_itineraries_gps ON itineraries(gps_latitude, gps_longitude);
-```
-
-**Rationale:**
-- `visit_outcome`: Enables filtering by visit result
-- `actual_time`: Enables time-based analytics
-- `gps`: Enables location-based queries (future feature)
-
-### Query Performance
-
-**Expected Impact:**
-- ✅ **Improved**: Removed unnecessary touchpoint queries for visit-only
-- ✅ **Neutral**: Loan release still requires client update + itinerary insert
-- ✅ **Improved**: Fewer touchpoint records = smaller table = faster queries
+7. **Add Phone (Caravan):**
+   - [ ] Add phone as caravan
+   - [ ] Verify approval created (status='pending')
+   - [ ] Verify NO phone created yet
+   - [ ] Approve as admin
+   - [ ] Verify phone created
 
 ---
 
-## Security Considerations
+## API Contract Examples
 
-### Authorization
-
-**Visit Record Only:**
-- Requires authentication (JWT token)
-- No role restrictions (all authenticated users can record visits)
-- User can only record visits for clients in their assigned area
-
-**Loan Release:**
-- Requires `admin` role (enforced via `requireRole('admin')`)
-- Approval workflow prevents unauthorized releases
-
-### Input Validation
-
-**All GPS Data:**
-- Latitude: -90 to 90
-- Longitude: -180 to 180
-- Address: Max 500 chars
-
-**Time Format:**
-- Regex validation: `^\d{2}:\d{2}$`
-- Range: 00:00 to 23:59
-
-**Visit Outcome:**
-- Enum validation prevents invalid values
-
----
-
-## Future Enhancements
-
-### Potential Future Features (Out of Scope)
-
-1. **Visit Analytics Dashboard**
-   - Use `visit_outcome` for success rate metrics
-   - GPS heatmap of visit locations
-   - Time-based analytics (actual vs scheduled)
-
-2. **Location-Based Client Assignment**
-   - Use GPS data to verify visits occurred at client address
-   - Alert if visit location > 500m from client address
-
-3. **Touchpoint #7 Manual Creation**
-   - Allow Caravan to create actual Touchpoint #7 after loan release
-   - Use new `loan_released` status to indicate context
-
-4. **Visit Photo Integration**
-   - Add photo_url to itineraries table
-   - Capture proof of visit
-
----
-
-## Appendix A: Touchpoint vs Itinerary Semantics
-
-### When to Use Each
-
-**Touchpoints:**
-- 7-step sales process (numbers 1-7)
-- Fixed pattern: Visit → Call → Call → Visit → Call → Call → Visit
-- Status: Interested, Undecided, Not Interested, Completed
-- Purpose: Track sales progression
-
-**Itineraries:**
-- General visit tracking
-- Any visit, not just sales touchpoints
-- Status: scheduled, in_progress, completed, cancelled, loan_released
-- Purpose: Audit trail, attendance tracking, GPS verification
-
-### Decision Flow
-
-```
-Is this part of the 7-step sales process?
-├─ Yes → Create Touchpoint (1-7)
-└─ No → Create Itinerary only
-    ├─ Is this a loan release?
-    │   ├─ Yes → Update client.loan_released + Itinerary with status='loan_released'
-    │   └─ No → Itinerary with status='completed'
-```
-
----
-
-## Appendix B: API Contract Examples
-
-### Visit Record Only Request/Response
+### Visit Record Only
 
 **Request:**
 ```http
@@ -938,13 +1234,13 @@ Authorization: Bearer <jwt_token>
 Content-Type: application/json
 
 {
-  "remarks": "Client asked to call back next week",
-  "visit_outcome": "rescheduled",
-  "actual_time_in": "09:30",
-  "actual_time_out": "09:45",
-  "gps_latitude": 14.5995,
-  "gps_longitude": 120.9842,
-  "gps_address": "Manila, Philippines"
+  "time_in": "2026-04-15T09:30:00Z",
+  "time_out": "2026-04-15T09:45:00Z",
+  "latitude": 14.5995,
+  "longitude": 120.9842,
+  "address": "Manila, Philippines",
+  "photo_url": "https://s3.amazonaws.com/bucket/photo.jpg",
+  "notes": "Client not available"
 }
 ```
 
@@ -955,13 +1251,13 @@ Content-Type: application/json
 
 {
   "message": "Visit recorded successfully",
-  "itinerary_id": "987fcdeb-51a2-43f1-a456-426614174000"
+  "visit_id": "987fcdeb-51a2-43f1-a456-426614174000"
 }
 ```
 
-### Loan Release Request/Response
+### Loan Release (Admin - Direct)
 
-**Request (Submit for Approval):**
+**Request:**
 ```http
 POST /api/approvals/loan-release-v2
 Authorization: Bearer <admin_jwt_token>
@@ -970,28 +1266,63 @@ Content-Type: application/json
 {
   "client_id": "123e4567-e89b-12d3-a456-426614174000",
   "udi_number": "UDI-2026-001234",
-  "product_type": "pension",
-  "loan_type": "regular",
-  "time_in": "10:00",
-  "time_out": "10:30",
+  "product_type": "PUSU",
+  "loan_type": "NEW",
+  "amount": 50000,
   "latitude": 14.5995,
   "longitude": 120.9842,
   "address": "Manila, Philippines",
-  "remarks": "Loan released successfully"
+  "photo_url": "https://s3.amazonaws.com/bucket/photo.jpg",
+  "remarks": "Admin direct release"
 }
 ```
 
-**Response (Approval Created):**
+**Response:**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "message": "Loan release processed successfully",
+  "client_id": "123e4567-e89b-12d3-a456-426614174000",
+  "loan_released": true,
+  "loan_released_at": "2026-04-15T10:00:00Z"
+}
+```
+
+### Loan Release (Caravan - With Approval)
+
+**Request (Submit):**
+```http
+POST /api/approvals/loan-release-v2
+Authorization: Bearer <caravan_jwt_token>
+Content-Type: application/json
+
+{
+  "client_id": "123e4567-e89b-12d3-a456-426614174000",
+  "udi_number": "UDI-2026-001234",
+  "product_type": "PUSU",
+  "loan_type": "NEW",
+  "amount": 50000,
+  "time_in": "2026-04-15T10:00:00Z",
+  "time_out": "2026-04-15T10:30:00Z",
+  "latitude": 14.5995,
+  "longitude": 120.9842,
+  "address": "Manila, Philippines",
+  "photo_url": "https://s3.amazonaws.com/bucket/photo.jpg",
+  "remarks": "Client signed documents"
+}
+```
+
+**Response (Pending):**
 ```http
 HTTP/1.1 201 Created
 Content-Type: application/json
 
 {
-  "id": "456e7890-e89b-12d3-a456-426614174000",
-  "type": "loan_release_v2",
-  "status": "pending",
-  "client_id": "123e4567-e89b-12d3-a456-426614174000",
-  "created_at": "2026-04-15T10:00:00Z"
+  "message": "Loan release submitted for approval",
+  "approval_id": "456e7890-e89b-12d3-a456-426614174000",
+  "status": "pending"
 }
 ```
 
@@ -1012,20 +1343,79 @@ HTTP/1.1 200 OK
 Content-Type: application/json
 
 {
-  "message": "Loan release approved",
-  "approval_id": "456e7890-e89b-12d3-a456-426614174000",
+  "message": "Approval processed successfully"
+}
+```
+
+### Add Address (Caravan - With Approval)
+
+**Request (Submit):**
+```http
+POST /api/clients/123e4567-e89b-12d3-a456-426614174000/addresses
+Authorization: Bearer <caravan_jwt_token>
+Content-Type: application/json
+
+{
+  "type": "home",
+  "street": "123 New Street",
+  "barangay": "Barangay 123",
+  "city_municipality": "Manila",
+  "province": "Metro Manila",
+  "postal_code": "1000",
+  "psgc_id": "psgc-12345"
+}
+```
+
+**Response (Pending):**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "message": "Address addition submitted for approval",
+  "requires_approval": true
+}
+```
+
+**Response (Admin - Direct):**
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{
+  "id": "78901234-e89b-12d3-a456-426614174000",
   "client_id": "123e4567-e89b-12d3-a456-426614174000",
-  "loan_released": true,
-  "loan_released_at": "2026-04-15T10:05:00Z",
-  "itinerary_id": "789ghijk-e89b-12d3-a456-426614174000"
+  "type": "home",
+  "street": "456 Admin Street",
+  "barangay": "Barangay 456",
+  "city_municipality": "Quezon City",
+  "province": "Metro Manila",
+  "postal_code": "1100",
+  "psgc_id": "psgc-67890",
+  "created_at": "2026-04-15T10:00:00Z"
 }
 ```
 
 ---
 
+## Summary Table: All Data Flows
+
+| Feature | Who Submits | Approval? | Creates Visit? | Creates Release? | Creates Touchpoint? |
+|---------|-------------|-----------|----------------|------------------|-------------------|
+| **Visit Record Only** | Caravan/Tele | ❌ No | ✅ Yes (regular_visit) | ❌ No | ❌ No |
+| **Touchpoint Record** | Caravan/Tele | ❌ No | ✅ Yes (regular_visit) | ❌ No | ✅ Yes (1-7) |
+| **Loan Release** | Admin | ❌ No | ❌ No | ✅ Yes (direct) | ❌ No |
+| **Loan Release** | Caravan | ✅ Yes | ✅ Yes (release_loan) | ✅ Yes (after approval) | ❌ No |
+| **Add Address** | Admin | ❌ No | ❌ No | N/A | ❌ No |
+| **Add Address** | Caravan/Tele | ✅ Yes | ❌ No | N/A | ❌ No |
+| **Add Phone** | Admin | ❌ No | ❌ No | N/A | ❌ No |
+| **Add Phone** | Caravan/Tele | ✅ Yes | ❌ No | N/A | ❌ No |
+
+---
+
 ## Sign-Off
 
-**Design Approved By:** User (via "do 1")
+**Design Approved By:** User (via "yes, correct!")
 **Date:** 2026-04-15
 **Next Step:** Invoke writing-plans skill to create implementation plan
 
