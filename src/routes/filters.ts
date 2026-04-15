@@ -38,10 +38,10 @@ const LABEL_MAP: Record<string, string> = {
   'PRIVATE': 'Private',
 
   // Loan types
-  'PENSION': 'Pension',
-  'SALARY': 'Salary',
-  'BUSINESS': 'Business',
-  'EMERGENCY': 'Emergency',
+  'PRETERM': 'Preterm',
+  'NEW': 'New',
+  'ADDITIONAL': 'Additional',
+  'RENEWAL': 'Renewal',
 
   // Pension types
   'OLD_AGE': 'Old Age',
