@@ -203,13 +203,23 @@ clients.get('/', authMiddleware, async (c) => {
     const productType = c.req.query('product_type');
     const marketType = c.req.query('market_type');
     const pensionType = c.req.query('pension_type');
-    const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
+    const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
     // Handle multi-value query parameters
     // queries() returns array if multiple values, string if single, undefined if not provided
     const municipality = municipalityQuery && Array.isArray(municipalityQuery) ? municipalityQuery : (municipalityQuery ? [municipalityQuery] : undefined);
     const province = provinceQuery && Array.isArray(provinceQuery) ? provinceQuery : (provinceQuery ? [provinceQuery] : undefined);
+
+    // Handle touchpoint_status (can be array or string)
+    let touchpointStatus: string[] | undefined;
+    if (touchpointStatusQuery) {
+      if (Array.isArray(touchpointStatusQuery)) {
+        touchpointStatus = touchpointStatusQuery;
+      } else {
+        touchpointStatus = [touchpointStatusQuery];
+      }
+    }
 
     const offset = (page - 1) * perPage;
 
@@ -404,6 +414,15 @@ clients.get('/', authMiddleware, async (c) => {
     let groupScoreFilter = '';
     let useGroupedCTEs = false;
 
+    // Determine which touchpoint status groups to include
+    // If touchpointStatus is undefined/empty, show all groups (no filtering)
+    // Otherwise, only include the selected groups
+    const includeCallable = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('callable');
+    const includeWaitingForCaravan = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('waiting_for_caravan');
+    const includeCompleted = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('completed');
+    const includeLoanReleased = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('loan_released');
+    const includeNoProgress = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('no_progress');
+
     // IMPORTANT: Create touchpoint_with_score CTE when touchpointStatus is provided OR when sortBy is touchpoint_status
     const needsGroupScoreCTE = touchpointStatus || sortBy === 'touchpoint_status';
 
@@ -413,62 +432,61 @@ clients.get('/', authMiddleware, async (c) => {
       if (user.role === 'tele') {
         useGroupedCTEs = true;
 
-        // Tele-specific 5-group scoring with separate CTEs
-        withGroupScoreCTE = `${withGroupScoreCTE},
-          callable_group AS (
+        // Build CTEs dynamically based on selected touchpoint statuses
+        const cteDefinitions: string[] = [];
+        const unionStatements: string[] = [];
+
+        if (includeCallable) {
+          cteDefinitions.push(`callable_group AS (
             SELECT ti.*, 1 as group_score
             FROM touchpoint_info ti
             WHERE ti.next_touchpoint_type = 'Call' AND ti.completed_count < 7 AND NOT ti.loan_released
-          ),
-          waiting_for_caravan_group AS (
+          )`);
+          unionStatements.push('SELECT * FROM callable_group');
+        }
+
+        if (includeWaitingForCaravan) {
+          cteDefinitions.push(`waiting_for_caravan_group AS (
             SELECT ti.*, 2 as group_score
             FROM touchpoint_info ti
             WHERE ti.next_touchpoint_type = 'Visit' AND ti.completed_count < 7 AND NOT ti.loan_released
-          ),
-          completed_group AS (
+          )`);
+          unionStatements.push('SELECT * FROM waiting_for_caravan_group');
+        }
+
+        if (includeCompleted) {
+          cteDefinitions.push(`completed_group AS (
             SELECT ti.*, 3 as group_score
             FROM touchpoint_info ti
             WHERE ti.completed_count >= 7 AND NOT ti.loan_released
-          ),
-          loan_released_group AS (
+          )`);
+          unionStatements.push('SELECT * FROM completed_group');
+        }
+
+        if (includeLoanReleased) {
+          cteDefinitions.push(`loan_released_group AS (
             SELECT ti.*, 4 as group_score
             FROM touchpoint_info ti
             WHERE ti.loan_released
-          ),
-          no_progress_group AS (
+          )`);
+          unionStatements.push('SELECT * FROM loan_released_group');
+        }
+
+        if (includeNoProgress) {
+          cteDefinitions.push(`no_progress_group AS (
             SELECT ti.*, 5 as group_score
             FROM touchpoint_info ti
             WHERE ti.completed_count = 0
-          ),
-          touchpoint_with_score AS (
-            SELECT * FROM callable_group
-            UNION ALL
-            SELECT * FROM waiting_for_caravan_group
-            UNION ALL
-            SELECT * FROM completed_group
-            UNION ALL
-            SELECT * FROM loan_released_group
-            UNION ALL
-            SELECT * FROM no_progress_group
-          )`;
-
-        // Map touchpoint_status to group score for Tele
-        const statusToScoreMap: Record<string, number> = {
-          'callable': 1,
-          'waiting_for_caravan': 2,
-          'completed': 3,
-          'loan_released': 4,
-          'no_progress': 5
-        };
-
-        const targetScore = statusToScoreMap[touchpointStatus as string];
-        if (targetScore !== undefined) {
-          const hasExistingWhere = baseWhereConditionsJoined;
-          const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-          groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-          baseParams.push(targetScore);
-          baseParamIndex++;
+          )`);
+          unionStatements.push('SELECT * FROM no_progress_group');
         }
+
+        // Build the final CTEs with dynamic UNION
+        withGroupScoreCTE = `${withGroupScoreCTE},
+          ${cteDefinitions.join(',\n          ')},
+          touchpoint_with_score AS (
+            ${unionStatements.join('\n            UNION ALL\n            ')}
+          )`;
       } else {
         // For Caravan/Admin: Use original CASE expression approach
         let canCreateCondition = '';
@@ -501,13 +519,29 @@ clients.get('/', authMiddleware, async (c) => {
           'no_progress': 4
         };
 
-        const targetScore = statusToScoreMap[touchpointStatus as string];
-        if (targetScore !== undefined) {
-          const hasExistingWhere = baseWhereConditionsJoined;
-          const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-          groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-          baseParams.push(targetScore);
-          baseParamIndex++;
+        // Handle multiple touchpoint status values
+        if (touchpointStatus && touchpointStatus.length > 0) {
+          const targetScores = touchpointStatus
+            .map(status => statusToScoreMap[status])
+            .filter(score => score !== undefined);
+
+          if (targetScores.length > 0) {
+            const hasExistingWhere = baseWhereConditionsJoined;
+            const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
+
+            if (targetScores.length === 1) {
+              // Single value: use =
+              groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
+              baseParams.push(targetScores[0]);
+              baseParamIndex++;
+            } else {
+              // Multiple values: use IN
+              const placeholders = targetScores.map((_, i) => `$${baseParamIndex + i}`).join(', ');
+              groupScoreFilter = `${whereOrAnd} tws.group_score IN (${placeholders})`;
+              baseParams.push(...targetScores);
+              baseParamIndex += targetScores.length;
+            }
+          }
         }
       }
     }
@@ -686,12 +720,22 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
     const productType = c.req.query('product_type');
-    const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
+    const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
     // Handle multi-value query parameters
     const municipality = municipalityQuery && Array.isArray(municipalityQuery) ? municipalityQuery : (municipalityQuery ? [municipalityQuery] : undefined);
     const province = provinceQuery && Array.isArray(provinceQuery) ? provinceQuery : (provinceQuery ? [provinceQuery] : undefined);
+
+    // Handle touchpoint_status (can be array or string)
+    let touchpointStatus: string[] | undefined;
+    if (touchpointStatusQuery) {
+      if (Array.isArray(touchpointStatusQuery)) {
+        touchpointStatus = touchpointStatusQuery;
+      } else {
+        touchpointStatus = [touchpointStatusQuery];
+      }
+    }
 
     const offset = (page - 1) * perPage;
 
@@ -716,8 +760,14 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Admin/Manager: See all clients (no area filter needed)
     const shouldFilterByArea = (userLevel < 40 || ['caravan', 'tele'].includes(user.role));
 
-    // Default to 'callable' if touchpoint_status not provided
-    const effectiveTouchpointStatus = touchpointStatus || 'callable';
+    // Determine which touchpoint status groups to include
+    // If touchpointStatus is undefined/empty, show all groups (no filtering)
+    // Otherwise, only include the selected groups
+    const includeCallable = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('callable');
+    const includeWaitingForCaravan = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('waiting_for_caravan');
+    const includeCompleted = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('completed');
+    const includeLoanReleased = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('loan_released');
+    const includeNoProgress = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('no_progress');
 
     // ============================================
     // CACHE LAYER: Get assigned client IDs from cache
@@ -874,46 +924,64 @@ clients.get('/assigned', authMiddleware, async (c) => {
       withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
     }
 
-    // Always filter by touchpoint status for assigned endpoint (default: callable)
+    // Always filter by touchpoint status for assigned endpoint
     // Use separate CTEs approach for Tele role to ensure proper ordering
     if (user.role === 'tele') {
+      // Build CTEs dynamically based on selected touchpoint statuses
+      const cteDefinitions: string[] = [];
+      const unionStatements: string[] = [];
+
       // Tele-specific 5-group scoring with separate CTEs
-      withGroupScoreCTE = `${withGroupScoreCTE},
-        callable_group AS (
+      if (includeCallable) {
+        cteDefinitions.push(`callable_group AS (
           SELECT ti.*, 1 as group_score
           FROM touchpoint_info ti
           WHERE ti.next_touchpoint_type = 'Call' AND ti.completed_count < 7 AND NOT ti.loan_released
-        ),
-        waiting_for_caravan_group AS (
+        )`);
+        unionStatements.push('SELECT * FROM callable_group');
+      }
+
+      if (includeWaitingForCaravan) {
+        cteDefinitions.push(`waiting_for_caravan_group AS (
           SELECT ti.*, 2 as group_score
           FROM touchpoint_info ti
           WHERE ti.next_touchpoint_type = 'Visit' AND ti.completed_count < 7 AND NOT ti.loan_released
-        ),
-        completed_group AS (
+        )`);
+        unionStatements.push('SELECT * FROM waiting_for_caravan_group');
+      }
+
+      if (includeCompleted) {
+        cteDefinitions.push(`completed_group AS (
           SELECT ti.*, 3 as group_score
           FROM touchpoint_info ti
           WHERE ti.completed_count >= 7 AND NOT ti.loan_released
-        ),
-        loan_released_group AS (
+        )`);
+        unionStatements.push('SELECT * FROM completed_group');
+      }
+
+      if (includeLoanReleased) {
+        cteDefinitions.push(`loan_released_group AS (
           SELECT ti.*, 4 as group_score
           FROM touchpoint_info ti
           WHERE ti.loan_released
-        ),
-        no_progress_group AS (
+        )`);
+        unionStatements.push('SELECT * FROM loan_released_group');
+      }
+
+      if (includeNoProgress) {
+        cteDefinitions.push(`no_progress_group AS (
           SELECT ti.*, 5 as group_score
           FROM touchpoint_info ti
           WHERE ti.completed_count = 0
-        ),
+        )`);
+        unionStatements.push('SELECT * FROM no_progress_group');
+      }
+
+      // Build the final CTEs with dynamic UNION
+      withGroupScoreCTE = `${withGroupScoreCTE},
+        ${cteDefinitions.join(',\n        ')},
         touchpoint_with_score AS (
-          SELECT * FROM callable_group
-          UNION ALL
-          SELECT * FROM waiting_for_caravan_group
-          UNION ALL
-          SELECT * FROM completed_group
-          UNION ALL
-          SELECT * FROM loan_released_group
-          UNION ALL
-          SELECT * FROM no_progress_group
+          ${unionStatements.join('\n          UNION ALL\n          ')}
         ),
         assigned_clients_in_location AS (
           SELECT DISTINCT ON (client_id) * FROM touchpoint_with_score
