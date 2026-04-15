@@ -111,6 +111,11 @@ CREATE TABLE IF NOT EXISTS clients (
     loan_released BOOLEAN DEFAULT FALSE,
     loan_released_at TIMESTAMP,
 
+    -- Touchpoint summary (denormalized for performance)
+    touchpoint_summary JSONB DEFAULT '[]',
+    touchpoint_number INTEGER DEFAULT 1,
+    next_touchpoint VARCHAR(10) DEFAULT 'Visit',
+
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     deleted_at TIMESTAMPTZ
@@ -425,6 +430,7 @@ CREATE INDEX IF NOT EXISTS idx_clients_region ON clients(region);
 CREATE INDEX IF NOT EXISTS idx_clients_province ON clients(province);
 CREATE INDEX IF NOT EXISTS idx_clients_barangay ON clients(barangay);
 CREATE INDEX IF NOT EXISTS idx_clients_psgc_id ON clients(psgc_id);
+CREATE INDEX IF NOT EXISTS idx_clients_next_touchpoint ON clients(next_touchpoint) WHERE next_touchpoint IS NOT NULL;
 
 -- Addresses indexes
 CREATE INDEX IF NOT EXISTS idx_addresses_client_id ON addresses(client_id);
