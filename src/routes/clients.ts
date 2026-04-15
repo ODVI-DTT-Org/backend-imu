@@ -405,7 +405,7 @@ clients.get('/', authMiddleware, async (c) => {
         c.next_touchpoint as next_touchpoint_type,
         -- Get last touchpoint info from touchpoint_summary JSON array
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
-        (c.touchpoint_summary->-1->>'user_id') as last_touchpoint_user_id,
+        (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
         c.loan_released
       FROM clients c
       WHERE c.deleted_at IS NULL
@@ -905,7 +905,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
         c.next_touchpoint as next_touchpoint_type,
         -- Get last touchpoint info from touchpoint_summary JSON array
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
-        (c.touchpoint_summary->-1->>'user_id') as last_touchpoint_user_id,
+        (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
         c.loan_released
       FROM clients c
       WHERE c.deleted_at IS NULL
