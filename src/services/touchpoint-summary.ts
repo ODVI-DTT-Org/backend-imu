@@ -54,7 +54,7 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
     let nextTouchpoint: 'Visit' | 'Call' | null = 'Visit';
     if (count >= 7) {
       nextTouchpoint = null;
-    } else if (count in [2, 3, 5]) {
+    } else if (count in [1, 2, 4, 5]) {
       nextTouchpoint = 'Call';
     }
 
