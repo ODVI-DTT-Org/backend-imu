@@ -317,16 +317,36 @@ clients.get('/', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
+    // Handle municipality filter (array for multiple selections, string for single)
     if (municipality) {
-      baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
-      baseParams.push(municipality);
-      baseParamIndex++;
+      if (Array.isArray(municipality)) {
+        if (municipality.length > 0) {
+          const municipalityPlaceholders = municipality.map((_, i) => `$${baseParamIndex + i}`).join(', ');
+          baseWhereConditions.push(`c.municipality IN (${municipalityPlaceholders})`);
+          baseParams.push(...municipality);
+          baseParamIndex += municipality.length;
+        }
+      } else {
+        baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
+        baseParams.push(municipality);
+        baseParamIndex++;
+      }
     }
 
+    // Handle province filter (array for multiple selections, string for single)
     if (province) {
-      baseWhereConditions.push(`c.province = $${baseParamIndex}`);
-      baseParams.push(province);
-      baseParamIndex++;
+      if (Array.isArray(province)) {
+        if (province.length > 0) {
+          const provincePlaceholders = province.map((_, i) => `$${baseParamIndex + i}`).join(', ');
+          baseWhereConditions.push(`c.province IN (${provincePlaceholders})`);
+          baseParams.push(...province);
+          baseParamIndex += province.length;
+        }
+      } else {
+        baseWhereConditions.push(`c.province = $${baseParamIndex}`);
+        baseParams.push(province);
+        baseParamIndex++;
+      }
     }
 
     // Build WHERE clause for main query
@@ -743,16 +763,36 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
+    // Handle municipality filter (array for multiple selections, string for single)
     if (municipality) {
-      baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
-      baseParams.push(municipality);
-      baseParamIndex++;
+      if (Array.isArray(municipality)) {
+        if (municipality.length > 0) {
+          const municipalityPlaceholders = municipality.map((_, i) => `$${baseParamIndex + i}`).join(', ');
+          baseWhereConditions.push(`c.municipality IN (${municipalityPlaceholders})`);
+          baseParams.push(...municipality);
+          baseParamIndex += municipality.length;
+        }
+      } else {
+        baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
+        baseParams.push(municipality);
+        baseParamIndex++;
+      }
     }
 
+    // Handle province filter (array for multiple selections, string for single)
     if (province) {
-      baseWhereConditions.push(`c.province = $${baseParamIndex}`);
-      baseParams.push(province);
-      baseParamIndex++;
+      if (Array.isArray(province)) {
+        if (province.length > 0) {
+          const provincePlaceholders = province.map((_, i) => `$${baseParamIndex + i}`).join(', ');
+          baseWhereConditions.push(`c.province IN (${provincePlaceholders})`);
+          baseParams.push(...province);
+          baseParamIndex += province.length;
+        }
+      } else {
+        baseWhereConditions.push(`c.province = $${baseParamIndex}`);
+        baseParams.push(province);
+        baseParamIndex++;
+      }
     }
 
     // Build WHERE clause for main query

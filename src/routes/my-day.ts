@@ -301,11 +301,21 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       caravanId = user.sub;
     }
 
+    // Enhanced debug logging
+    const todayDate = getLocalDateString();
     console.log('[My Day Tasks] Fetching tasks:', {
       userId: caravanId,
       targetDate,
+      todayDate,
       userRole: user.role,
       requestedDate,
+      datesMatch: targetDate === todayDate,
+    });
+
+    // Log returned client IDs for debugging
+    console.log('[My Day Tasks] Query parameters:', {
+      userId: caravanId,
+      scheduledDate: targetDate,
     });
 
     // Get itineraries for the target date with client info
@@ -320,8 +330,14 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       [caravanId, targetDate]
     );
 
+    // Log returned clients for debugging
+    console.log('[My Day Tasks] Query result:', {
+      rowCount: itinerariesResult.rows.length,
+      clientIds: itinerariesResult.rows.map((r: any) => ({ id: r.client_id, name: `${r.first_name} ${r.last_name}`, scheduledDate: r.scheduled_date })),
+    });
+
     // Fetch addresses for all clients in batch with PSGC join
-    const clientIds = itinerariesResult.rows.map(row => row.client_id);
+    const clientIds = itinerariesResult.rows.map((row: any) => row.client_id);
     const addressesResult = clientIds.length > 0 ? await pool.query(
       `SELECT a.client_id, a.id, a.street_address, a.postal_code, a.is_primary,
               p.region, p.province, p.municipality, p.barangay
