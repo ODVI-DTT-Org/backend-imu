@@ -524,17 +524,15 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       try {
         const notes = JSON.parse(approval.notes);
 
-        // CREATE addresses record
+        // CREATE addresses record (matching existing schema)
         await client.query(`
           INSERT INTO addresses (
-            id, client_id, type, street, barangay, city_municipality,
-            province, postal_code, psgc_id
+            id, client_id, type, street, barangay, city, province, postal_code, latitude, longitude, is_primary
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
           )
-        `, [approval.client_id, notes.type, notes.street, notes.barangay,
-            notes.city_municipality, notes.province, notes.postal_code,
-            notes.psgc_id]);
+        `, [approval.client_id, notes.type, notes.street, notes.barangay, notes.city,
+            notes.province, notes.postal_code, notes.latitude, notes.longitude, notes.is_primary]);
       } catch (parseError) {
         console.error('Failed to process address approval:', parseError);
         await client.query('ROLLBACK');
@@ -547,14 +545,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       try {
         const notes = JSON.parse(approval.notes);
 
-        // CREATE phone_numbers record
+        // CREATE phone_numbers record (matching existing schema)
         await client.query(`
           INSERT INTO phone_numbers (
-            id, client_id, phone_number, type, is_primary
+            id, client_id, type, number, label, is_primary
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4
+            gen_random_uuid(), $1, $2, $3, $4, $5
           )
-        `, [approval.client_id, notes.phone_number, notes.type, notes.is_primary]);
+        `, [approval.client_id, notes.type, notes.number, notes.label, notes.is_primary]);
       } catch (parseError) {
         console.error('Failed to process phone approval:', parseError);
         await client.query('ROLLBACK');
