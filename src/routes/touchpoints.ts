@@ -617,6 +617,20 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     if (!visitId && !callId) {
       console.log('[Touchpoints] No visit_id or call_id provided, auto-creating visit record');
 
+      // Access raw request body for visit data fields (not in touchpoint schema)
+      const visitData = {
+        time_in: body.time_in || null,
+        time_out: body.time_out || null,
+        odometer_arrival: body.odometer_arrival || null,
+        odometer_departure: body.odometer_departure || null,
+        notes: body.notes || body.remarks || null,
+        reason: body.reason || null,
+        status: body.status || null,
+        address: body.address || null,
+        latitude: body.latitude || null,
+        longitude: body.longitude || null,
+      };
+
       // Create a visit record from the touchpoint data
       const visitResult = await pool.query(
         `INSERT INTO visits (
@@ -630,16 +644,16 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
           validated.client_id,
           validated.user_id,
           'regular_visit',
-          validated.time_in || null,
-          validated.time_out || null,
-          validated.odometer_arrival || null,
-          validated.odometer_departure || null,
-          validated.notes || null,
-          validated.reason || null,
-          validated.status || null,
-          validated.address || null,
-          validated.latitude || null,
-          validated.longitude || null,
+          visitData.time_in,
+          visitData.time_out,
+          visitData.odometer_arrival,
+          visitData.odometer_departure,
+          visitData.notes,
+          visitData.reason,
+          visitData.status,
+          visitData.address,
+          visitData.latitude,
+          visitData.longitude,
         ]
       );
 
