@@ -157,9 +157,9 @@ ALTER TABLE touchpoints ADD CONSTRAINT touchpoint_status_check
 ```
 
 **Rationale:**
-- Adds 'loan_released' status for future touchpoint tracking needs
-- Maintains data integrity with CHECK constraint
-- Allows manual touchpoint creation with loan_released status if needed
+- **DECISION: Remove this change** - The 'loan_released' status is not needed since we're not creating touchpoints for loan releases
+- Keep the touchpoint status enum as-is: Interested, Undecided, Not Interested, Completed
+- If loan release context is needed in the future, use the itinerary.status='loan_released' field instead
 
 #### 1.3 Client Table Enhancements (Already Exists)
 
@@ -371,6 +371,63 @@ await approvalsApiService.submitLoanReleaseV2(
 
 ---
 
+### 4. API Compatibility & Migration
+
+#### 4.1 Visit Record Endpoint Changes
+
+**Breaking Changes:** None - all new fields are optional
+
+**Backward Compatibility:**
+- Old mobile app versions can still call the endpoint without new fields
+- New fields (`visit_outcome`, `actual_time_in/out`, GPS) are all optional
+- If not provided, these fields will be NULL in database
+
+**Forward Compatibility:**
+- New mobile app versions can provide new fields
+- Backend will accept and store new fields when provided
+- Old backend versions will ignore unknown fields (JSON parse behavior)
+
+**Field Defaults:**
+- `visit_outcome`: NULL if not provided (no default)
+- `actual_time_in`: NULL if not provided
+- `actual_time_out`: NULL if not provided
+- GPS fields: NULL if not provided
+
+**Migration Strategy:**
+- Deploy database migration first (columns are nullable)
+- Deploy backend API changes (new fields optional)
+- Mobile app can be updated later to use new fields
+- No coordinated deployment required
+
+#### 4.2 Existing Data Migration
+
+**Touchpoint #0 Records (Visit Only):**
+- **Problem:** Existing records with `touchpoint_number=0` are legacy "Visit Only" records
+- **Solution:** Migration script converts these to itinerary records and deletes the touchpoints
+- **Impact:** Clients will show correct touchpoint counts after migration (no more "0/7" confusion)
+
+**Touchpoint #7 Records (Loan Release):**
+- **Problem:** Some Touchpoint #7 records may have been created by loan releases
+- **Solution:** Keep these records as-is (they represent actual 7th sales visits)
+- **Future:** New loan releases will NOT create Touchpoint #7
+- **Impact:** No data loss, only new behavior changes
+
+**Detection Query:**
+```sql
+-- Find legacy Visit Only touchpoints (before migration)
+SELECT COUNT(*) as visit_only_count
+FROM touchpoints
+WHERE touchpoint_number = 0;
+
+-- Find loan release touchpoints (for reference)
+SELECT COUNT(*) as loan_release_count
+FROM touchpoints
+WHERE touchpoint_number = 7
+  AND reason = 'Loan Release';
+```
+
+---
+
 ## Data Flow Diagrams
 
 ### Visit Record Only Flow (New)
@@ -564,7 +621,7 @@ try {
 
 ```sql
 -- ============================================================
--- Migration 048: Visit Outcome Fields & Loan Released Status
+-- Migration 048: Visit Outcome Fields & Itinerary-Only Flow
 -- ============================================================
 
 -- Add new columns to itineraries table
@@ -599,19 +656,8 @@ ALTER TABLE itineraries
     'other'
   ));
 
--- Update touchpoint status enum to include loan_released
-ALTER TABLE touchpoints
-  DROP CONSTRAINT IF EXISTS touchpoint_status_check;
-
-ALTER TABLE touchpoints
-  ADD CONSTRAINT touchpoint_status_check
-  CHECK (status IN (
-    'Interested',
-    'Undecided',
-    'Not Interested',
-    'Completed',
-    'loan_released'
-  ));
+-- NOTE: No changes to touchpoints table needed
+-- Touchpoint status enum remains: Interested, Undecided, Not Interested, Completed
 
 -- Add indexes for performance
 CREATE INDEX IF NOT EXISTS idx_itineraries_visit_outcome
@@ -630,16 +676,63 @@ COMMENT ON COLUMN itineraries.actual_time_out IS 'Actual time visit ended (HH:MM
 COMMENT ON COLUMN itineraries.gps_latitude IS 'GPS latitude captured during visit';
 COMMENT ON COLUMN itineraries.gps_longitude IS 'GPS longitude captured during visit';
 COMMENT ON COLUMN itineraries.gps_address IS 'Reverse geocoded address from GPS';
-COMMENT ON COLUMN touchpoints.status IS 'Touchpoint status: Interested, Undecided, Not Interested, Completed, loan_released';
+
+-- ============================================================
+-- Data Migration: Clean up old touchpoint records
+-- ============================================================
+
+-- Migrate existing touchpoint_number=0 records to itineraries
+-- This converts old "Visit Only" touchpoints to pure itinerary records
+INSERT INTO itineraries (id, client_id, user_id, scheduled_date, status, remarks, created_at)
+SELECT
+  gen_random_uuid(),
+  t.client_id,
+  t.user_id,
+  t.date,
+  'completed',
+  'Migrated from touchpoint #0: ' || COALESCE(t.remarks, ''),
+  t.created_at
+FROM touchpoints t
+WHERE t.touchpoint_number = 0
+  AND NOT EXISTS (
+    SELECT 1 FROM itineraries i
+    WHERE i.client_id = t.client_id
+      AND i.user_id = t.user_id
+      AND i.scheduled_date = t.date
+      AND i.status = 'completed'
+  );
+
+-- Delete migrated touchpoint_number=0 records
+DELETE FROM touchpoints
+WHERE touchpoint_number = 0;
+
+-- Log migration results
+DO $$
+DECLARE
+  migrated_count INTEGER;
+BEGIN
+  SELECT COUNT(*) INTO migrated_count
+  FROM touchpoints
+  WHERE touchpoint_number = 0;
+
+  RAISE NOTICE 'Migration completed. Migrated % touchpoint #0 records to itineraries.', migrated_count;
+END $$;
 ```
 
 **Rollback Script:**
 ```sql
 -- Rollback Migration 048
 
+-- Drop indexes
+DROP INDEX IF EXISTS idx_itineraries_visit_outcome;
+DROP INDEX IF EXISTS idx_itineraries_actual_time;
+DROP INDEX IF EXISTS idx_itineraries_gps;
+
+-- Drop constraint
 ALTER TABLE itineraries
   DROP CONSTRAINT IF EXISTS visit_outcome_check;
 
+-- Drop columns
 ALTER TABLE itineraries
   DROP COLUMN IF EXISTS visit_outcome;
 
@@ -658,21 +751,7 @@ ALTER TABLE itineraries
 ALTER TABLE itineraries
   DROP COLUMN IF EXISTS gps_address;
 
-ALTER TABLE touchpoints
-  DROP CONSTRAINT IF EXISTS touchpoint_status_check;
-
-ALTER TABLE touchpoints
-  ADD CONSTRAINT touchpoint_status_check
-  CHECK (status IN (
-    'Interested',
-    'Undecided',
-    'Not Interested',
-    'Completed'
-  ));
-
-DROP INDEX IF EXISTS idx_itineraries_visit_outcome;
-DROP INDEX IF EXISTS idx_itineraries_actual_time;
-DROP INDEX IF EXISTS idx_itineraries_gps;
+-- NOTE: No changes to touchpoints table to rollback
 ```
 
 ### Phase 2: Backend API Updates
@@ -826,7 +905,7 @@ CREATE INDEX idx_itineraries_gps ON itineraries(gps_latitude, gps_longitude);
 **Touchpoints:**
 - 7-step sales process (numbers 1-7)
 - Fixed pattern: Visit → Call → Call → Visit → Call → Call → Visit
-- Status: Interested, Undecided, Not Interested, Completed, loan_released
+- Status: Interested, Undecided, Not Interested, Completed
 - Purpose: Track sales progression
 
 **Itineraries:**
