@@ -475,6 +475,93 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       }
     }
 
+    // For loan_release_v2 approvals, create release and update client
+    if (approval.type === 'loan_release_v2') {
+      try {
+        const notes = JSON.parse(approval.notes);
+        const visitId = notes.visit_id;  // For Caravan releases
+        const callId = notes.call_id;    // For Tele releases
+
+        // CREATE releases record (references visit_id OR call_id)
+        await client.query(`
+          INSERT INTO releases (
+            id, client_id, user_id, visit_id, call_id, product_type, loan_type,
+            amount, approval_notes, status
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
+          )
+        `, [approval.client_id, approval.user_id, visitId, callId,
+            notes.product_type, notes.loan_type, notes.amount,
+            'Approved by admin']);
+
+        // UPDATE clients
+        await client.query(`
+          UPDATE clients
+          SET loan_released = TRUE, loan_released_at = NOW()
+          WHERE id = $1
+        `, [approval.client_id]);
+
+        // UPDATE itineraries (now completed) - only for Caravan (visit-based)
+        if (visitId) {
+          await client.query(`
+            UPDATE itineraries
+            SET status = 'completed', updated_at = NOW()
+            WHERE client_id = $1
+              AND scheduled_date = CURRENT_DATE
+              AND user_id = $2
+          `, [approval.client_id, approval.user_id]);
+        }
+        // Note: Tele releases don't update itineraries (no scheduled visit)
+      } catch (parseError) {
+        console.error('Failed to process loan release approval:', parseError);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process loan release approval');
+      }
+    }
+
+    // For address_add approvals, create address record
+    if (approval.type === 'address_add') {
+      try {
+        const notes = JSON.parse(approval.notes);
+
+        // CREATE addresses record
+        await client.query(`
+          INSERT INTO addresses (
+            id, client_id, type, street, barangay, city_municipality,
+            province, postal_code, psgc_id
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+          )
+        `, [approval.client_id, notes.type, notes.street, notes.barangay,
+            notes.city_municipality, notes.province, notes.postal_code,
+            notes.psgc_id]);
+      } catch (parseError) {
+        console.error('Failed to process address approval:', parseError);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process address approval');
+      }
+    }
+
+    // For phone_add approvals, create phone record
+    if (approval.type === 'phone_add') {
+      try {
+        const notes = JSON.parse(approval.notes);
+
+        // CREATE phone_numbers record
+        await client.query(`
+          INSERT INTO phone_numbers (
+            id, client_id, phone_number, type, is_primary
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4
+          )
+        `, [approval.client_id, notes.phone_number, notes.type, notes.is_primary]);
+      } catch (parseError) {
+        console.error('Failed to process phone approval:', parseError);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process phone approval');
+      }
+    }
+
     // For client edit approvals, apply the changes to the client
     let clientChanges: Record<string, any> | null = null;
     if (approval.type === 'client' && approval.reason === 'Client Edit Request') {
