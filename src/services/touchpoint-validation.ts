@@ -91,7 +91,7 @@ export function validateRoleBasedTouchpoint(
 export function getNextTouchpointType(count: number): 'Visit' | 'Call' | null {
   if (count >= 7) return null;
 
-  if (count in [0, 3, 6]) return 'Visit';
-  if (count in [1, 2, 4, 5]) return 'Call';
+  if ([0, 3, 6].includes(count)) return 'Visit';
+  if ([1, 2, 4, 5].includes(count)) return 'Call';
   return 'Visit';
 }
