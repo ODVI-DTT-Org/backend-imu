@@ -1157,7 +1157,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         return c.json({ message: 'Loan already released for this client' }, 409);
       }
 
-      let activityId: string;
+      let activityId: string | undefined;
 
       // Caravan: CREATE visits record
       if (user.role === 'caravan') {
