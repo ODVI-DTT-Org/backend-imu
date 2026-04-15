@@ -49,7 +49,8 @@ This document outlines the approved design changes to critical data flows in the
 3. "add address and add phone should require approval for caravan/tele"
 
 **Approval Rules:**
-- **Loan Release (Caravan)**: Requires admin approval, creates visit record
+- **Loan Release (Caravan)**: Requires admin approval, creates visit record (type='release_loan')
+- **Loan Release (Tele)**: Requires admin approval, creates call record (type='release_loan')
 - **Loan Release (Admin)**: No approval required, direct release processing
 - **Add Address/Phone (Caravan/Tele)**: Requires admin approval
 - **Add Address/Phone (Admin)**: No approval required, direct insert
@@ -105,24 +106,80 @@ CREATE TABLE visits (
 );
 ```
 
+**calls** - Phone call records (for Tele users)
+```sql
+CREATE TABLE calls (
+  id UUID PRIMARY KEY,
+  client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
+  phone_number TEXT NOT NULL,
+  dial_time TIMESTAMPTZ,
+  duration INTEGER,  -- in seconds
+  notes TEXT,
+  reason TEXT,
+  status TEXT,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+**⚠️ SCHEMA CHANGE REQUIRED:** Add `type` column to calls table to support 'release_loan' type
+
 **releases** - Loan release records
 ```sql
+-- Current schema:
 CREATE TABLE releases (
   id UUID PRIMARY KEY,
   client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
-  visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
-  product_type TEXT NOT NULL
-    CHECK (product_type IN ('PUSU', 'LIKA', 'SUB2K')),
-  loan_type TEXT NOT NULL
-    CHECK (loan_type IN ('NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM')),
+  visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE CASCADE,  -- CURRENT: NOT NULL
+  product_type TEXT NOT NULL,
+  loan_type TEXT NOT NULL,
   amount NUMERIC NOT NULL,
   approval_notes TEXT,
-  status TEXT NOT NULL DEFAULT 'pending'
-    CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed')),
+  status TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+```
+
+**⚠️ SCHEMA CHANGES REQUIRED:**
+
+1. **Add type column to calls table** (to support 'release_loan' type)
+2. **Add call_id column to releases table**
+3. **Make visit_id nullable in releases table**
+4. **Add constraint to ensure only one of visit_id/call_id is set**
+
+**Migrations Required:**
+```sql
+-- Migration File: backend/src/migrations/048_support_tele_loan_releases.sql
+
+-- ============================================================
+-- Migration 048: Support Tele Loan Releases
+-- ============================================================
+
+-- Step 1: Add type column to calls table (if not exists)
+ALTER TABLE calls ADD COLUMN IF NOT EXISTS type TEXT NOT NULL DEFAULT 'regular_call'
+  CHECK (type IN ('regular_call', 'release_loan'));
+
+-- Step 2: Add call_id column to releases table
+ALTER TABLE releases ADD COLUMN IF NOT EXISTS call_id UUID REFERENCES calls(id) ON DELETE CASCADE;
+
+-- Step 3: Make visit_id nullable (for admin direct releases and tele releases)
+ALTER TABLE releases ALTER COLUMN visit_id DROP NOT NULL;
+
+-- Step 4: Add constraint to ensure proper activity reference
+ALTER TABLE releases ADD CONSTRAINT release_activity_check CHECK (
+  (visit_id IS NOT NULL AND call_id IS NULL) OR  -- Caravan: visit only
+  (visit_id IS NULL AND call_id IS NOT NULL) OR  -- Tele: call only
+  (visit_id IS NULL AND call_id IS NULL)         -- Admin: direct release
+);
+
+-- Add comments for documentation
+COMMENT ON COLUMN calls.type IS 'Type of call: regular_call or release_loan';
+COMMENT ON COLUMN releases.call_id IS 'References calls(id) for Tele releases, NULL for Admin/Caravan releases';
+COMMENT ON COLUMN releases.visit_id IS 'References visits(id) for Caravan releases, NULL for Admin/Tele releases';
+COMMENT ON CONSTRAINT release_activity_check ON releases IS 'Ensures only one of visit_id or call_id is set, or both NULL for admin direct releases';
 ```
 
 **approvals** - Approval workflow storage
@@ -227,7 +284,26 @@ POST /api/my-day/clients/:id/visit
 - Eliminates the `touchpoint_number=0` hack
 - Better reflects the actual business activity (general visit vs sales touchpoint)
 
-### Change 2: Loan Release (Two-Path Approach)
+### Change 2: Touchpoint Record (Verification Needed)
+
+**Current Behavior (TO BE VERIFIED):**
+```
+POST /api/touchpoints
+→ Creates touchpoint record (number 1-7)
+→ Creates visits record (type='regular_visit')
+→ Updates itineraries (status='completed')
+```
+
+**Question:** Does the current touchpoint creation already create visits records? This needs to be verified before implementation.
+
+**If NOT current behavior:** Add visits table creation to touchpoint endpoint
+**If YES current behavior:** No changes needed
+
+**Note:** This is separate from Visit Record Only - touchpoints are for the 7-step sales process, visits are for actual visit records. Both create visits but for different purposes.
+
+---
+
+### Change 3: Loan Release (Two-Path Approach)
 
 **Path A: Admin Direct Release (NEW)**
 ```
@@ -288,6 +364,29 @@ IF user.role == 'caravan' OR user.role == 'tele':
 
 ## Architecture Changes
 
+### Important Notes Before Implementation
+
+**⚠️ Schema Change Required:**
+```sql
+-- Make releases.visit_id nullable for admin direct releases
+ALTER TABLE releases ALTER COLUMN visit_id DROP NOT NULL;
+```
+
+**Role Restrictions:**
+- Caravan users: Submit loan releases via visit records (requires approval)
+- Tele users: Submit loan releases via call records (requires approval)
+- Admin users: Direct releases (no visit/call, no approval)
+- Admin users can bypass approval for address/phone changes
+- Caravan/Tele users require approval for address/phone changes
+
+**Error Handling Requirements:**
+- If itinerary not found: Log warning, continue with visit creation
+- If client not found: Return 404 error
+- If loan already released: Return 409 Conflict error
+- Invalid time format: Return 400 validation error
+
+---
+
 ### 1. Backend API Changes
 
 #### 1.1 Visit Record Only Endpoint
@@ -324,6 +423,11 @@ myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
     notes: z.string().optional(),
   });
 
+  // Time Format Handling:
+  // - Accepts ISO 8601 format (e.g., "2026-04-15T09:30:00Z")
+  // - Mobile app should send timestamps in ISO 8601 format
+  // - If time_in/time_out are not provided, they will be NULL in database
+
   const validated = schema.parse(await c.req.json());
   const clientId = c.req.param('id');
   const user = c.get('user');
@@ -344,14 +448,21 @@ myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
         validated.latitude, validated.longitude, validated.address,
         validated.photo_url, validated.notes]);
 
-    // UPDATE itineraries
-    await client.query(`
+    // UPDATE itineraries (with error handling)
+    const itineraryResult = await client.query(`
       UPDATE itineraries
       SET status = 'completed', updated_at = NOW()
       WHERE client_id = $1
         AND scheduled_date = CURRENT_DATE
         AND user_id = $2
+      RETURNING *
     `, [clientId, user.sub]);
+
+    // Log warning if no itinerary was updated (not critical, visit is still recorded)
+    if (itineraryResult.rows.length === 0) {
+      console.warn(`No itinerary found for client ${clientId}, user ${user.sub}, date ${CURRENT_DATE}`);
+      // Visit is still created successfully, just no itinerary to update
+    }
 
     await client.query('COMMIT');
 
@@ -372,6 +483,7 @@ myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
 - Removed touchpoint creation entirely
 - Added visits record creation (type='regular_visit')
 - Updated itineraries status to 'completed'
+- **Error Handling:** If no itinerary exists for the client/date/user, log a warning but continue (visit is still recorded)
 
 #### 1.2 Loan Release Endpoint (Two Paths)
 
@@ -381,6 +493,12 @@ myDay.post('/clients/:id/visit', authMiddleware, async (c) => {
 ```typescript
 approvals.post('/loan-release-v2', authMiddleware, async (c) => {
   const user = c.get('user');
+
+  // Role check: Only admin and caravan can submit loan releases
+  // Tele users are NOT allowed (they don't visit clients in person)
+  if (user.role === 'tele') {
+    throw new ForbiddenError('Tele users are not allowed to submit loan releases');
+  }
 
   // Admin bypass: Direct release
   if (user.role === 'admin') {
@@ -442,11 +560,11 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
 });
 ```
 
-**Path B: Caravan/Tele Approval Flow (UPDATED)**
+**Path B: Caravan Approval Flow (UPDATED)**
 ```typescript
 // Inside the same endpoint, after admin check:
-else {
-  // Caravan/Tele: Create visit + approval request
+else if (user.role === 'caravan') {
+  // Caravan: Create visit + approval request
   const schema = z.object({
     client_id: z.string().uuid(),
     udi_number: z.string().min(1).max(50),
@@ -523,6 +641,73 @@ else {
     dbClient.release();
   }
 }
+
+**Path C: Tele Approval Flow (NEW)**
+```typescript
+else if (user.role === 'tele') {
+  // Tele: Create call + approval request
+  const schema = z.object({
+    client_id: z.string().uuid(),
+    udi_number: z.string().min(1).max(50),
+    product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
+    loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+    amount: z.number().positive(),
+    phone_number: z.string().regex(/^09\d{9}$/),
+    duration: z.number().int().positive().optional(),  // in seconds
+    notes: z.string().optional(),
+  });
+
+  const validated = schema.parse(await c.req.json());
+
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+
+    // CREATE calls record
+    const callResult = await dbClient.query(`
+      INSERT INTO calls (
+        id, client_id, user_id, phone_number, dial_time, duration, notes, reason, type
+      ) VALUES (
+        gen_random_uuid(), $1, $2, $3, NOW(), $4, $5, $6, 'release_loan'
+      ) RETURNING id
+    `, [validated.client_id, user.sub, validated.phone_number,
+        validated.duration, validated.notes, 'Loan Release Request']);
+
+    const callId = callResult.rows[0].id;
+
+    // CREATE approval request
+    const approvalResult = await dbClient.query(`
+      INSERT INTO approvals (
+        id, type, client_id, user_id, role, reason, notes, status
+      ) VALUES (
+        gen_random_uuid(), 'loan_release_v2', $1, $2, $3, $4, $5, 'pending'
+      ) RETURNING id
+    `, [validated.client_id, user.sub, user.role,
+        'Loan Release Request (Tele)',
+        JSON.stringify({
+          call_id: callId,
+          udi_number: validated.udi_number,
+          product_type: validated.product_type,
+          loan_type: validated.loan_type,
+          amount: validated.amount,
+          phone_number: validated.phone_number,
+          // ... other fields
+        })]);
+
+    await dbClient.query('COMMIT');
+
+    return c.json({
+      message: 'Loan release submitted for approval',
+      approval_id: approvalResult.rows[0].id,
+      status: 'pending'
+    }), 201;
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    throw error;
+  } finally {
+    dbClient.release();
+  }
+}
 ```
 
 **Approval Handler (UPDATED):**
@@ -556,17 +741,18 @@ approvals.post('/:id/approve', authMiddleware, requireRole('admin'), async (c) =
     // Process based on approval type
     if (approval.type === 'loan_release_v2') {
       const notes = approval.notes;
-      const visitId = notes.visit_id;
+      const visitId = notes.visit_id;  // For Caravan releases
+      const callId = notes.call_id;    // For Tele releases
 
-      // CREATE releases record (references visit_id)
+      // CREATE releases record (references visit_id OR call_id)
       await client.query(`
         INSERT INTO releases (
-          id, client_id, user_id, visit_id, product_type, loan_type,
+          id, client_id, user_id, visit_id, call_id, product_type, loan_type,
           amount, approval_notes, status
         ) VALUES (
-          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'approved'
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
         )
-      `, [approval.client_id, approval.user_id, visitId,
+      `, [approval.client_id, approval.user_id, visitId, callId,
           notes.product_type, notes.loan_type, notes.amount,
           'Approved by admin']);
 
@@ -577,14 +763,17 @@ approvals.post('/:id/approve', authMiddleware, requireRole('admin'), async (c) =
         WHERE id = $1
       `, [approval.client_id]);
 
-      // UPDATE itineraries (now completed)
-      await client.query(`
-        UPDATE itineraries
-        SET status = 'completed', updated_at = NOW()
-        WHERE client_id = $1
-          AND scheduled_date = CURRENT_DATE
-          AND user_id = $2
-      `, [approval.client_id, approval.user_id]);
+      // UPDATE itineraries (now completed) - only for Caravan (visit-based)
+      if (visitId) {
+        await client.query(`
+          UPDATE itineraries
+          SET status = 'completed', updated_at = NOW()
+          WHERE client_id = $1
+            AND scheduled_date = CURRENT_DATE
+            AND user_id = $2
+        `, [approval.client_id, approval.user_id]);
+      }
+      // Note: Tele releases don't update itineraries (no scheduled visit)
     }
 
     else if (approval.type === 'address_add') {
@@ -854,7 +1043,7 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### Flow 3B: Loan Release (Caravan - With Approval)
+### Flow 3C: Loan Release (Tele - With Approval)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -906,6 +1095,62 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
 │  approvals: status='approved' ✅                                │
 │  visits: (already created) ✅                                  │
 │  itineraries: status='completed' ✅                             │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Flow 3C: Loan Release (Tele - With Approval)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  TELE submits loan release via phone call                       │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+        POST /api/approvals/loan-release-v2
+        Authorization: Bearer <tele_jwt_token>
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Submit):                                              │
+│  1. CREATE calls (type='release_loan')                          │
+│  2. CREATE approvals (status='pending')                         │
+│  3. ❌ NO visit created                                         │
+│  4. ❌ NO itinerary update (no scheduled visit)                 │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Pending):                                            │
+│  calls: NEW record (release_loan) ✅                            │
+│  approvals: status='pending' ⏳                                 │
+│  clients: loan_released=FALSE (unchanged)                       │
+│  releases: (empty)                                              │
+│  itineraries: NO CHANGES ✅                                     │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  ADMIN APPROVES                                                 │
+│  POST /api/approvals/:id/approve                               │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  BACKEND (Approve):                                             │
+│  1. UPDATE approvals (status='approved')                        │
+│  2. CREATE releases (call_id=<call_id>)                        │
+│  3. UPDATE clients (loan_released=TRUE)                         │
+│  4. ❌ NO itinerary update (no scheduled visit)                 │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│  DATABASE (Approved):                                           │
+│  releases: NEW record (call_id=<call_id>) ✅                   │
+│  clients: loan_released=TRUE ✅                                 │
+│  approvals: status='approved' ✅                                │
+│  calls: (already created) ✅                                    │
+│  itineraries: NO CHANGES ✅                                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1055,9 +1300,23 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
 
 ## Migration Plan
 
-### Phase 1: No Database Schema Changes Required
+### Phase 1: Database Schema Changes Required
 
-**Note:** The `visits`, `releases`, `itineraries`, `approvals`, `addresses`, and `phone_numbers` tables already exist in `COMPLETE_SCHEMA.sql`. No schema migration is needed.
+**Schema Change 1: Make releases.visit_id nullable**
+
+**Migration File:** `backend/src/migrations/048_make_releases_visit_id_nullable.sql`
+
+```sql
+-- ============================================================
+-- Migration 048: Make releases.visit_id nullable for admin releases
+-- ============================================================
+
+-- Make visit_id nullable to support admin direct releases (no visit created)
+ALTER TABLE releases ALTER COLUMN visit_id DROP NOT NULL;
+
+-- Add comment for documentation
+COMMENT ON COLUMN releases.visit_id IS 'NULL for admin direct releases, references visits(id) for caravan releases';
+```
 
 **Data Migration (One-time cleanup):**
 
@@ -1151,14 +1410,15 @@ END $$;
 ### Phase 2: Backend API Updates
 
 **Order of Operations:**
-1. Deploy data migration (Phase 1)
-2. Update visit record endpoint (`my-day.ts`)
-3. Update loan release endpoint (`approvals.ts`) - Two-path implementation
-4. Update add address endpoint (`clients.ts`) - Role-based approval
-5. Update add phone endpoint (`clients.ts`) - Role-based approval
-6. Update approval handler (`approvals.ts`) - Support for all approval types
-7. Run integration tests
-8. Deploy to staging
+1. Deploy schema migration (make releases.visit_id nullable)
+2. Deploy data migration (cleanup legacy touchpoints)
+3. Update visit record endpoint (`my-day.ts`)
+4. Update loan release endpoint (`approvals.ts`) - Two-path implementation + Tele restriction
+5. Update add address endpoint (`clients.ts`) - Role-based approval
+6. Update add phone endpoint (`clients.ts`) - Role-based approval
+7. Update approval handler (`approvals.ts`) - Support for all approval types
+8. Run integration tests
+9. Deploy to staging
 
 ### Phase 3: Testing & Verification
 
@@ -1166,6 +1426,7 @@ END $$;
 - Test visit record only creates visit + updates itinerary, no touchpoint
 - Test loan release (admin) creates release directly, no visit/approval
 - Test loan release (caravan) creates visit + approval, on approval creates release
+- Test loan release (tele) creates call + approval, on approval creates release
 - Test add address (admin) direct insert
 - Test add address (caravan) creates approval, on approval creates address
 - Test add phone (admin) direct insert
@@ -1192,10 +1453,24 @@ END $$;
    - [ ] Verify itinerary status='in_progress'
    - [ ] Verify approval created (status='pending')
    - [ ] Approve as admin
-   - [ ] Verify releases record created (visit_id populated)
+   - [ ] Verify releases record created (visit_id populated, call_id=NULL)
    - [ ] Verify client marked loan_released=TRUE
    - [ ] Verify itinerary status='completed'
    - [ ] Verify NO touchpoint created
+
+4. **Loan Release (Tele):**
+   - [ ] Submit loan release as tele
+   - [ ] Verify calls record created (type='release_loan')
+   - [ ] Verify approval created (status='pending')
+   - [ ] Verify NO visit created
+   - [ ] Verify NO itinerary updated (no scheduled visit)
+   - [ ] Approve as admin
+   - [ ] Verify releases record created (call_id populated, visit_id=NULL)
+   - [ ] Verify client marked loan_released=TRUE
+   - [ ] Verify NO itinerary updated
+   - [ ] Verify NO touchpoint created
+
+5. **Add Address (Admin):**
 
 4. **Add Address (Admin):**
    - [ ] Add address as admin
@@ -1287,6 +1562,59 @@ Content-Type: application/json
   "client_id": "123e4567-e89b-12d3-a456-426614174000",
   "loan_released": true,
   "loan_released_at": "2026-04-15T10:00:00Z"
+}
+```
+
+### Loan Release (Tele - With Approval)
+
+**Request (Submit):**
+```http
+POST /api/approvals/loan-release-v2
+Authorization: Bearer <tele_jwt_token>
+Content-Type: application/json
+
+{
+  "client_id": "123e4567-e89b-12d3-a456-426614174000",
+  "udi_number": "UDI-2026-001234",
+  "product_type": "PUSU",
+  "loan_type": "NEW",
+  "amount": 50000,
+  "phone_number": "09171234567",
+  "duration": 300,
+  "notes": "Client approved loan over phone"
+}
+```
+
+**Response (Pending):**
+```http
+HTTP/1.1 201 Created
+Content-Type: application/json
+
+{
+  "message": "Loan release submitted for approval",
+  "approval_id": "789e0123-e89b-12d3-a456-426614174000",
+  "status": "pending"
+}
+```
+
+**Request (Approve):**
+```http
+POST /api/approvals/789e0123-e89b-12d3-a456-426614174000/approve
+Authorization: Bearer <admin_jwt_token>
+Content-Type: application/json
+
+{
+  "notes": "Approved - phone call verified"
+}
+```
+
+**Response (Approved):**
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+
+{
+  "message": "Approval processed successfully"
 }
 ```
 
@@ -1400,16 +1728,17 @@ Content-Type: application/json
 
 ## Summary Table: All Data Flows
 
-| Feature | Who Submits | Approval? | Creates Visit? | Creates Release? | Creates Touchpoint? |
-|---------|-------------|-----------|----------------|------------------|-------------------|
-| **Visit Record Only** | Caravan/Tele | ❌ No | ✅ Yes (regular_visit) | ❌ No | ❌ No |
-| **Touchpoint Record** | Caravan/Tele | ❌ No | ✅ Yes (regular_visit) | ❌ No | ✅ Yes (1-7) |
-| **Loan Release** | Admin | ❌ No | ❌ No | ✅ Yes (direct) | ❌ No |
-| **Loan Release** | Caravan | ✅ Yes | ✅ Yes (release_loan) | ✅ Yes (after approval) | ❌ No |
-| **Add Address** | Admin | ❌ No | ❌ No | N/A | ❌ No |
-| **Add Address** | Caravan/Tele | ✅ Yes | ❌ No | N/A | ❌ No |
-| **Add Phone** | Admin | ❌ No | ❌ No | N/A | ❌ No |
-| **Add Phone** | Caravan/Tele | ✅ Yes | ❌ No | N/A | ❌ No |
+| Feature | Who Submits | Approval? | Creates Visit? | Creates Call? | Creates Release? | Creates Touchpoint? |
+|---------|-------------|-----------|----------------|---------------|------------------|-------------------|
+| **Visit Record Only** | Caravan/Tele | ❌ No | ✅ Yes (regular_visit) | ❌ No | ❌ No | ❌ No |
+| **Touchpoint Record** | Caravan/Tele | ❌ No | ✅ Yes (regular_visit) | ❌ No | ❌ No | ✅ Yes (1-7) |
+| **Loan Release** | Admin | ❌ No | ❌ No | ❌ No | ✅ Yes (direct) | ❌ No |
+| **Loan Release** | Caravan | ✅ Yes | ✅ Yes (release_loan) | ❌ No | ✅ Yes (after approval) | ❌ No |
+| **Loan Release** | Tele | ✅ Yes | ❌ No | ✅ Yes (release_loan) | ✅ Yes (after approval) | ❌ No |
+| **Add Address** | Admin | ❌ No | ❌ No | ❌ No | N/A | ❌ No |
+| **Add Address** | Caravan/Tele | ✅ Yes | ❌ No | ❌ No | N/A | ❌ No |
+| **Add Phone** | Admin | ❌ No | ❌ No | ❌ No | N/A | ❌ No |
+| **Add Phone** | Caravan/Tele | ✅ Yes | ❌ No | ❌ No | N/A | ❌ No |
 
 ---
 
