@@ -81,7 +81,7 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
     const { startDate, endDate } = getDateRange(period);
 
     // Only admin/staff can view all, field agents can only see their own
-    let whereClause = 'WHERE t.date >= $1 AND t.date <= $2';
+    let whereClause = 'WHERE t.created_at::date >= $1 AND t.created_at::date <= $2';
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
@@ -114,10 +114,7 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
         COUNT(DISTINCT t.id) as total_touchpoints,
         COUNT(DISTINCT CASE WHEN t.type = 'Visit' THEN t.id END) as total_visits,
         COUNT(DISTINCT CASE WHEN t.type = 'Call' THEN t.id END) as total_calls,
-        COUNT(DISTINCT t.client_id) as unique_clients_touched,
-        COUNT(DISTINCT CASE WHEN t.status = 'Interested' THEN t.id END) as interested_count,
-        COUNT(DISTINCT CASE WHEN t.status = 'Not Interested' THEN t.id END) as not_interested_count,
-        COUNT(DISTINCT CASE WHEN t.status = 'Completed' THEN t.id END) as completed_count
+        COUNT(DISTINCT t.client_id) as unique_clients_touched
        FROM touchpoints t
        JOIN users u ON u.id = t.user_id
        LEFT JOIN clients c ON c.id = t.client_id
@@ -137,13 +134,7 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
         total_touchpoints: parseInt(row.total_touchpoints),
         total_visits: parseInt(row.total_visits),
         total_calls: parseInt(row.total_calls),
-        unique_clients_touched: parseInt(row.unique_clients_touched),
-        interested_count: parseInt(row.interested_count),
-        not_interested_count: parseInt(row.not_interested_count),
-        completed_count: parseInt(row.completed_count),
-        conversion_rate: row.total_touchpoints > 0
-          ? Math.round((parseInt(row.interested_count) / parseInt(row.total_touchpoints)) * 100)
-          : 0
+        unique_clients_touched: parseInt(row.unique_clients_touched)
       }))
     });
   } catch (error) {
@@ -180,7 +171,7 @@ reports.get('/client-activity', authMiddleware, requirePermission('reports', 're
     );
 
     // Get touchpoint activity
-    let tpWhereClause = 'WHERE t.date >= $1 AND t.date <= $2';
+    let tpWhereClause = 'WHERE t.created_at::date >= $1 AND t.created_at::date <= $2';
     const tpParams: any[] = [startDate, endDate];
     paramIndex = 3;
 
@@ -193,8 +184,8 @@ reports.get('/client-activity', authMiddleware, requirePermission('reports', 're
       `SELECT
         COUNT(*) as total_touchpoints,
         COUNT(DISTINCT client_id) as clients_with_activity,
-        COUNT(CASE WHEN date >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as last_7_days,
-        COUNT(CASE WHEN date >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as last_30_days
+        COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '7 days' THEN 1 END) as last_7_days,
+        COUNT(CASE WHEN created_at >= CURRENT_DATE - INTERVAL '30 days' THEN 1 END) as last_30_days
        FROM touchpoints t
        ${tpWhereClause}`,
       tpParams
@@ -231,7 +222,7 @@ reports.get('/touchpoint-summary', authMiddleware, requirePermission('reports', 
     const period = c.req.query('period') || 'month';
     const { startDate, endDate } = getDateRange(period);
 
-    let whereClause = 'WHERE date >= $1 AND date <= $2';
+    let whereClause = 'WHERE created_at::date >= $1 AND created_at::date <= $2';
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
@@ -246,15 +237,9 @@ reports.get('/touchpoint-summary', authMiddleware, requirePermission('reports', 
       params
     );
 
-    // By status
-    const byStatus = await pool.query(
-      `SELECT status, COUNT(*) as count FROM touchpoints ${whereClause} GROUP BY status`,
-      params
-    );
-
-    // By reason (top 10)
+    // By rejection reason (top 10)
     const byReason = await pool.query(
-      `SELECT reason, COUNT(*) as count FROM touchpoints ${whereClause} GROUP BY reason ORDER BY count DESC LIMIT 10`,
+      `SELECT rejection_reason, COUNT(*) as count FROM touchpoints ${whereClause} GROUP BY rejection_reason ORDER BY count DESC LIMIT 10`,
       params
     );
 
@@ -269,8 +254,7 @@ reports.get('/touchpoint-summary', authMiddleware, requirePermission('reports', 
       start_date: startDate.toISOString(),
       end_date: endDate.toISOString(),
       by_type: byType.rows.map(r => ({ type: r.type, count: parseInt(r.count) })),
-      by_status: byStatus.rows.map(r => ({ status: r.status, count: parseInt(r.count) })),
-      by_reason: byReason.rows.map(r => ({ reason: r.reason, count: parseInt(r.count) })),
+      by_rejection_reason: byReason.rows.map(r => ({ rejection_reason: r.rejection_reason, count: parseInt(r.count) })),
       by_touchpoint_number: byNumber.rows.map(r => ({
         touchpoint_number: r.touchpoint_number,
         count: parseInt(r.count)
@@ -368,9 +352,9 @@ reports.get('/target-achievement', authMiddleware, requirePermission('reports', 
         (SELECT COUNT(*) FROM clients WHERE user_id = $1 AND deleted_at IS NULL
          AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3) as actual_clients,
         (SELECT COUNT(*) FROM touchpoints WHERE user_id = $1
-         AND EXTRACT(MONTH FROM date) = $2 AND EXTRACT(YEAR FROM date) = $3) as actual_touchpoints,
+         AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3) as actual_touchpoints,
         (SELECT COUNT(*) FROM touchpoints WHERE user_id = $1 AND type = 'Visit'
-         AND EXTRACT(MONTH FROM date) = $2 AND EXTRACT(YEAR FROM date) = $3) as actual_visits`,
+         AND EXTRACT(MONTH FROM created_at) = $2 AND EXTRACT(YEAR FROM created_at) = $3) as actual_visits`,
       [userId, month, year]
     );
 
@@ -514,7 +498,7 @@ reports.get('/area-coverage', authMiddleware, requirePermission('reports', 'read
     const period = c.req.query('period') || 'month';
     const { startDate, endDate } = getDateRange(period);
 
-    let whereClause = 'WHERE t.date >= $1 AND t.date <= $2';
+    let whereClause = 'WHERE t.created_at::date >= $1 AND t.created_at::date <= $2';
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
@@ -615,19 +599,19 @@ reports.get('/export', authMiddleware, requirePermission('reports', 'export'), a
     switch (reportType) {
       case 'touchpoints':
         const tpResult = await pool.query(
-          `SELECT t.id, t.date, t.type, t.reason, t.status, t.notes,
+          `SELECT t.id, t.created_at, t.type, t.rejection_reason, t.visit_id, t.call_id,
                   c.first_name as client_first_name, c.last_name as client_last_name,
                   u.first_name as agent_first_name, u.last_name as agent_last_name
            FROM touchpoints t
            JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
            JOIN users u ON u.id = t.user_id
-           WHERE t.date >= $1 AND t.date <= $2
-           ORDER BY t.date DESC`,
+           WHERE t.created_at::date >= $1 AND t.created_at::date <= $2
+           ORDER BY t.created_at DESC`,
           [startDate, endDate]
         );
-        csvData = 'ID,Date,Type,Reason,Status,Client,Agent,Notes\n';
+        csvData = 'ID,Created At,Type,Rejection Reason,Visit ID,Call ID,Client,Agent\n';
         csvData += tpResult.rows.map(r =>
-          `"${r.id}","${r.date}","${r.type}","${r.reason}","${r.status}","${r.client_first_name} ${r.client_last_name}","${r.agent_first_name} ${r.agent_last_name}","${(r.notes || '').replace(/"/g, '""')}"`
+          `"${r.id}","${r.created_at}","${r.type}","${r.rejection_reason || ''}","${r.visit_id || ''}","${r.call_id || ''}","${r.client_first_name} ${r.client_last_name}","${r.agent_first_name} ${r.agent_last_name}"`
         ).join('\n');
         filename = `touchpoints_${period}.csv`;
         break;

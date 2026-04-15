@@ -320,13 +320,15 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       [caravanId, targetDate]
     );
 
-    // Fetch addresses for all clients in batch
+    // Fetch addresses for all clients in batch with PSGC join
     const clientIds = itinerariesResult.rows.map(row => row.client_id);
     const addressesResult = clientIds.length > 0 ? await pool.query(
-      `SELECT client_id, id, street, city, province, zip_code, is_primary
-       FROM addresses
-       WHERE client_id = ANY($1) AND deleted_at IS NULL
-       ORDER BY client_id, is_primary DESC, created_at DESC`,
+      `SELECT a.client_id, a.id, a.street_address, a.postal_code, a.is_primary,
+              p.region, p.province, p.municipality, p.barangay
+       FROM addresses a
+       LEFT JOIN psgc p ON a.psgc_id = p.id
+       WHERE a.client_id = ANY($1) AND a.deleted_at IS NULL
+       ORDER BY a.client_id, a.is_primary DESC, a.created_at DESC`,
       [clientIds]
     ) : { rows: [] };
 
@@ -338,30 +340,32 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       }
       addressesByClient.get(addr.client_id)!.push({
         id: addr.id,
-        street: addr.street,
-        city: addr.city,
+        street_address: addr.street_address,
+        postal_code: addr.postal_code,
+        region: addr.region,
         province: addr.province,
-        zip_code: addr.zip_code,
+        municipality: addr.municipality,
+        barangay: addr.barangay,
         is_primary: addr.is_primary,
       });
     }
 
     // Fetch latest touchpoint for each client
     const touchpointsResult = clientIds.length > 0 ? await pool.query(
-      `SELECT DISTINCT ON (t.client_id) t.client_id, t.touchpoint_number, t.type, t.time_arrival
+      `SELECT DISTINCT ON (t.client_id) t.client_id, t.touchpoint_number, t.type, t.visit_id, t.call_id, t.created_at
        FROM touchpoints t
        WHERE t.client_id = ANY($1)
-       ORDER BY t.client_id, t.touchpoint_number DESC`,
+       ORDER BY t.client_id, t.created_at DESC`,
       [clientIds]
     ) : { rows: [] };
 
     // Create a map of client_id -> latest touchpoint
-    const latestTouchpoints = new Map<string, { touchpoint_number: number; type: string; time_arrival: string }>();
+    const latestTouchpoints = new Map<string, { touchpoint_number: number; type: string; created_at: string }>();
     for (const tp of touchpointsResult.rows) {
       latestTouchpoints.set(tp.client_id, {
         touchpoint_number: tp.touchpoint_number,
         type: tp.type,
-        time_arrival: tp.time_arrival,
+        created_at: tp.created_at,
       });
     }
 
@@ -395,7 +399,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
         notes: row.notes,
         touchpoint_number: nextTpNumber,
         touchpoint_type: getNextTouchpointType(nextTpNumber),
-        time_in: latestTp?.time_arrival || null,
+        time_in: latestTp?.created_at || null,
         client: {
           first_name: row.first_name,
           last_name: row.last_name,
@@ -405,17 +409,17 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
           agency: row.agency_name,
           addresses: addresses,
         },
-        location: primaryAddress?.street || null,
+        location: primaryAddress?.street_address || null,
       };
     });
 
     // Get completed touchpoints for the target date
     const completedTouchpointsResult = await pool.query(
-      `SELECT t.id, t.client_id, t.touchpoint_number, t.type, t.reason, t.time_arrival, t.time_departure,
-              c.first_name, c.last_name, c.client_type
+      `SELECT t.id, t.client_id, t.touchpoint_number, t.type, t.rejection_reason, t.visit_id, t.call_id,
+              t.created_at, t.updated_at, c.first_name, c.last_name, c.client_type
        FROM touchpoints t
        JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
-       WHERE t.user_id = $1 AND t.date = $2
+       WHERE t.user_id = $1 AND t.created_at::date = $2
        ORDER BY t.created_at DESC`,
       [user.sub, targetDate]
     );
@@ -425,9 +429,11 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       client_id: row.client_id,
       touchpoint_number: row.touchpoint_number,
       type: row.type,
-      reason: row.reason,
-      time_arrival: row.time_arrival,
-      time_departure: row.time_departure,
+      rejection_reason: row.rejection_reason,
+      visit_id: row.visit_id,
+      call_id: row.call_id,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
       client: {
         first_name: row.first_name,
         last_name: row.last_name,
@@ -548,7 +554,7 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
     // Check for existing touchpoint today using CURRENT_DATE (respects database timezone Asia/Manila)
     const existing = await pool.query(
       `SELECT * FROM touchpoints
-       WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+       WHERE client_id = $1 AND user_id = $2 AND created_at::date = CURRENT_DATE`,
       [clientId, user.sub]
     );
 
@@ -556,7 +562,7 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
     if (existing.rows.length > 0) {
       // Update existing touchpoint with time-in
       result = await pool.query(
-        `UPDATE touchpoints SET time_arrival = $1, latitude = $2, longitude = $3, updated_at = NOW()
+        `UPDATE touchpoints SET updated_at = NOW()
          WHERE id = $4 RETURNING *`,
         [timeIn, validated.latitude, validated.longitude, existing.rows[0].id]
       );
@@ -569,9 +575,9 @@ myDay.post('/clients/:id/time-in', authMiddleware, requirePermission('touchpoint
       const nextNumber = Math.min(parseInt(tpResult.rows[0].next) || 1, 7);
 
       result = await pool.query(
-        `INSERT INTO touchpoints (id, client_id, user_id, touchpoint_number, type, date, time_arrival, latitude, longitude)
-         VALUES (gen_random_uuid(), $1, $2, $3, 'Visit', CURRENT_DATE, $4, $5, $6) RETURNING *`,
-        [clientId, user.sub, nextNumber, timeIn, validated.latitude, validated.longitude]
+        `INSERT INTO touchpoints (id, client_id, user_id, touchpoint_number, type, visit_id, created_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, 'Visit', gen_random_uuid(), NOW()) RETURNING *`,
+        [clientId, user.sub, nextNumber]
       );
     }
 
@@ -613,7 +619,7 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
     // Check for existing touchpoint today using CURRENT_DATE (respects database timezone Asia/Manila)
     const existing = await pool.query(
       `SELECT * FROM touchpoints
-       WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+       WHERE client_id = $1 AND user_id = $2 AND created_at::date = CURRENT_DATE`,
       [clientId, user.sub]
     );
 
@@ -624,11 +630,7 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
     // Update existing touchpoint with time-out
     const result = await pool.query(
       `UPDATE touchpoints
-       SET time_departure = $1,
-           time_out_gps_lat = $2,
-           time_out_gps_lng = $3,
-           time_out_gps_address = $4,
-           updated_at = NOW()
+       SET updated_at = NOW()
        WHERE id = $5
        RETURNING *`,
       [timeOut, validated.latitude, validated.longitude, validated.address, existing.rows[0].id]
@@ -940,7 +942,7 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
       // Check for existing touchpoint today using CURRENT_DATE (respects database timezone Asia/Manila)
       const existing = await pool.query(
         `SELECT * FROM touchpoints
-         WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+         WHERE client_id = $1 AND user_id = $2 AND created_at::date = CURRENT_DATE`,
         [clientId, user.sub]
       );
 
@@ -949,16 +951,13 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         // Update existing touchpoint
         result = await pool.query(
           `UPDATE touchpoints SET
-            touchpoint_number = $1, type = $2, reason = $3, address = $4,
-            time_arrival = $5, time_departure = $6, odometer_arrival = $7, odometer_departure = $8,
-            next_visit_date = $9, notes = $10, photo_url = $11, audio_url = $12,
-            latitude = $13, longitude = $14, status = $15, updated_at = NOW()
-          WHERE id = $16 RETURNING *`,
+            touchpoint_number = $1, type = $2, rejection_reason = $3,
+            visit_id = $4, call_id = $5, updated_at = NOW()
+          WHERE id = $6 RETURNING *`,
           [
-            touchpointNumber, type, reason, address,
-            timeArrival, timeDeparture, odometerArrival, odometerDeparture,
-            nextVisitDate, notes, uploadedPhotoUrl, uploadedAudioUrl,
-            latitude, longitude, status || 'Completed', // ✅ FIXED: Use status or default to 'Completed'
+            touchpointNumber, type, reason,
+            uploadedPhotoUrl || existing.rows[0].visit_id,
+            uploadedAudioUrl || existing.rows[0].call_id,
             existing.rows[0].id
           ]
         );
@@ -966,18 +965,13 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         // Create new touchpoint using CURRENT_DATE
         result = await pool.query(
           `INSERT INTO touchpoints (
-            id, client_id, user_id, touchpoint_number, type, date,
-            reason, address, time_arrival, time_departure,
-            odometer_arrival, odometer_departure, next_visit_date,
-            notes, photo_url, audio_url, latitude, longitude, status
+            id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id, created_at
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+            gen_random_uuid(), $1, $2, $3, $4, $5, NULL, NULL, NOW()
           ) RETURNING *`,
           [
             clientId, user.sub, touchpointNumber, type,
-            reason, address, timeArrival, timeDeparture,
-            odometerArrival, odometerDeparture, nextVisitDate,
-            notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed'
+            reason
           ]
         );
       }
@@ -1150,13 +1144,13 @@ myDay.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), asyn
       `SELECT COUNT(*) as total,
               COUNT(*) FILTER (WHERE type = 'Visit') as visits,
               COUNT(*) FILTER (WHERE type = 'Call') as calls
-       FROM touchpoints WHERE user_id = $1 AND date >= ${startDateQuery}`,
+       FROM touchpoints WHERE user_id = $1 AND created_at::date >= ${startDateQuery}`,
       [user.sub]
     );
 
     const clientsResult = await pool.query(
       `SELECT COUNT(DISTINCT client_id) as unique_clients
-       FROM touchpoints WHERE user_id = $1 AND date >= ${startDateQuery}`,
+       FROM touchpoints WHERE user_id = $1 AND created_at::date >= ${startDateQuery}`,
       [user.sub]
     );
 
@@ -1369,7 +1363,7 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
       // Step 2: Check for existing touchpoint today using CURRENT_DATE
       const existing = await pool.query(
         `SELECT * FROM touchpoints
-         WHERE client_id = $1 AND user_id = $2 AND date = CURRENT_DATE`,
+         WHERE client_id = $1 AND user_id = $2 AND created_at::date = CURRENT_DATE`,
         [clientId, user.sub]
       );
 
@@ -1378,16 +1372,13 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
         // Update existing touchpoint
         result = await pool.query(
           `UPDATE touchpoints SET
-            touchpoint_number = $1, type = $2, reason = $3, address = $4,
-            time_arrival = $5, time_departure = $6, odometer_arrival = $7, odometer_departure = $8,
-            next_visit_date = $9, notes = $10, photo_url = $11, audio_url = $12,
-            latitude = $13, longitude = $14, status = $15, updated_at = NOW()
-          WHERE id = $16 RETURNING *`,
+            touchpoint_number = $1, type = $2, rejection_reason = $3,
+            visit_id = $4, call_id = $5, updated_at = NOW()
+          WHERE id = $6 RETURNING *`,
           [
-            touchpointNumber, type, reason, address,
-            timeArrival, timeDeparture, odometerArrival, odometerDeparture,
-            nextVisitDate, notes, uploadedPhotoUrl, uploadedAudioUrl,
-            latitude, longitude, status || 'Completed',
+            touchpointNumber, type, reason,
+            uploadedPhotoUrl || existing.rows[0].visit_id,
+            uploadedAudioUrl || existing.rows[0].call_id,
             existing.rows[0].id
           ]
         );
@@ -1395,18 +1386,13 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
         // Create new touchpoint using CURRENT_DATE
         result = await pool.query(
           `INSERT INTO touchpoints (
-            id, client_id, user_id, touchpoint_number, type, date,
-            reason, address, time_arrival, time_departure,
-            odometer_arrival, odometer_departure, next_visit_date,
-            notes, photo_url, audio_url, latitude, longitude, status
+            id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id, created_at
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, CURRENT_DATE, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+            gen_random_uuid(), $1, $2, $3, $4, $5, NULL, NULL, NOW()
           ) RETURNING *`,
           [
             clientId, user.sub, touchpointNumber, type,
-            reason, address, timeArrival, timeDeparture,
-            odometerArrival, odometerDeparture, nextVisitDate,
-            notes, uploadedPhotoUrl, uploadedAudioUrl, latitude, longitude, status || 'Completed'
+            reason
           ]
         );
       }

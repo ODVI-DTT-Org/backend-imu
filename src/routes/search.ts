@@ -129,10 +129,9 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
             paramIndex++;
           }
 
-          // Full-text search on notes and reason
+          // Full-text search on rejection_reason and client names
           conditions.push(`(
-            t.notes ILIKE $${paramIndex} OR
-            t.reason ILIKE $${paramIndex} OR
+            t.rejection_reason ILIKE $${paramIndex} OR
             c.first_name ILIKE $${paramIndex} OR
             c.last_name ILIKE $${paramIndex} OR
             CONCAT(c.first_name, ' ', c.last_name) ILIKE $${paramIndex}
@@ -155,7 +154,7 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
              FROM touchpoints t
              LEFT JOIN clients c ON t.client_id = c.id
              ${whereClause}
-             ORDER BY t.date DESC
+             ORDER BY t.created_at DESC
              LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
             [...params, limit, offset]
           );

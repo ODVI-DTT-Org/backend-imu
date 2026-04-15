@@ -112,16 +112,9 @@ const createTouchpointSchema = z.object({
   user_id: z.string().uuid().optional(), // Optional - will be set to current user if not provided
   touchpoint_number: z.number().int().min(1).max(7),
   type: z.enum(['Visit', 'Call']),
-  date: z.string().optional(),
-  reason: z.string().optional(),
-  status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed']).optional().default('Interested'),
-  next_visit_date: z.string().optional(),
-  notes: z.string().optional(),
   rejection_reason: z.string().optional(),
   visit_id: z.string().uuid().optional(),
   call_id: z.string().uuid().optional(),
-  time_arrival: z.string().optional(),
-  time_departure: z.string().optional(),
 });
 
 const updateTouchpointSchema = createTouchpointSchema.partial();
@@ -134,16 +127,11 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     user_id: row.user_id,
     touchpoint_number: row.touchpoint_number,
     type: row.type,
-    date: row.date,
-    reason: row.reason,
-    status: row.status,
-    next_visit_date: row.next_visit_date,
-    notes: row.notes,
     rejection_reason: row.rejection_reason,
     visit_id: row.visit_id,
     call_id: row.call_id,
-    created: row.created_at,
-    updated: row.updated_at,
+    created_at: row.created_at,
+    updated_at: row.updated_at,
     expand: row.expand,
   };
 }
@@ -160,8 +148,6 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     const scope = c.req.query('scope'); // 'all' or 'own'
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
-    const status = c.req.query('status');
-    const reason = c.req.query('reason');
     const municipality = c.req.query('municipality');
     const province = c.req.query('province');
 
@@ -193,12 +179,6 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       paramIndex++;
     }
 
-    if (status && status !== 'all') {
-      conditions.push(`t.status = $${paramIndex}`);
-      params.push(status);
-      paramIndex++;
-    }
-
     if (clientId) {
       conditions.push(`t.client_id = $${paramIndex}`);
       params.push(clientId);
@@ -217,12 +197,6 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       paramIndex++;
     }
 
-    if (reason) {
-      conditions.push(`t.reason = $${paramIndex}`);
-      params.push(reason);
-      paramIndex++;
-    }
-
     if (municipality) {
       conditions.push(`c.municipality_id = $${paramIndex}`);
       params.push(municipality);
@@ -236,13 +210,13 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     }
 
     if (startDate) {
-      conditions.push(`t.date >= $${paramIndex}`);
+      conditions.push(`t.created_at::date >= $${paramIndex}`);
       params.push(startDate);
       paramIndex++;
     }
 
     if (endDate) {
-      conditions.push(`t.date <= $${paramIndex}`);
+      conditions.push(`t.created_at::date <= $${paramIndex}`);
       params.push(endDate);
       paramIndex++;
     }
@@ -266,7 +240,7 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
        ${whereClause}
-       ORDER BY t.date DESC, t.created_at DESC
+       ORDER BY t.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
     );
@@ -361,7 +335,7 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
 
     // Get existing touchpoints for this client
     const existingResult = await pool.query(
-      `SELECT touchpoint_number, type, date
+      `SELECT touchpoint_number, type, created_at
        FROM touchpoints
        WHERE client_id = $1
        ORDER BY touchpoint_number ASC`,
@@ -371,7 +345,7 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
     const existingTouchpoints = existingResult.rows.map(row => ({
       touchpointNumber: row.touchpoint_number,
       type: row.type,
-      date: row.date,
+      created_at: row.created_at,
     }));
 
     return c.json({
@@ -397,9 +371,8 @@ touchpoints.get('/:id/gps-validate', authMiddleware, requirePermission('touchpoi
     const result = await pool.query(`
       SELECT
         t.id,
-        t.time_in_gps_lat,
-        t.time_in_gps_lng,
-        t.time_in_gps_address,
+        t.visit_id,
+        t.call_id,
         a.latitude as client_latitude,
         a.longitude as client_longitude
       FROM touchpoints t
@@ -414,20 +387,16 @@ touchpoints.get('/:id/gps-validate', authMiddleware, requirePermission('touchpoi
 
     const row = result.rows[0];
 
-    const validation = await validateTouchpointLocation(
-      {
-        time_in_gps_lat: row.time_in_gps_lat,
-        time_in_gps_lng: row.time_in_gps_lng,
-        time_in_gps_address: row.time_in_gps_address
-      },
-      {
-        latitude: row.client_latitude,
-        longitude: row.client_longitude
-      },
-      touchpointId
-    );
-
-    return c.json(validation);
+    // GPS data is now in visits/calls tables, not touchpoints
+    // Return a message indicating GPS validation requires visit/call data
+    return c.json({
+      touchpoint_id: touchpointId,
+      visit_id: row.visit_id,
+      call_id: row.call_id,
+      message: 'GPS data is now stored in visits/calls tables. Please validate using the appropriate endpoint.',
+      client_latitude: row.client_latitude,
+      client_longitude: row.client_longitude
+    });
   } catch (error) {
     console.error('GPS validation error:', error);
     return c.json({ error: 'Failed to validate GPS location' }, 500);
@@ -529,10 +498,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     const client = clientCheck.rows[0];
     if (client.loan_released || client.loan_released_bool) {
       // EXCEPTION: Allow preterm touchpoints even when loan is released
-      // Preterm reasons include: "preterm", "Preterm", "PRETERM", or reason_code starting with "PRETERM"
-      const isPretermTouchpoint = validated.reason && (
-        validated.reason.toLowerCase().includes('preterm') ||
-        validated.reason.toUpperCase().startsWith('PRETERM')
+      // Preterm reasons include: "preterm", "Preterm", "PRETERM", or rejection_reason starting with "PRETERM"
+      const isPretermTouchpoint = validated.rejection_reason && (
+        validated.rejection_reason.toLowerCase().includes('preterm') ||
+        validated.rejection_reason.toUpperCase().startsWith('PRETERM')
       );
 
       if (!isPretermTouchpoint) {
@@ -635,34 +604,6 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     // === End Touchpoint Sequence Validation ===
 
-    // Helper function to convert time string (HH:MM) to timestamp by combining with date
-    const timeToTimestamp = (timeStr: string | null | undefined, dateStr: string): string | null => {
-      if (!timeStr) return null;
-
-      // If timeStr already looks like a full timestamp (ISO format), return as-is
-      if (timeStr.includes('T') || timeStr.includes('-')) {
-        return timeStr;
-      }
-
-      // Otherwise, combine date (YYYY-MM-DD) with time (HH:MM) to create timestamp
-      // Format: YYYY-MM-DDTHH:MM:SS
-      return `${dateStr}T${timeStr}:00`;
-    };
-
-    // Convert time_arrival and time_departure to proper timestamps
-    const dateForTime = validated.date || new Date().toISOString().split('T')[0];
-    const time_in = timeToTimestamp(validated.time_arrival, dateForTime);
-    const time_out = timeToTimestamp(validated.time_departure, dateForTime);
-
-    // Validate Time Out is after Time In (if both provided)
-    if (time_in && time_out) {
-      const timeInDate = new Date(time_in);
-      const timeOutDate = new Date(time_out);
-      if (timeOutDate <= timeInDate) {
-        throw new ValidationError('Time Out must be after Time In');
-      }
-    }
-
     // Set user_id to current user if not provided
     if (!validated.user_id) {
       validated.user_id = user.sub as string;
@@ -670,16 +611,13 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     const result = await pool.query(
       `INSERT INTO touchpoints (
-        client_id, user_id, touchpoint_number, type, date,
-        reason, status, next_visit_date, notes, rejection_reason,
-        visit_id, call_id
+        client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+        $1, $2, $3, $4, $5, $6, $7
       ) RETURNING *`,
       [
         validated.client_id, validated.user_id, validated.touchpoint_number, validated.type,
-        validated.date, validated.reason, validated.status, validated.next_visit_date,
-        validated.notes, validated.rejection_reason, validated.visit_id, validated.call_id
+        validated.rejection_reason, validated.visit_id, validated.call_id
       ]
     );
 
@@ -733,31 +671,13 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
         client_id: z.string().uuid(),
         touchpoint_number: z.number().int().min(1).max(7),
         type: z.enum(['Visit', 'Call']),
-        reason: z.string().min(1).max(100),
-        status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed']).default('Interested'),
-        remarks: z.string().max(1000).optional(),
-        date: z.string().optional(), // Will default to CURRENT_DATE
-        time_arrival: z.string().optional(),
-        time_departure: z.string().optional(),
-        gps_lat: z.number().optional(),
-        gps_lng: z.number().optional(),
-        gps_address: z.string().optional(),
+        rejection_reason: z.string().max(1000).optional(),
+        visit_id: z.string().uuid().optional(),
+        call_id: z.string().uuid().optional(),
       })).min(1).max(50), // Max 50 touchpoints at once
-      gps_lat: z.number().optional(), // Shared GPS for all touchpoints
-      gps_lng: z.number().optional(),
-      gps_address: z.string().optional(),
     });
 
     const validated = bulkTouchpointSchema.parse(body);
-
-    // Helper function to convert time string (HH:MM) to timestamp
-    const timeToTimestamp = (timeStr: string | null | undefined, dateStr: string): string | null => {
-      if (!timeStr) return null;
-      if (timeStr.includes('T') || timeStr.includes('-')) {
-        return timeStr;
-      }
-      return `${dateStr}T${timeStr}:00`;
-    };
 
     const createdTouchpoints = [];
     const errors = [];
@@ -765,11 +685,6 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
     // Process each touchpoint
     for (const touchpointData of validated.touchpoints) {
       try {
-        // Apply shared GPS if individual touchpoint doesn't have it
-        const finalGpsLat = touchpointData.gps_lat ?? validated.gps_lat;
-        const finalGpsLng = touchpointData.gps_lng ?? validated.gps_lng;
-        const finalGpsAddress = touchpointData.gps_address ?? validated.gps_address;
-
         // === Role-based Validation ===
         if (!canCreateTouchpoint(user.role, touchpointData.touchpoint_number, touchpointData.type)) {
           errors.push({
@@ -797,20 +712,10 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
 
         const clientData = clientCheck.rows[0];
         if (clientData.loan_released || clientData.loan_released_bool) {
-          // EXCEPTION: Allow preterm touchpoints even when loan is released
-          // Preterm reasons include: "preterm", "Preterm", "PRETERM", or reason_code starting with "PRETERM"
-          const isPretermTouchpoint = touchpointData.reason && (
-            touchpointData.reason.toLowerCase().includes('preterm') ||
-            touchpointData.reason.toUpperCase().startsWith('PRETERM')
-          );
-
-          if (!isPretermTouchpoint) {
-            errors.push({
-              clientId: touchpointData.client_id,
-              error: 'Loan already released',
-            });
-          }
-          // If it's a preterm touchpoint, skip this validation and continue
+          errors.push({
+            clientId: touchpointData.client_id,
+            error: 'Loan already released',
+          });
           continue;
         }
 
@@ -828,39 +733,21 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
           continue;
         }
 
-        // Use provided date or default to CURRENT_DATE
-        const date = touchpointData.date || new Date().toISOString().split('T')[0];
-
-        // Convert time_arrival and time_departure to timestamps
-        const time_in = timeToTimestamp(touchpointData.time_arrival, date);
-        const time_out = timeToTimestamp(touchpointData.time_departure, date);
-
-        // Insert touchpoint - match exact database schema order
-        // Columns: client_id, user_id, touchpoint_number, type, date, address, time_arrival, time_departure,
-        //          odometer_arrival, odometer_departure, reason, status, next_visit_date, notes,
-        //          photo_url, audio_url, latitude, longitude, time_in, time_in_gps_lat, time_in_gps_lng,
         // Insert touchpoint - normalized schema (visit/call data in separate tables)
         const result = await client.query(
           `INSERT INTO touchpoints (
-            client_id, user_id, touchpoint_number, type, date,
-            reason, status, next_visit_date, notes, rejection_reason,
-            visit_id, call_id
+            client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+            $1, $2, $3, $4, $5, $6, $7
           ) RETURNING *`,
           [
             touchpointData.client_id,
             user.sub,
             touchpointData.touchpoint_number,
             touchpointData.type,
-            date,
-            touchpointData.reason,
-            touchpointData.status,
-            null,  // next_visit_date
-            touchpointData.remarks || null,  // notes (remarks from mobile maps to notes in DB)
-            null,  // rejection_reason
-            null,  // visit_id (will be set when visit is created)
-            null,  // call_id (will be set when call is created)
+            touchpointData.rejection_reason || null,
+            touchpointData.visit_id || null,
+            touchpointData.call_id || null,
           ]
         );
 
@@ -936,40 +823,6 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       }
     }
 
-    // Helper function to convert time string (HH:MM) to timestamp by combining with date
-    const timeToTimestamp = (timeStr: string | null | undefined, dateStr: string): string | null => {
-      if (!timeStr) return null;
-
-      // If timeStr already looks like a full timestamp (ISO format), return as-is
-      if (timeStr.includes('T') || timeStr.includes('-')) {
-        return timeStr;
-      }
-
-      // Otherwise, combine date (YYYY-MM-DD) with time (HH:MM) to create timestamp
-      // Format: YYYY-MM-DDTHH:MM:SS
-      return `${dateStr}T${timeStr}:00`;
-    };
-
-    // Get the date to use for time conversion (either from update or existing)
-    const dateForTime = validated.date || existingTouchpoint.date;
-
-    // Convert time_arrival and time_departure to proper timestamps if provided
-    const time_in = validated.time_arrival !== undefined
-      ? timeToTimestamp(validated.time_arrival, dateForTime)
-      : existingTouchpoint.time_arrival;
-    const time_out = validated.time_departure !== undefined
-      ? timeToTimestamp(validated.time_departure, dateForTime)
-      : existingTouchpoint.time_departure;
-
-    // Validate Time Out is after Time In (if both provided)
-    if (time_in && time_out) {
-      const timeInDate = new Date(time_in);
-      const timeOutDate = new Date(time_out);
-      if (timeOutDate <= timeInDate) {
-        return c.json({ message: 'Time Out must be after Time In' }, 400);
-      }
-    }
-
     // Build the updates object
     const updates: string[] = [];
     const values: any[] = [];
@@ -980,35 +833,15 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
       user_id: 'user_id',
       touchpoint_number: 'touchpoint_number',
       type: 'type',
-      date: 'date',
-      address: 'address',
-      time_arrival: 'time_arrival',
-      time_departure: 'time_departure',
-      odometer_arrival: 'odometer_arrival',
-      odometer_departure: 'odometer_departure',
-      reason: 'reason',
-      status: 'status',
-      next_visit_date: 'next_visit_date',
-      notes: 'notes',
-      photo_url: 'photo_url',
-      audio_url: 'audio_url',
-      latitude: 'latitude',
-      longitude: 'longitude',
+      rejection_reason: 'rejection_reason',
+      visit_id: 'visit_id',
+      call_id: 'call_id',
     };
 
-    // Override time_arrival and time_departure values with converted timestamps
-    const updateData: any = { ...validated };
-    if (validated.time_arrival !== undefined) {
-      updateData.time_arrival = time_in;
-    }
-    if (validated.time_departure !== undefined) {
-      updateData.time_departure = time_out;
-    }
-
     for (const [key, dbField] of Object.entries(fieldMappings)) {
-      if (key in updateData) {
+      if (key in validated) {
         updates.push(`${dbField} = $${valueIndex}`);
-        values.push(updateData[key]);
+        values.push(validated[key as keyof typeof validated]);
         valueIndex++;
       }
     }
@@ -1018,7 +851,7 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
     }
 
     // Add updated_at
-    updates.push('updated = NOW()');
+    updates.push('updated_at = NOW()');
     values.push(id);
 
     // Direct update without approval
