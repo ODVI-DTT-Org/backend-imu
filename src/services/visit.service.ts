@@ -97,7 +97,7 @@ export const visitService = {
        RETURNING *`,
       [
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
-        validated.odometer_arrival, validated.odometer_departure, validated.photo_url || null,
+        validated.odometer_arrival, validated.odometer_departure, validated.photo_url ?? null,
         validated.notes, validated.reason, validated.status, validated.address,
         validated.latitude, validated.longitude
       ]
