@@ -1180,29 +1180,13 @@ clients.get('/:id', authMiddleware, async (c) => {
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        COALESCE(
-          (SELECT json_agg(json_build_object(
-             'id', t.id,
-             'client_id', t.client_id,
-             'user_id', t.user_id,
-             'touchpoint_number', t.touchpoint_number,
-             'touchpoint_type', t.type,
-             'rejection_reason', t.rejection_reason,
-             'visit_id', t.visit_id,
-             'call_id', t.call_id,
-             'created_at', to_char(t.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z'),
-             'updated_at', to_char(t.updated_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z')
-           ) ORDER BY t.touchpoint_number)
-           FROM touchpoints t
-           WHERE t.client_id = c.id
-          ), '[]'
-        ) as touchpoints
+        c.touchpoint_summary as touchpoints
        FROM clients c
        LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id
        LEFT JOIN phone_numbers p ON p.client_id = c.id
        WHERE c.id = $1 AND c.deleted_at IS NULL
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay
+       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, c.touchpoint_summary
       `,
       [id]
     );
