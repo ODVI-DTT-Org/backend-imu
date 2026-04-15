@@ -190,7 +190,6 @@ clients.get('/', authMiddleware, async (c) => {
     const clientType = c.req.query('client_type');
     const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
-    const municipalityIds = c.req.query('municipality_ids'); // Comma-separated list
     const municipality = c.req.query('municipality');
     const province = c.req.query('province');
     const productType = c.req.query('product_type');
@@ -205,21 +204,8 @@ clients.get('/', authMiddleware, async (c) => {
     // Declared once at the top level to avoid duplicate declarations
     const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
-    // Role level mapping for area-based filtering
-    const ROLE_LEVELS: Record<string, number> = {
-      'admin': 100,
-      'area_manager': 50,
-      'assistant_area_manager': 40,
-      'caravan': 20,
-      'tele': 15,
-    };
-
-    // Get user level from role (default to 0 if role not found)
-    const userLevel = ROLE_LEVELS[user.role] || 0;
-
     // IMPORTANT: This endpoint returns ALL clients (no area filter)
-    // Area filtering is only applied when municipality_ids is explicitly provided
-    const shouldFilterByArea = municipalityIds && municipalityIds.length > 0;
+    // Use /api/clients/assigned for area-filtered clients
 
     // Determine sort order BEFORE building CTE (needed in both CTE and final query)
     // DEFAULT: Use group scoring ordering (same as /clients/assigned)
@@ -349,171 +335,12 @@ clients.get('/', authMiddleware, async (c) => {
     const baseWhereConditionsJoined = baseWhereConditions.length > 0 ? baseWhereConditions.join(' AND ') : '';
 
     // ============================================
-    // HYBRID QUERY OPTIMIZATION
-    // ============================================
-    // Determine if we can use the optimized callable_clients_mv path
-    // Conditions for optimized path:
-    // 1. User is Tele or Caravan (not Admin/Manager)
-    // 2. No search query (search requires full table scan)
-    // 3. No specific touchpointStatus filter (requires all groups)
-    // 4. No specific filters that would exclude callable clients (specific types)
-    const canUseOptimizedMV =
-      (user.role === 'tele' || user.role === 'caravan') &&
-      !parsedSearch &&
-      !touchpointStatus &&
-      clientType === 'all' &&
-      productType === 'all' &&
-      marketType === 'all' &&
-      pensionType === 'all' &&
-      !agencyId &&
-      !municipality &&
-      !province;
-
-    console.debug(`[ClientsAPI] Using optimized MV path: ${canUseOptimizedMV} (role=${user.role}, search=${!!parsedSearch}, filters=${baseWhereConditions.length > 0})`);
-
-    // ============================================
-    // OPTIMIZED QUERY PATH: callable_clients_mv
-    // ============================================
-    // Used for 90% of requests (Tele/Caravan without filters)
-    // Performance: 10-30ms vs 200-500ms for standard query
-    if (canUseOptimizedMV) {
-      // Build user_areas CTE for area filtering
-      const userAreasCTE = shouldFilterByArea ? `WITH user_areas AS (
-        SELECT province, municipality
-        FROM user_locations
-        WHERE user_id = '${user.sub}' AND deleted_at IS NULL
-      )` : '';
-
-      // Build WHERE clause for area filtering
-      const areaFilterWhere = shouldFilterByArea ? `WHERE mv.province IN (SELECT province FROM user_areas)
-        AND mv.municipality IN (SELECT municipality FROM user_areas)
-        AND mv.next_touchpoint_type = '${user.role === 'tele' ? 'Call' : 'Visit'}'` : `WHERE mv.next_touchpoint_type = '${user.role === 'tele' ? 'Call' : 'Visit'}'`;
-
-      // Count query using optimized MV
-      const countQuery = `
-        ${userAreasCTE}
-        SELECT COUNT(*) as count
-        FROM callable_clients_mv mv
-        ${areaFilterWhere}
-      `;
-
-      const countResult = await pool.query(countQuery);
-      const totalItems = parseInt(countResult.rows[0].count);
-
-      // Main query using optimized MV (no CTEs needed, no LATERAL JOINs)
-      const mainQuery = `
-        ${userAreasCTE}
-        SELECT c.*,
-          psg.region as psgc_region,
-          psg.province as psgc_province,
-          psg.mun_city as psgc_municipality,
-          psg.barangay as psgc_barangay,
-          COALESCE(
-            json_agg(DISTINCT a) FILTER (WHERE a.id IS NOT NULL), '[]'
-          ) as addresses,
-          COALESCE(
-            json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
-          ) as phone_numbers,
-          mv.completed_count as completed_touchpoints,
-          mv.next_touchpoint_type,
-          mv.last_touchpoint_type,
-          mv.last_touchpoint_user_id,
-          lt.first_name as last_touchpoint_first_name,
-          lt.last_name as last_touchpoint_last_name
-        FROM callable_clients_mv mv
-        INNER JOIN clients c ON c.id = mv.id
-        LEFT JOIN psgc psg ON psg.id = c.psgc_id
-        LEFT JOIN addresses a ON a.client_id = c.id
-        LEFT JOIN phone_numbers p ON p.client_id = c.id
-        LEFT JOIN users lt ON lt.id = mv.last_touchpoint_user_id
-        ${areaFilterWhere}
-        GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay,
-                 mv.completed_count, mv.next_touchpoint_type, mv.last_touchpoint_type,
-                 mv.last_touchpoint_user_id, lt.first_name, lt.last_name
-        ORDER BY c.created_at DESC
-        LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
-      `;
-
-      const result = await pool.query(mainQuery, [perPage, offset]);
-
-      // Map results (same logic as standard path)
-      const clientsList = result.rows.map(row => {
-        const completedCount = parseInt(row.completed_touchpoints) || 0;
-        const nextTouchpointNumber = completedCount >= 7 ? null : completedCount + 1;
-        const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
-        const loanReleased = row.loan_released || false;
-
-        // Determine if current user can create the next touchpoint
-        let canCreateTouchpoint = false;
-        let expectedRole = null;
-
-        if (loanReleased) {
-          canCreateTouchpoint = false;
-          expectedRole = null;
-        } else if (nextTouchpointNumber) {
-          if (user.role === 'caravan') {
-            canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
-            expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
-          } else if (user.role === 'tele') {
-            canCreateTouchpoint = nextTouchpointType === 'Call';
-            expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
-          } else {
-            canCreateTouchpoint = true;
-            expectedRole = nextTouchpointType === 'Visit' ? 'caravan' : 'tele';
-          }
-        }
-
-        return {
-          ...mapRowToClient(row),
-          expand: {
-            addresses: row.addresses,
-            phone_numbers: row.phone_numbers,
-          },
-          touchpoint_status: {
-            completed_touchpoints: completedCount,
-            next_touchpoint_number: nextTouchpointNumber,
-            next_touchpoint_type: nextTouchpointType,
-            can_create_touchpoint: canCreateTouchpoint,
-            expected_role: expectedRole,
-            is_complete: completedCount >= 7 || loanReleased,
-          },
-        };
-      });
-
-      return c.json({
-        success: true,
-        data: clientsList,
-        meta: {
-          total_items: totalItems,
-          items_per_page: perPage,
-          current_page: page,
-          total_pages: Math.ceil(totalItems / perPage),
-          has_next_page: page < Math.ceil(totalItems / perPage),
-          has_previous_page: page > 1,
-        },
-      });
-    }
-
-    // ============================================
     // STANDARD QUERY PATH: CTEs with LATERAL JOINs
     // ============================================
     // Used for edge cases (Admin, search, filters, status filters)
     // Falls back to existing query logic
     // Build CTE-based query for proper filter-then-paginate behavior
-    // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
-    // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
-
-    // Add area filter conditions for Caravan/Tele roles
-    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
-    let areaFilterWhereClause = '';
-    if (shouldFilterByArea) {
-      // For Caravan/Tele: Filter by assigned provinces/municipalities
-      // Using the new province and municipality columns directly
-      areaFilterWhereClause = `AND (
-        c.province IN (SELECT province FROM user_areas)
-        AND c.municipality IN (SELECT municipality FROM user_areas)
-      )`;
-    }
+    // CTE: Calculate touchpoint info for ALL clients (without area filters)
 
     // OPTIMIZED: Use materialized view instead of expensive CTE
     // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
@@ -537,23 +364,10 @@ clients.get('/', authMiddleware, async (c) => {
         LIMIT 1
       ) t ON true
       WHERE c.deleted_at IS NULL
-      ${shouldFilterByArea ? `AND EXISTS (
-        SELECT 1 FROM user_areas ua
-        WHERE c.province = ua.province AND c.municipality = ua.municipality
-      )` : ''}
     )`;
 
-    // Build WITH clause with user_areas CTE if needed
-    let withGroupScoreCTE: string;
-    if (shouldFilterByArea) {
-      withGroupScoreCTE = `WITH user_areas AS (
-        SELECT province, municipality
-        FROM user_locations
-        WHERE user_id = '${user.sub}' AND deleted_at IS NULL
-      ), ${touchpointInfoCTE}`;
-    } else {
-      withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
-    }
+    // Build WITH clause
+    let withGroupScoreCTE = `WITH ${touchpointInfoCTE}`;
     let groupScoreFilter = '';
     let useGroupedCTEs = false;
 
@@ -616,7 +430,7 @@ clients.get('/', authMiddleware, async (c) => {
 
         const targetScore = statusToScoreMap[touchpointStatus as string];
         if (targetScore !== undefined) {
-          const hasExistingWhere = baseWhereConditionsJoined || areaFilterWhereClause;
+          const hasExistingWhere = baseWhereConditionsJoined;
           const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
           groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
           baseParams.push(targetScore);
@@ -656,7 +470,7 @@ clients.get('/', authMiddleware, async (c) => {
 
         const targetScore = statusToScoreMap[touchpointStatus as string];
         if (targetScore !== undefined) {
-          const hasExistingWhere = baseWhereConditionsJoined || areaFilterWhereClause;
+          const hasExistingWhere = baseWhereConditionsJoined;
           const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
           groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
           baseParams.push(targetScore);
@@ -678,11 +492,6 @@ clients.get('/', authMiddleware, async (c) => {
 
     if (baseWhereConditionsJoined) {
       allConditions.push(baseWhereConditionsJoined);
-    }
-
-    if (areaFilterWhereClause) {
-      // Remove "AND " or "WHERE " prefix from area filter
-      allConditions.push(areaFilterWhereClause.replace(/^(AND |WHERE )/, ''));
     }
 
     if (groupScoreFilter) {
@@ -1676,12 +1485,39 @@ clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), a
 
 // POST /api/clients/:id/addresses - Add address to client
 clients.post('/:id/addresses', authMiddleware, async (c) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+
+    const user = c.get('user');
     const clientId = c.req.param('id');
     const body = await c.req.json();
     const validated = addressSchema.parse(body);
 
-    const result = await pool.query(
+    // For Tele and Caravan users, create approval request instead of inserting directly
+    if (user.role === 'tele' || user.role === 'caravan') {
+      // Store address data as JSON in notes field
+      const addressData = JSON.stringify(validated);
+
+      // Create approval request for address addition
+      const approvalResult = await client.query(
+        `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending')
+         RETURNING *`,
+        ['address_add', clientId, user.sub, user.role, 'Add Address Request', addressData]
+      );
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Address addition submitted for approval',
+        approval: mapRowToApproval(approvalResult.rows[0]),
+        requires_approval: true
+      });
+    }
+
+    // For Admin users, create directly
+    const result = await client.query(
       `INSERT INTO addresses (id, client_id, type, street, barangay, city, province, postal_code, latitude, longitude, is_primary)
        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING *`,
@@ -1689,8 +1525,10 @@ clients.post('/:id/addresses', authMiddleware, async (c) => {
        validated.province, validated.postal_code, validated.latitude, validated.longitude, validated.is_primary]
     );
 
+    await client.query('COMMIT');
     return c.json(result.rows[0], 201);
   } catch (error) {
+    await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Validation failed');
       error.errors.forEach((err: any) => {
@@ -1700,25 +1538,56 @@ clients.post('/:id/addresses', authMiddleware, async (c) => {
     }
     console.error('Add address error:', error);
     throw new Error();
+  } finally {
+    client.release();
   }
 });
 
 // POST /api/clients/:id/phones - Add phone number to client
 clients.post('/:id/phones', authMiddleware, async (c) => {
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+
+    const user = c.get('user');
     const clientId = c.req.param('id');
     const body = await c.req.json();
     const validated = phoneSchema.parse(body);
 
-    const result = await pool.query(
+    // For Tele and Caravan users, create approval request instead of inserting directly
+    if (user.role === 'tele' || user.role === 'caravan') {
+      // Store phone data as JSON in notes field
+      const phoneData = JSON.stringify(validated);
+
+      // Create approval request for phone addition
+      const approvalResult = await client.query(
+        `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending')
+         RETURNING *`,
+        ['phone_add', clientId, user.sub, user.role, 'Add Phone Number Request', phoneData]
+      );
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Phone number addition submitted for approval',
+        approval: mapRowToApproval(approvalResult.rows[0]),
+        requires_approval: true
+      });
+    }
+
+    // For Admin users, create directly
+    const result = await client.query(
       `INSERT INTO phone_numbers (id, client_id, type, number, label, is_primary)
        VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
        RETURNING *`,
       [clientId, validated.type, validated.number, validated.label, validated.is_primary]
     );
 
+    await client.query('COMMIT');
     return c.json(result.rows[0], 201);
   } catch (error) {
+    await client.query('ROLLBACK');
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Validation failed');
       error.errors.forEach((err: any) => {
@@ -1728,6 +1597,8 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
     }
     console.error('Add phone error:', error);
     throw new Error();
+  } finally {
+    client.release();
   }
 });
 
