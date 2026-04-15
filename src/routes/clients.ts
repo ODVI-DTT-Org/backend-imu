@@ -241,7 +241,8 @@ clients.get('/', authMiddleware, async (c) => {
         WHEN {touchpoint_alias}.next_touchpoint_type = 'Visit' AND COALESCE({touchpoint_alias}.completed_count, 0) < 7 THEN 2
         ELSE 5
       END ASC,
-      (SELECT MAX(t.date) FROM touchpoints t WHERE t.client_id = c.id) DESC NULLS LAST,
+      -- OPTIMIZED: Get last touchpoint date from denormalized touchpoint_summary JSON array
+      (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
       COALESCE({touchpoint_alias}.completed_count, 0) DESC,
       c.created_at DESC`;
     let groupScoreCase = '';
@@ -385,27 +386,28 @@ clients.get('/', authMiddleware, async (c) => {
     // Build CTE-based query for proper filter-then-paginate behavior
     // CTE: Calculate touchpoint info for ALL clients (without area filters)
 
-    // OPTIMIZED: Use materialized view instead of expensive CTE
-    // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
-    // and pre-computes all touchpoint aggregations, eliminating expensive COUNT/GROUP_BY queries
+    // OPTIMIZED: Use denormalized touchpoint columns on clients table
+    // The columns touchpoint_summary, touchpoint_number, next_touchpoint are maintained
+    // by the application and updated whenever touchpoints are created/modified
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        mv.client_id,
-        mv.completed_count,
-        mv.total_count,
-        mv.next_touchpoint_type,
-        t.type as last_touchpoint_type,
-        t.user_id as last_touchpoint_user_id,
+        c.id as client_id,
+        -- Calculate completed_count from touchpoint_number (1-7)
+        -- touchpoint_number represents the NEXT touchpoint, so completed = touchpoint_number - 1
+        CASE
+          WHEN c.touchpoint_number IS NULL THEN 0
+          WHEN c.touchpoint_number > 1 THEN c.touchpoint_number - 1
+          ELSE 0
+        END as completed_count,
+        -- total_count is the same as touchpoint_number
+        COALESCE(c.touchpoint_number, 1) as total_count,
+        -- next_touchpoint_type is stored directly in next_touchpoint column
+        c.next_touchpoint as next_touchpoint_type,
+        -- Get last touchpoint info from touchpoint_summary JSON array
+        (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
+        (c.touchpoint_summary->-1->>'user_id') as last_touchpoint_user_id,
         c.loan_released
-      FROM client_touchpoint_summary_mv mv
-      INNER JOIN clients c ON c.id = mv.client_id
-      LEFT JOIN LATERAL (
-        SELECT t.type, t.user_id
-        FROM touchpoints t
-        WHERE t.client_id = mv.client_id
-        ORDER BY t.date DESC
-        LIMIT 1
-      ) t ON true
+      FROM clients c
       WHERE c.deleted_at IS NULL
     )`;
 
@@ -884,27 +886,28 @@ clients.get('/assigned', authMiddleware, async (c) => {
       )`;
     }
 
-    // OPTIMIZED: Use materialized view instead of expensive CTE
-    // The materialized view client_touchpoint_summary_mv is refreshed every 5 minutes
-    // and pre-computes all touchpoint aggregations, eliminating expensive COUNT/GROUP_BY queries
+    // OPTIMIZED: Use denormalized touchpoint columns on clients table
+    // The columns touchpoint_summary, touchpoint_number, next_touchpoint are maintained
+    // by the application and updated whenever touchpoints are created/modified
     const touchpointInfoCTE = `touchpoint_info AS (
       SELECT
-        mv.client_id,
-        mv.completed_count,
-        mv.total_count,
-        mv.next_touchpoint_type,
-        t.type as last_touchpoint_type,
-        t.user_id as last_touchpoint_user_id,
+        c.id as client_id,
+        -- Calculate completed_count from touchpoint_number (1-7)
+        -- touchpoint_number represents the NEXT touchpoint, so completed = touchpoint_number - 1
+        CASE
+          WHEN c.touchpoint_number IS NULL THEN 0
+          WHEN c.touchpoint_number > 1 THEN c.touchpoint_number - 1
+          ELSE 0
+        END as completed_count,
+        -- total_count is the same as touchpoint_number
+        COALESCE(c.touchpoint_number, 1) as total_count,
+        -- next_touchpoint_type is stored directly in next_touchpoint column
+        c.next_touchpoint as next_touchpoint_type,
+        -- Get last touchpoint info from touchpoint_summary JSON array
+        (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
+        (c.touchpoint_summary->-1->>'user_id') as last_touchpoint_user_id,
         c.loan_released
-      FROM client_touchpoint_summary_mv mv
-      INNER JOIN clients c ON c.id = mv.client_id
-      LEFT JOIN LATERAL (
-        SELECT t.type, t.user_id
-        FROM touchpoints t
-        WHERE t.client_id = mv.client_id
-        ORDER BY t.date DESC
-        LIMIT 1
-      ) t ON true
+      FROM clients c
       WHERE c.deleted_at IS NULL
       ${shouldFilterByArea ? `AND EXISTS (
         SELECT 1 FROM user_areas ua
