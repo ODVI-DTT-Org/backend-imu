@@ -200,7 +200,7 @@ CREATE TABLE IF NOT EXISTS releases (
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
     visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
-    product_type TEXT NOT NULL CHECK (product_type IN ('PUSU', 'LIKA', 'SUB2K')),
+    product_type TEXT NOT NULL CHECK (product_type IN ('BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP')),
     loan_type TEXT NOT NULL CHECK (loan_type IN ('NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM')),
     amount NUMERIC NOT NULL,
     approval_notes TEXT,
