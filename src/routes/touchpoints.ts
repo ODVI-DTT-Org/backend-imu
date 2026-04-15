@@ -12,6 +12,12 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
+import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
+import {
+  validateTouchpointSequence,
+  validateRoleBasedTouchpoint,
+  getNextTouchpointType,
+} from '../services/touchpoint-validation.js';
 
 const touchpoints = new Hono();
 
@@ -47,63 +53,6 @@ async function getNextTouchpointNumber(clientId: string): Promise<number | null>
   );
   const count = parseInt(result.rows[0].count);
   return count >= 7 ? null : count + 1;
-}
-
-/**
- * Validate touchpoint sequence
- * @param touchpointNumber - The touchpoint number (1-7)
- * @param touchpointType - The touchpoint type ('Visit' or 'Call')
- * @returns Object with isValid flag and optional error message
- */
-function validateTouchpointSequence(touchpointNumber: number, touchpointType: 'Visit' | 'Call'): {
-  isValid: boolean;
-  error?: string;
-  expectedType?: 'Visit' | 'Call';
-} {
-  const expectedType = getExpectedTouchpointType(touchpointNumber);
-  if (touchpointType !== expectedType) {
-    return {
-      isValid: false,
-      error: `Invalid touchpoint type for touchpoint #${touchpointNumber}. Expected '${expectedType}' but got '${touchpointType}'`,
-      expectedType,
-    };
-  }
-  return { isValid: true, expectedType };
-}
-
-/**
- * Validates if a user can create a specific touchpoint type based on their role
- * and the expected touchpoint sequence
- * @param userRole - The user's role
- * @param touchpointNumber - The touchpoint number (1-7)
- * @param touchpointType - The touchpoint type ('Visit' or 'Call')
- * @returns true if the user can create this touchpoint, false otherwise
- */
-function canCreateTouchpoint(
-  userRole: string,
-  touchpointNumber: number,
-  touchpointType: 'Visit' | 'Call'
-): boolean {
-  const expectedType = TOUCHPOINT_SEQUENCE[touchpointNumber - 1];
-
-  if (userRole === 'caravan') {
-    // Caravan: Only Visit types allowed (1, 4, 7)
-    if (expectedType !== 'Visit' || touchpointType !== 'Visit') {
-      return false;
-    }
-    return true;
-  }
-
-  if (userRole === 'tele') {
-    // Tele: Only Call types allowed (2, 3, 5, 6)
-    if (expectedType !== 'Call' || touchpointType !== 'Call') {
-      return false;
-    }
-    return true;
-  }
-
-  // Admin/Manager: Any type allowed
-  return true;
 }
 
 // Validation schemas (normalized schema - visit/call data moved to separate tables)
@@ -461,25 +410,21 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     // === Role-based Validation ===
 
-    // Validate touchpoint type against user role and sequence
-    if (!canCreateTouchpoint(user.role, validated.touchpoint_number, validated.type)) {
-      let reason = '';
-      if (user.role === 'caravan') {
-        reason = 'Caravan users can only create Visit touchpoints (1, 4, 7)';
-      } else if (user.role === 'tele') {
-        reason = 'Tele users can only create Call touchpoints (2, 3, 5, 6)';
-      } else {
-        reason = `Touchpoint #${validated.touchpoint_number} must be a ${TOUCHPOINT_SEQUENCE[validated.touchpoint_number - 1]}`;
+    // Validate touchpoint type against user role and sequence using the new validation service
+    try {
+      validateRoleBasedTouchpoint(user.role, validated.touchpoint_number, validated.type);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        return c.json({
+          message: error.message,
+          errorCode: 'INVALID_TOUCHPOINT_TYPE_FOR_ROLE',
+          touchpointNumber: validated.touchpoint_number,
+          requestedType: validated.type,
+          userRole: user.role,
+          expectedType: getExpectedTouchpointType(validated.touchpoint_number),
+        }, 403);
       }
-
-      return c.json({
-        message: reason,
-        errorCode: 'INVALID_TOUCHPOINT_TYPE_FOR_ROLE',
-        touchpointNumber: validated.touchpoint_number,
-        requestedType: validated.type,
-        userRole: user.role,
-        expectedType: TOUCHPOINT_SEQUENCE[validated.touchpoint_number - 1],
-      }, 403);
+      throw error;
     }
 
     // === Loan Released Validation ===
@@ -516,22 +461,31 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     // === Touchpoint Sequence Validation ===
 
-    // 1. Validate that the touchpoint type matches the sequence pattern
-    const sequenceValidation = validateTouchpointSequence(
-      validated.touchpoint_number,
-      validated.type
+    // 1. Get current touchpoint count for validation
+    const currentTouchpointCount = await pool.query(
+      `SELECT COUNT(DISTINCT touchpoint_number) as count
+       FROM touchpoints
+       WHERE client_id = $1`,
+      [validated.client_id]
     );
-    if (!sequenceValidation.isValid) {
-      return c.json({
-        message: sequenceValidation.error,
-        expectedType: sequenceValidation.expectedType,
-        providedType: validated.type,
-        touchpointNumber: validated.touchpoint_number,
-        sequence: TOUCHPOINT_SEQUENCE,
-      }, 400);
+    const currentCount = parseInt(currentTouchpointCount.rows[0].count);
+
+    // 2. Validate touchpoint sequence using the new validation service
+    try {
+      validateTouchpointSequence(currentCount, validated.touchpoint_number);
+    } catch (error) {
+      if (error instanceof ValidationError) {
+        return c.json({
+          message: error.message,
+          expectedNumber: currentCount + 1,
+          providedNumber: validated.touchpoint_number,
+          sequence: TOUCHPOINT_SEQUENCE,
+        }, 400);
+      }
+      throw error;
     }
 
-    // 2. Check if this is the next expected touchpoint number for the client
+    // 3. Check if this is the next expected touchpoint number for the client
     const nextTouchpointNumber = await getNextTouchpointNumber(validated.client_id);
     if (nextTouchpointNumber === null) {
       return c.json({
@@ -682,6 +636,14 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     );
 
     // ============================================
+    // TOUCHPOINT SUMMARY: Update client's denormalized touchpoint data
+    // ============================================
+    // Non-blocking async update - don't fail the request if this fails
+    updateClientTouchpointSummary(validated.client_id).catch((error) => {
+      console.error('[Touchpoints] Failed to update touchpoint summary:', error);
+    });
+
+    // ============================================
     // CACHE INVALIDATION: Invalidate touchpoint cache
     // ============================================
     // Non-blocking async cache invalidation
@@ -738,14 +700,17 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
     for (const touchpointData of validated.touchpoints) {
       try {
         // === Role-based Validation ===
-        if (!canCreateTouchpoint(user.role, touchpointData.touchpoint_number, touchpointData.type)) {
-          errors.push({
-            clientId: touchpointData.client_id,
-            error: user.role === 'caravan'
-              ? 'Caravan users can only create Visit touchpoints (1, 4, 7)'
-              : 'Tele users can only create Call touchpoints (2, 3, 5, 6)',
-          });
-          continue;
+        try {
+          validateRoleBasedTouchpoint(user.role, touchpointData.touchpoint_number, touchpointData.type);
+        } catch (error) {
+          if (error instanceof ValidationError) {
+            errors.push({
+              clientId: touchpointData.client_id,
+              error: error.message,
+            });
+            continue;
+          }
+          throw error;
         }
 
         // Check if client exists and loan not released
@@ -816,12 +781,29 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
     await client.query('COMMIT');
 
     // ============================================
+    // TOUCHPOINT SUMMARY: Update clients' denormalized touchpoint data
+    // ============================================
+    // Non-blocking async update - don't fail the request if this fails
+    if (createdTouchpoints.length > 0) {
+      const clientIds = Array.from(new Set(createdTouchpoints.map((tp: any) => tp.client_id)));
+      Promise.all(
+        clientIds.map((clientId) =>
+          updateClientTouchpointSummary(clientId).catch((error) => {
+            console.error(`[Touchpoints] Failed to update touchpoint summary for client ${clientId}:`, error);
+          })
+        )
+      ).catch((error) => {
+        console.error('[Touchpoints] Bulk touchpoint summary update error:', error);
+      });
+    }
+
+    // ============================================
     // CACHE INVALIDATION: Invalidate bulk touchpoint cache
     // ============================================
     // Non-blocking async cache invalidation for all created touchpoints
     if (createdTouchpoints.length > 0) {
       const cacheInvalidation = getClientCacheInvalidation();
-      const clientIds = [...new Set(createdTouchpoints.map((tp: any) => tp.client_id))];
+      const clientIds = Array.from(new Set(createdTouchpoints.map((tp: any) => tp.client_id)));
       cacheInvalidation.onBulkTouchpointChange(clientIds, 'touchpoint_created')
         .catch((error) => {
           console.error('[Touchpoints] Cache invalidation error after bulk creation:', error);
