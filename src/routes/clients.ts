@@ -190,13 +190,19 @@ clients.get('/', authMiddleware, async (c) => {
     const clientType = c.req.query('client_type');
     const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
-    const municipality = c.req.query('municipality');
-    const province = c.req.query('province');
+    // Use queries() for multi-value parameters (returns array or undefined)
+    const municipalityQuery = c.req.queries('municipality');
+    const provinceQuery = c.req.queries('province');
     const productType = c.req.query('product_type');
     const marketType = c.req.query('market_type');
     const pensionType = c.req.query('pension_type');
     const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
+
+    // Handle multi-value query parameters
+    // queries() returns array if multiple values, string if single, undefined if not provided
+    const municipality = municipalityQuery && Array.isArray(municipalityQuery) ? municipalityQuery : (municipalityQuery ? [municipalityQuery] : undefined);
+    const province = provinceQuery && Array.isArray(provinceQuery) ? provinceQuery : (provinceQuery ? [provinceQuery] : undefined);
 
     const offset = (page - 1) * perPage;
 
@@ -669,11 +675,16 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const clientType = c.req.query('client_type');
     const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
-    const municipality = c.req.query('municipality');
-    const province = c.req.query('province');
+    // Use queries() for multi-value parameters (returns array or undefined)
+    const municipalityQuery = c.req.queries('municipality');
+    const provinceQuery = c.req.queries('province');
     const productType = c.req.query('product_type');
     const touchpointStatus = c.req.query('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
+
+    // Handle multi-value query parameters
+    const municipality = municipalityQuery && Array.isArray(municipalityQuery) ? municipalityQuery : (municipalityQuery ? [municipalityQuery] : undefined);
+    const province = provinceQuery && Array.isArray(provinceQuery) ? provinceQuery : (provinceQuery ? [provinceQuery] : undefined);
 
     const offset = (page - 1) * perPage;
 
