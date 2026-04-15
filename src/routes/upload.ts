@@ -91,6 +91,72 @@ upload.post('/', authMiddleware, requirePermission('clients', 'update'), async (
           throw new Error(`Invalid table: ${table}`);
         }
 
+        // PSGC ID validation and resolution for addresses table
+        if (table === 'addresses' && data.psgc_id) {
+          // Check if psgc_id is a string (old format) instead of integer
+          if (typeof data.psgc_id === 'string') {
+            console.log(`[Upload] Invalid psgc_id format for address ${id}: ${data.psgc_id} (string, expected integer)`);
+
+            // Try to extract location info from the string and query actual PSGC ID
+            // String format: "region_vi_-_western_visayas_capiz_panay_barangay_6"
+            const parts = data.psgc_id.replace(/region_/i, '').split(/_-_/);
+            if (parts.length >= 4) {
+              const [region, province, municipality, barangay] = parts;
+
+              try {
+                // Query actual PSGC ID from database
+                const psgcResult = await client.query(
+                  `SELECT id FROM psgc WHERE
+                   region ILIKE $1 AND
+                   province ILIKE $2 AND
+                   municipality ILIKE $3 AND
+                   barangay ILIKE $4`,
+                  [region, province, municipality, barangay]
+                );
+
+                if (psgcResult.rows.length > 0) {
+                  // Replace string ID with actual integer ID
+                  const actualPsgcId = psgcResult.rows[0].id;
+                  console.log(`[Upload] Resolved psgc_id: ${data.psgc_id} -> ${actualPsgcId}`);
+                  data.psgc_id = actualPsgcId;
+                } else {
+                  // PSGC location not found - skip this address
+                  console.warn(`[Upload] PSGC location not found for: ${region}, ${province}, ${municipality}, ${barangay}`);
+                  results.push({
+                    id,
+                    operation,
+                    success: false,
+                    error: `PSGC location not found: ${region}, ${province}, ${municipality}, ${barangay}`,
+                    skipped: true
+                  });
+                  continue;
+                }
+              } catch (psgcError) {
+                console.error(`[Upload] Failed to resolve psgc_id: ${psgcError}`);
+                results.push({
+                  id,
+                  operation,
+                  success: false,
+                  error: `Failed to resolve PSGC location: ${psgcError}`,
+                  skipped: true
+                });
+                continue;
+              }
+            } else {
+              // Can't parse string format - skip this address
+              console.warn(`[Upload] Unparseable psgc_id format: ${data.psgc_id}`);
+              results.push({
+                id,
+                operation,
+                success: false,
+                error: `Invalid PSGC ID format: ${data.psgc_id}`,
+                skipped: true
+              });
+              continue;
+            }
+          }
+        }
+
         // APPROVAL WORKFLOW: For client edits by caravan/tele users, create approval request
         const isClientEdit = table === 'clients' && (operation === 'PUT' || operation === 'PATCH');
         const needsApproval = isClientEdit && (user.role === 'caravan' || user.role === 'tele');
