@@ -944,4 +944,210 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
   }
 });
 
+// POST /api/approvals/loan-release-v2 - Submit loan release with role-based processing
+approvals.post('/loan-release-v2', authMiddleware, async (c) => {
+  const user = c.get('user');
+
+  // Validate user role
+  if (!['admin', 'caravan', 'tele'].includes(user.role)) {
+    return c.json({ message: 'Loan release is only available for Admin, Caravan and Tele users' }, 403);
+  }
+
+  // Admin bypass: Direct release
+  if (user.role === 'admin') {
+    const schema = z.object({
+      client_id: z.string().uuid(),
+      udi_number: z.string().min(1).max(50),
+      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
+      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+      amount: z.number().positive(),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
+      address: z.string().optional(),
+      photo_url: z.string().optional(),
+      remarks: z.string().optional(),
+    });
+
+    const validated = schema.parse(await c.req.json());
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Check if client exists
+      const clientCheck = await client.query(
+        'SELECT id, loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL',
+        [validated.client_id]
+      );
+
+      if (clientCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return c.json({ message: 'Client not found' }, 404);
+      }
+
+      if (clientCheck.rows[0].loan_released) {
+        await client.query('ROLLBACK');
+        return c.json({ message: 'Loan already released for this client' }, 409);
+      }
+
+      // CREATE releases record (no visit_id, no call_id)
+      await client.query(`
+        INSERT INTO releases (
+          id, client_id, user_id, visit_id, call_id, product_type, loan_type,
+          amount, approval_notes, status
+        ) VALUES (
+          gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
+        )
+      `, [validated.client_id, user.sub, validated.product_type,
+          validated.loan_type, validated.amount, validated.remarks]);
+
+      // UPDATE clients
+      await client.query(`
+        UPDATE clients
+        SET loan_released = TRUE, loan_released_at = NOW()
+        WHERE id = $1
+      `, [validated.client_id]);
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Loan release processed successfully',
+        client_id: validated.client_id,
+        loan_released: true,
+        loan_released_at: new Date().toISOString()
+      });
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      if (error instanceof z.ZodError) {
+        return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      }
+      console.error('Admin loan release error:', error);
+      return c.json({ message: 'Internal server error' }, 500);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Caravan/Tele: Create approval request
+  else {
+    const schema = z.object({
+      client_id: z.string().uuid(),
+      udi_number: z.string().min(1).max(50),
+      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
+      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+      amount: z.number().positive(),
+      // Caravan-specific fields
+      time_in: z.string().datetime().optional(),
+      time_out: z.string().datetime().optional(),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
+      address: z.string().optional(),
+      photo_url: z.string().optional(),
+      // Tele-specific fields
+      phone_number: z.string().regex(/^09\d{9}$/).optional(),
+      duration: z.number().int().positive().optional(),
+      // Common fields
+      notes: z.string().optional(),
+    });
+
+    const validated = schema.parse(await c.req.json());
+
+    const dbClient = await pool.connect();
+    try {
+      await dbClient.query('BEGIN');
+
+      // Check if client exists
+      const clientCheck = await dbClient.query(
+        'SELECT id, loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL',
+        [validated.client_id]
+      );
+
+      if (clientCheck.rows.length === 0) {
+        await dbClient.query('ROLLBACK');
+        return c.json({ message: 'Client not found' }, 404);
+      }
+
+      if (clientCheck.rows[0].loan_released) {
+        await dbClient.query('ROLLBACK');
+        return c.json({ message: 'Loan already released for this client' }, 409);
+      }
+
+      let activityId: string;
+
+      // Caravan: CREATE visits record
+      if (user.role === 'caravan') {
+        const visitResult = await dbClient.query(`
+          INSERT INTO visits (
+            id, client_id, user_id, type, time_in, time_out,
+            latitude, longitude, address, photo_url, notes
+          ) VALUES (
+            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9
+          ) RETURNING id
+        `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
+            validated.latitude, validated.longitude, validated.address,
+            validated.photo_url, validated.notes]);
+
+        activityId = visitResult.rows[0].id;
+
+        // UPDATE itineraries (stays in_progress)
+        await dbClient.query(`
+          UPDATE itineraries
+          SET status = 'in_progress', updated_at = NOW()
+          WHERE client_id = $1
+            AND scheduled_date = CURRENT_DATE
+            AND user_id = $2
+        `, [validated.client_id, user.sub]);
+      }
+
+      // Tele: CREATE calls record
+      else if (user.role === 'tele') {
+        const callResult = await dbClient.query(`
+          INSERT INTO calls (
+            id, client_id, user_id, phone_number, dial_time, duration, notes, reason, type
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, NOW(), $4, $5, $6, 'release_loan'
+          ) RETURNING id
+        `, [validated.client_id, user.sub, validated.phone_number,
+            validated.duration, validated.notes, 'Loan Release Request']);
+
+        activityId = callResult.rows[0].id;
+      }
+
+      // CREATE approval request
+      const approvalResult = await dbClient.query(`
+        INSERT INTO approvals (
+          id, type, client_id, user_id, role, reason, notes, status
+        ) VALUES (
+          gen_random_uuid(), 'loan_release_v2', $1, $2, $3, $4, $5, 'pending'
+        ) RETURNING id
+      `, [validated.client_id, user.sub, user.role,
+          user.role === 'tele' ? 'Loan Release Request (Tele)' : 'Loan Release Request',
+        JSON.stringify({
+          [user.role === 'caravan' ? 'visit_id' : 'call_id']: activityId,
+          udi_number: validated.udi_number,
+          product_type: validated.product_type,
+          loan_type: validated.loan_type,
+          amount: validated.amount,
+        })]);
+
+      await dbClient.query('COMMIT');
+
+      return c.json({
+        message: 'Loan release submitted for approval',
+        approval_id: approvalResult.rows[0].id,
+        status: 'pending'
+      }, 201);
+    } catch (error: any) {
+      await dbClient.query('ROLLBACK');
+      if (error instanceof z.ZodError) {
+        return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      }
+      console.error('Loan release approval error:', error);
+      return c.json({ message: 'Internal server error' }, 500);
+    } finally {
+      dbClient.release();
+    }
+  }
+});
+
 export default approvals;
