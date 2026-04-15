@@ -609,6 +609,44 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       validated.user_id = user.sub as string;
     }
 
+    // Auto-create visit record if neither visit_id nor call_id is provided
+    // This handles the case where mobile apps create touchpoints directly
+    let visitId = validated.visit_id;
+    let callId = validated.call_id;
+
+    if (!visitId && !callId) {
+      console.log('[Touchpoints] No visit_id or call_id provided, auto-creating visit record');
+
+      // Create a visit record from the touchpoint data
+      const visitResult = await pool.query(
+        `INSERT INTO visits (
+          client_id, user_id, type, time_in, time_out,
+          odometer_arrival, odometer_departure, notes,
+          reason, status, address, latitude, longitude
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+        ) RETURNING *`,
+        [
+          validated.client_id,
+          validated.user_id,
+          'regular_visit',
+          validated.time_in || null,
+          validated.time_out || null,
+          validated.odometer_arrival || null,
+          validated.odometer_departure || null,
+          validated.notes || null,
+          validated.reason || null,
+          validated.status || null,
+          validated.address || null,
+          validated.latitude || null,
+          validated.longitude || null,
+        ]
+      );
+
+      visitId = visitResult.rows[0].id;
+      console.log('[Touchpoints] Auto-created visit record:', visitId);
+    }
+
     const result = await pool.query(
       `INSERT INTO touchpoints (
         client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
@@ -617,7 +655,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       ) RETURNING *`,
       [
         validated.client_id, validated.user_id, validated.touchpoint_number, validated.type,
-        validated.rejection_reason, validated.visit_id, validated.call_id
+        validated.rejection_reason, visitId, callId
       ]
     );
 

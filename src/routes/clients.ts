@@ -18,6 +18,13 @@ import {
 } from '../errors/index.js';
 import { getClientsCacheService } from '../services/cache/clients-cache.js';
 
+// Helper function to ensure loan_type is always returned as string
+function parseLoanType(value: any): string | null {
+  if (value === null || value === undefined) return null;
+  // Convert to string if it's a number or other type
+  return String(value);
+}
+
 const clients = new Hono();
 
 // Pagination limits
@@ -122,7 +129,7 @@ function mapRowToClient(row: Record<string, any>) {
     product_type: row.product_type,
     market_type: row.market_type,
     pension_type: row.pension_type,
-    loan_type: row.loan_type,
+    loan_type: parseLoanType(row.loan_type),
     pan: row.pan,
     facebook_link: row.facebook_link,
     remarks: row.remarks,
