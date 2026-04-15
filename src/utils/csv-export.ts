@@ -137,6 +137,14 @@ export function validateDateRange(startDate?: string, endDate?: string): void {
 /**
  * Sanitize sensitive data from export
  * Removes or masks sensitive fields like passwords, tokens, SSN, etc.
+ *
+ * NOTE: Currently exported but not actively used in reports endpoints.
+ * Available for future use when exporting sensitive user data.
+ * To use: Wrap result.rows before passing to arrayToCsv().
+ *
+ * Example:
+ *   const sanitizedData = sanitizeSensitiveData(result.rows);
+ *   const content = arrayToCsv(sanitizedData, options);
  */
 export function sanitizeSensitiveData(data: any[], sensitiveFields: string[] = []): any[] {
   const defaultSensitiveFields = [
