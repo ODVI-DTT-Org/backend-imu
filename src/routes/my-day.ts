@@ -648,6 +648,87 @@ myDay.post('/clients/:id/time-out', authMiddleware, requirePermission('touchpoin
   }
 });
 
+// POST /api/my-day/clients/:id/visit - Record visit only (no touchpoint)
+myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints', 'create'), async (c) => {
+  try {
+    const user = c.get('user');
+    const clientId = c.req.param('id');
+
+    const visitSchema = z.object({
+      time_in: z.string().datetime().optional(),
+      time_out: z.string().datetime().optional(),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
+      address: z.string().optional(),
+      photo_url: z.string().optional(),
+      notes: z.string().optional(),
+    });
+
+    const validated = visitSchema.parse(await c.req.json());
+
+    // Verify client exists
+    const clientCheck = await pool.query(
+      'SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL',
+      [clientId]
+    );
+
+    if (clientCheck.rows.length === 0) {
+      return c.json({ message: 'Client not found' }, 404);
+    }
+
+    const dbClient = await pool.connect();
+    try {
+      await dbClient.query('BEGIN');
+
+      // CREATE visits record (type='regular_visit')
+      const visitResult = await dbClient.query(`
+        INSERT INTO visits (
+          id, client_id, user_id, type, time_in, time_out,
+          latitude, longitude, address, photo_url, notes
+        ) VALUES (
+          gen_random_uuid(), $1, $2, 'regular_visit', $3, $4, $5, $6, $7, $8, $9
+        ) RETURNING id
+      `, [clientId, user.sub, validated.time_in, validated.time_out,
+          validated.latitude, validated.longitude, validated.address,
+          validated.photo_url, validated.notes]);
+
+      // UPDATE itineraries (with error handling)
+      const itineraryResult = await dbClient.query(`
+        UPDATE itineraries
+        SET status = 'completed', updated_at = NOW()
+        WHERE client_id = $1
+          AND scheduled_date = CURRENT_DATE
+          AND user_id = $2
+        RETURNING *
+      `, [clientId, user.sub]);
+
+      // Log warning if no itinerary was updated (not critical, visit is still recorded)
+      if (itineraryResult.rows.length === 0) {
+        console.warn(`No itinerary found for client ${clientId}, user ${user.sub}`);
+        // Visit is still created successfully, just no itinerary to update
+      }
+
+      await dbClient.query('COMMIT');
+
+      return c.json({
+        message: 'Visit recorded successfully',
+        visit_id: visitResult.rows[0].id
+      });
+    } catch (error) {
+      await dbClient.query('ROLLBACK');
+      throw error;
+    } finally {
+      dbClient.release();
+    }
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+    }
+    console.error('Visit record error:', error);
+    return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
 // Rate limiting for touchpoint submission (10 requests per 15 minutes per user)
 const touchpointRateLimit = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
