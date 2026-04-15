@@ -9,27 +9,22 @@
 UPDATE clients c
 SET
   touchpoint_summary = COALESCE(
-    jsonb_agg(
-      jsonb_build_object(
-        'id', t.id,
-        'number', t.touchpoint_number,
-        'type', t.type,
-        'date', t.date,
-        'reason', t.reason,
-        'status', t.status,
-        'user_id', t.user_id,
-        'time_in', t.time_in,
-        'time_out', t.time_out,
-        'location', CASE
-          WHEN t.time_in_gps_lat IS NOT NULL THEN
-            jsonb_build_object(
-              'latitude', t.time_in_gps_lat,
-              'longitude', t.time_in_gps_lng,
-              'address', t.time_in_gps_address
-            )
-          ELSE NULL
-        END
-      ) ORDER BY t.date
+    (
+      SELECT jsonb_agg(
+        jsonb_build_object(
+          'id', t.id,
+          'number', t.touchpoint_number,
+          'type', t.type,
+          'date', t.date,
+          'reason', t.rejection_reason,
+          'status', t.status,
+          'user_id', t.user_id,
+          'time_in', NULL,
+          'time_out', NULL,
+          'location', NULL
+        ) ORDER BY t.date)
+      FROM touchpoints t
+      WHERE t.client_id = c.id
     ),
     '[]'::jsonb
   ),
