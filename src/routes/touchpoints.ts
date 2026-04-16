@@ -895,6 +895,14 @@ touchpoints.put('/:id', authMiddleware, requirePermission('touchpoints', 'update
     );
 
     // ============================================
+    // TOUCHPOINT SUMMARY: Update client's denormalized touchpoint data
+    // ============================================
+    // Non-blocking async update - don't fail the request if this fails
+    updateClientTouchpointSummary(existingTouchpoint.client_id).catch((error) => {
+      console.error('[Touchpoints] Failed to update touchpoint summary after touchpoint update:', error);
+    });
+
+    // ============================================
     // CACHE INVALIDATION: Invalidate touchpoint cache
     // ============================================
     // Non-blocking async cache invalidation
@@ -940,6 +948,14 @@ touchpoints.delete('/:id', authMiddleware, requirePermission('touchpoints', 'del
 
     // Hard delete
     await pool.query('DELETE FROM touchpoints WHERE id = $1', [id]);
+
+    // ============================================
+    // TOUCHPOINT SUMMARY: Update client's denormalized touchpoint data
+    // ============================================
+    // Non-blocking async update - don't fail the request if this fails
+    updateClientTouchpointSummary(touchpoint.client_id).catch((error) => {
+      console.error('[Touchpoints] Failed to update touchpoint summary after touchpoint deletion:', error);
+    });
 
     // ============================================
     // CACHE INVALIDATION: Invalidate touchpoint cache
