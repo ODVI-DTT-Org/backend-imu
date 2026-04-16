@@ -146,6 +146,10 @@ function mapRowToClient(row: Record<string, any>) {
     is_starred: row.is_starred,
     loan_released: row.loan_released || false,
     loan_released_at: row.loan_released_at,
+    // Touchpoint summary fields (denormalized from touchpoints table)
+    touchpoint_summary: row.touchpoint_summary || [],
+    touchpoint_number: row.touchpoint_number || 0,
+    next_touchpoint: row.next_touchpoint || null,
     // Legacy PCNICMS fields
     ext_name: row.ext_name,
     fullname: row.fullname,
