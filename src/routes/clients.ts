@@ -435,7 +435,7 @@ clients.get('/', authMiddleware, async (c) => {
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay,
         c.touchpoint_number, c.next_touchpoint, c.touchpoint_summary, c.loan_released,
         lt.first_name, lt.last_name
-      ${searchOrderBy
+      ${searchOrderBy && searchOrderBy.trim().length > 0
         ? `ORDER BY ${searchOrderBy}, ${orderByClause}`
         : `ORDER BY ${orderByClause}`}
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
@@ -770,7 +770,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay,
         c.touchpoint_number, c.next_touchpoint, c.touchpoint_summary, c.loan_released,
         lt.first_name, lt.last_name
-      ${searchOrderBy ? `ORDER BY ${searchOrderBy},` : `ORDER BY`}
+      ${searchOrderBy && searchOrderBy.trim().length > 0 ? `ORDER BY ${searchOrderBy},` : `ORDER BY`}
         CASE
           WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
             AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
