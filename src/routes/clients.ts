@@ -233,7 +233,7 @@ clients.get('/', authMiddleware, async (c) => {
     // Determine sort order - use direct column references from clients table
     // DEFAULT: Use group scoring ordering
     // Group 1 (callable): Next is Call, Group 2 (waiting): Next is Visit, Group 3: Completed, Group 4: Loan released, Group 5: No progress
-    let orderByClause = `ORDER BY
+    let orderByClause = `
       CASE
         WHEN c.loan_released THEN 4
         WHEN COALESCE(c.touchpoint_number, 1) >= 7 THEN 3
@@ -250,7 +250,7 @@ clients.get('/', authMiddleware, async (c) => {
       // For Tele role: use group scoring directly
       if (user.role === 'tele' && touchpointStatus) {
         // Order by group_score ASC, then by completed_count DESC, then by created_at DESC
-        orderByClause = `ORDER BY
+        orderByClause = `
           CASE
             WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
               AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
@@ -277,7 +277,7 @@ clients.get('/', authMiddleware, async (c) => {
           ELSE 4
         END`;
 
-        orderByClause = `ORDER BY
+        orderByClause = `
           ${groupScoreCase} ASC,
           COALESCE(c.touchpoint_number, 1) DESC,
           c.created_at DESC`;
