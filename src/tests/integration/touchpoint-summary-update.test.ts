@@ -6,7 +6,7 @@
  * are modified or deleted.
  */
 
-import { describe, test, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, test, expect, beforeAll, afterAll } from 'vitest';
 import { pool } from '../../db/index.js';
 import { validateTouchpointSequence, validateRoleBasedTouchpoint } from '../../services/touchpoint-validation.js';
 
@@ -16,13 +16,13 @@ describe('Touchpoint Summary Updates - Modify/Delete', () => {
   let testTouchpointId: string;
 
   beforeAll(async () => {
-    // Create test user
+    // Create test user (use a unique UUID to avoid conflicts)
+    const testUuid = `test-${Date.now()}`;
     const userResult = await pool.query(
       `INSERT INTO users (id, email, full_name, role, password_hash)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email
        RETURNING id`,
-      ['00000000-0000-0000-0000-000000000001', 'test@example.com', 'Test User', 'admin', 'hash']
+      [`${testUuid}-user`, `test-${testUuid}@example.com`, 'Test User', 'admin', 'hash']
     );
     testUserId = userResult.rows[0].id;
 
@@ -30,9 +30,8 @@ describe('Touchpoint Summary Updates - Modify/Delete', () => {
     const clientResult = await pool.query(
       `INSERT INTO clients (id, first_name, last_name, email, created_by)
        VALUES ($1, $2, $3, $4, $5)
-       ON CONFLICT (id) DO UPDATE SET first_name = EXCLUDED.first_name
        RETURNING id`,
-      ['00000000-0000-0000-0000-000000000001', 'John', 'Doe', 'john@example.com', testUserId]
+      [`${testUuid}-client`, 'John', 'Doe', `john-${testUuid}@example.com`, testUserId]
     );
     testClientId = clientResult.rows[0].id;
 

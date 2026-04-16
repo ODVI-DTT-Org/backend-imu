@@ -54,7 +54,7 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
     let nextTouchpoint: 'Visit' | 'Call' | null = 'Visit';
     if (count >= 7) {
       nextTouchpoint = null;
-    } else if (count in [1, 2, 4, 5]) {
+    } else if ([1, 2, 4, 5].includes(count)) {
       nextTouchpoint = 'Call';
     }
 
@@ -66,7 +66,7 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
            next_touchpoint = $3,
            updated_at = NOW()
        WHERE id = $4`,
-      [JSON.stringify(touchpoints), count || 1, nextTouchpoint, clientId]
+      [JSON.stringify(touchpoints), count + 1, nextTouchpoint, clientId]
     );
   } catch (error) {
     // Log error but don't throw - touchpoint creation should still succeed
