@@ -261,20 +261,6 @@ clients.get('/', authMiddleware, async (c) => {
           c.created_at DESC`;
       } else {
         // For Caravan/Admin or when no touchpointStatus filter: use CASE expression
-        const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-
-        // Determine if current user can create the next touchpoint
-        let canCreateCondition = '';
-        if (user.role === 'caravan') {
-          canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
-        } else {
-          canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
-        }
-
-        // Group score CASE expression
-        // For Caravan/Admin: use group scoring directly in ORDER BY
-        const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-
         // Determine if current user can create the next touchpoint
         let canCreateCondition = '';
         if (user.role === 'caravan') {
@@ -283,7 +269,8 @@ clients.get('/', authMiddleware, async (c) => {
           canCreateCondition = `c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1`;
         }
 
-        groupScoreCase = `CASE
+        // Group score CASE expression for ordering
+        const groupScoreCase = `CASE
           WHEN (${canCreateCondition}) AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
           WHEN COALESCE(c.touchpoint_number, 1) >= 7 OR c.loan_released THEN 2
           WHEN COALESCE(c.touchpoint_number, 1) > 0 AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT (${canCreateCondition}) THEN 3
@@ -298,7 +285,7 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     // Build WHERE clause conditions for basic client filtering
-    // Note: touchpoint_status filtering will be done in CTE, not here
+    // Note: touchpoint_status filtering is done via direct column access
     const baseWhereConditions: string[] = [];
     const baseParams: any[] = [];
     let baseParamIndex = 1;
@@ -393,135 +380,28 @@ clients.get('/', authMiddleware, async (c) => {
     const baseWhereConditionsJoined = baseWhereConditions.length > 0 ? baseWhereConditions.join(' AND ') : '';
 
     // ============================================
-    // STANDARD QUERY PATH: CTEs with LATERAL JOINs
+    // OPTIMIZED QUERY: Direct column access from clients table
     // ============================================
-    // Used for edge cases (Admin, search, filters, status filters)
-    // OPTIMIZED: Use denormalized touchpoint columns directly from clients table
-    // No CTE needed - all data is available directly on the clients table
-    const touchpointInfoAlias = 'c';
-
-    // OPTIMIZED: Use denormalized touchpoint columns directly from clients table
-    // No CTE needed - calculate values directly in main query
+    // No CTEs needed - all touchpoint data available via denormalized columns
     const withGroupScoreCTE = ''; // No CTE needed
-    const touchpointInfoAlias = 'c'; // Use clients table directly
-    const touchpointInfoJoin = ''; // No additional JOIN needed
-    const groupScoreSelect = ''; // Calculate directly in SELECT
-    const useGroupedCTEs = false; // No grouped CTEs needed
 
-        // Build the final CTEs with dynamic UNION
-        withGroupScoreCTE = `${withGroupScoreCTE},
-          ${cteDefinitions.join(',\n          ')},
-          touchpoint_with_score AS (
-            ${unionStatements.join('\n            UNION ALL\n            ')}
-          )`;
-      } else {
-        // For Caravan/Admin: Use original CASE expression approach
-        let canCreateCondition = '';
-        if (user.role === 'caravan') {
-          canCreateCondition = `next_touchpoint_type = 'Visit' OR completed_count = 0`;
-        } else {
-          canCreateCondition = `next_touchpoint_type IS NOT NULL OR completed_count = 0`;
-        }
-
-        // IMPORTANT: Always create touchpoint_with_score CTE when sortBy is touchpoint_status
-        // This ensures the group_score column is available for sorting
-        if (sortBy === 'touchpoint_status' || touchpointStatus) {
-          withGroupScoreCTE = `${withGroupScoreCTE}, touchpoint_with_score AS (
-            SELECT *,
-              CASE
-                WHEN (${canCreateCondition}) AND completed_count < 7 AND NOT loan_released THEN 1
-                WHEN completed_count >= 7 OR loan_released THEN 2
-                WHEN completed_count > 0 AND completed_count < 7 AND NOT (${canCreateCondition}) THEN 3
-                ELSE 4
-              END as group_score
-            FROM touchpoint_info
-          )`;
-        }
-
-        // Map touchpoint_status to group score for filtering
-        const statusToScoreMap: Record<string, number> = {
-          'callable': 1,
-          'completed': 2,
-          'has_progress': 3,
-          'no_progress': 4
-        };
-
-        // Handle multiple touchpoint status values
-        if (touchpointStatus && touchpointStatus.length > 0) {
-          const targetScores = touchpointStatus
-            .map(status => statusToScoreMap[status])
-            .filter(score => score !== undefined);
-
-          if (targetScores.length > 0) {
-            const hasExistingWhere = baseWhereConditionsJoined;
-            const whereOrAnd = hasExistingWhere ? 'AND' : 'WHERE';
-
-            if (targetScores.length === 1) {
-              // Single value: use =
-              groupScoreFilter = `${whereOrAnd} tws.group_score = $${baseParamIndex}`;
-              baseParams.push(targetScores[0]);
-              baseParamIndex++;
-            } else {
-              // Multiple values: use IN
-              const placeholders = targetScores.map((_, i) => `$${baseParamIndex + i}`).join(', ');
-              groupScoreFilter = `${whereOrAnd} tws.group_score IN (${placeholders})`;
-              baseParams.push(...targetScores);
-              baseParamIndex += targetScores.length;
-            }
-          }
-        }
-      }
-    }
-
-    // Get total count
-    // No CTE needed - use direct query on clients table
-    const countQuery = `
-      ${withGroupScoreCTE}
-      SELECT COUNT(*) as count
-      FROM clients c
-      WHERE c.deleted_at IS NULL
-      ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
-    `;
-    const allConditions: string[] = [];
-
-    if (baseWhereConditionsJoined) {
-      allConditions.push(baseWhereConditionsJoined);
-    }
-
-    if (groupScoreFilter) {
-      // Remove "AND " or "WHERE " prefix from group filter, but keep the parameter placeholder
-      allConditions.push(groupScoreFilter.replace(/^(AND |WHERE )/, ''));
-    }
-
-    const combinedWhereClause = allConditions.length > 0 ? `WHERE ${allConditions.join(' AND ')}` : '';
-
-    const countQuery = `
-      ${withGroupScoreCTE}
-      SELECT COUNT(DISTINCT c.id) as count
-      FROM clients c
-      ${touchpointInfoJoinForCount}
-      ${combinedWhereClause}
-    `;
-
-    const countResult = await pool.query(countQuery, baseParams);
+    // Get total count - direct query on clients table (no CTEs needed)
+    const countResult = await pool.query(
+      `SELECT COUNT(*) as count FROM clients c
+       WHERE c.deleted_at IS NULL
+       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}`,
+      baseParams
+    );
     const totalItems = parseInt(countResult.rows[0].count);
 
-    // Get paginated results using CTEs
-    // The CTEs filter ALL clients first, then we paginate
-    // When touchpoint_with_score CTE is created, use it instead of touchpoint_info
-    // Reuse usesTouchpointWithScore from count query above
-    const touchpointInfoAlias = usesTouchpointWithScore ? 'tws' : 'tp';
-    const touchpointInfoJoin = usesTouchpointWithScore
-      ? 'LEFT JOIN touchpoint_with_score tws ON tws.client_id = c.id'
-      : 'LEFT JOIN touchpoint_info tp ON tp.client_id = c.id';
-
-    // For grouped CTEs approach (Tele role OR touchpointStatus filter), include group_score in SELECT
-    const groupScoreSelect = (touchpointStatus && user.role === 'tele') || (sortBy === 'touchpoint_status' && groupScoreCase !== '')
-      ? `, ${touchpointInfoAlias}.group_score`
-      : '';
-
+    // Get paginated results - direct query on clients table (no CTEs needed)
     // Add similarity score or word match count to SELECT when search is active
     const similaritySelect = searchStrategy || '';
+
+    // Build WHERE clause for main query
+    const whereClause = baseWhereConditionsJoined
+      ? `WHERE c.deleted_at IS NULL AND ${baseWhereConditionsJoined}`
+      : `WHERE c.deleted_at IS NULL`;
 
     const mainQuery = `
       SELECT c.*,
@@ -551,7 +431,7 @@ clients.get('/', authMiddleware, async (c) => {
       LEFT JOIN addresses a ON a.client_id = c.id
       LEFT JOIN phone_numbers p ON p.client_id = c.id
       LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
-      ${combinedWhereClause}
+      ${whereClause}
       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay,
         c.touchpoint_number, c.next_touchpoint, c.touchpoint_summary, c.loan_released,
         lt.first_name, lt.last_name
@@ -800,9 +680,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // This will be handled differently in each endpoint
     const baseWhereConditionsJoined = baseWhereConditions.length > 0 ? baseWhereConditions.join(' AND ') : '';
 
-    // Build CTE-based query for proper filter-then-paginate behavior
-    // CTE 1: Get user's assigned areas (for Caravan/Tele filtering)
-    // CTE 2: Calculate touchpoint info for ALL clients (without client filters)
+    // Build optimized query using denormalized columns
+    // CTE only for user_areas (Caravan/Tele filtering)
+    // Touchpoint data accessed directly from clients table columns
 
     // Add area filter conditions for Caravan/Tele roles
     // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
@@ -827,59 +707,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
       )`;
     }
 
-    // No grouped CTEs needed - use direct column calculations
-    const useGroupedCTEs = false;
-      const cteDefinitions: string[] = [];
-      const unionStatements: string[] = [];
-
-      // Tele-specific 5-group scoring with separate CTEs
-      if (includeCallable) {
-        cteDefinitions.push(`callable_group AS (
-          SELECT ti.*, 1 as group_score
-          FROM touchpoint_info ti
-          WHERE ti.next_touchpoint_type = 'Call' AND ti.completed_count < 7 AND NOT ti.loan_released
-        )`);
-        unionStatements.push('SELECT * FROM callable_group');
-      }
-
-      if (includeWaitingForCaravan) {
-        cteDefinitions.push(`waiting_for_caravan_group AS (
-          SELECT ti.*, 2 as group_score
-          FROM touchpoint_info ti
-          WHERE ti.next_touchpoint_type = 'Visit' AND ti.completed_count < 7 AND NOT ti.loan_released
-        )`);
-        unionStatements.push('SELECT * FROM waiting_for_caravan_group');
-      }
-
-      if (includeCompleted) {
-        cteDefinitions.push(`completed_group AS (
-          SELECT ti.*, 3 as group_score
-          FROM touchpoint_info ti
-          WHERE ti.completed_count >= 7 AND NOT ti.loan_released
-        )`);
-        unionStatements.push('SELECT * FROM completed_group');
-      }
-
-      if (includeLoanReleased) {
-        cteDefinitions.push(`loan_released_group AS (
-          SELECT ti.*, 4 as group_score
-          FROM touchpoint_info ti
-          WHERE ti.loan_released
-        )`);
-        unionStatements.push('SELECT * FROM loan_released_group');
-      }
-
-      if (includeNoProgress) {
-        cteDefinitions.push(`no_progress_group AS (
-          SELECT ti.*, 5 as group_score
-          FROM touchpoint_info ti
-          WHERE ti.completed_count = 0
-        )`);
-        unionStatements.push('SELECT * FROM no_progress_group');
-      }
-
-      // No grouped CTEs needed - use direct query
-      // withGroupScoreCTE remains as defined above (only user_areas if needed)
+    // OPTIMIZATION: Using denormalized columns from clients table
+    // No CTEs needed for touchpoint calculations - using direct column access
 
     // Get total count
     const countQuery = `
@@ -894,9 +723,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const countResult = await pool.query(countQuery, baseParams);
     const totalItems = parseInt(countResult.rows[0].count);
 
-    // Get paginated results using CTEs
-    // IMPORTANT: Query FROM assigned_clients_in_location to ensure we only get assigned clients
-    // and the ORDER BY works correctly (callable clients first)
+    // Get paginated results - direct query on clients table (no CTEs needed)
+    // IMPORTANT: Query uses direct column access for optimal performance
     // Add similarity score or word match count to SELECT when search is active
     const similaritySelect = searchStrategy || '';
 
