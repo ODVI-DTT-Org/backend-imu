@@ -33,10 +33,11 @@ interface ClientFilterResult {
 
 function buildClientFilters(
   q: {
-    client_type?: string;
-    product_type?: string;
-    market_type?: string;
-    pension_type?: string;
+    client_type?: string | string[];
+    product_type?: string | string[];
+    market_type?: string | string[];
+    pension_type?: string | string[];
+    loan_type?: string | string[];
     agency_id?: string;
     municipality?: string | string[];
     province?: string | string[];
@@ -47,33 +48,22 @@ function buildClientFilters(
   const params: any[] = [];
   let idx = startIdx;
 
-  if (q.client_type && q.client_type !== 'all') {
-    const values = q.client_type.split(',').map((v: string) => v.trim()).filter(Boolean);
-    conditions.push(`c.client_type = ANY($${idx}::text[])`);
+  function applyMultiFilter(raw: string | string[] | undefined, col: string) {
+    if (!raw) return;
+    const values = Array.isArray(raw)
+      ? raw.filter(v => v && v !== 'all')
+      : raw.split(',').map(v => v.trim()).filter(v => v && v !== 'all');
+    if (values.length === 0) return;
+    conditions.push(`${col} = ANY($${idx}::text[])`);
     params.push(values);
     idx++;
   }
 
-  if (q.product_type && q.product_type !== 'all') {
-    const values = q.product_type.split(',').map((v: string) => v.trim()).filter(Boolean);
-    conditions.push(`c.product_type = ANY($${idx}::text[])`);
-    params.push(values);
-    idx++;
-  }
-
-  if (q.market_type && q.market_type !== 'all') {
-    const values = q.market_type.split(',').map((v: string) => v.trim()).filter(Boolean);
-    conditions.push(`c.market_type = ANY($${idx}::text[])`);
-    params.push(values);
-    idx++;
-  }
-
-  if (q.pension_type && q.pension_type !== 'all') {
-    const values = q.pension_type.split(',').map((v: string) => v.trim()).filter(Boolean);
-    conditions.push(`c.pension_type = ANY($${idx}::text[])`);
-    params.push(values);
-    idx++;
-  }
+  applyMultiFilter(q.client_type, 'c.client_type');
+  applyMultiFilter(q.product_type, 'c.product_type');
+  applyMultiFilter(q.market_type, 'c.market_type');
+  applyMultiFilter(q.pension_type, 'c.pension_type');
+  applyMultiFilter(q.loan_type, 'c.loan_type');
 
   if (q.agency_id) {
     conditions.push(`c.agency_id = $${idx}`);
@@ -288,10 +278,11 @@ clients.get('/', authMiddleware, async (c) => {
     const province = provinceQuery?.length ? provinceQuery : undefined;
 
     const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
-      client_type: c.req.query('client_type'),
-      product_type: c.req.query('product_type'),
-      market_type: c.req.query('market_type'),
-      pension_type: c.req.query('pension_type'),
+      client_type: c.req.queries('client_type')?.length ? c.req.queries('client_type') : undefined,
+      product_type: c.req.queries('product_type')?.length ? c.req.queries('product_type') : undefined,
+      market_type: c.req.queries('market_type')?.length ? c.req.queries('market_type') : undefined,
+      pension_type: c.req.queries('pension_type')?.length ? c.req.queries('pension_type') : undefined,
+      loan_type: c.req.queries('loan_type')?.length ? c.req.queries('loan_type') : undefined,
       agency_id: c.req.query('agency_id'),
       municipality,
       province,
@@ -560,10 +551,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const province = provinceQuery?.length ? provinceQuery : undefined;
 
     const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
-      client_type: c.req.query('client_type'),
-      product_type: c.req.query('product_type'),
-      market_type: c.req.query('market_type'),
-      pension_type: c.req.query('pension_type'),
+      client_type: c.req.queries('client_type')?.length ? c.req.queries('client_type') : undefined,
+      product_type: c.req.queries('product_type')?.length ? c.req.queries('product_type') : undefined,
+      market_type: c.req.queries('market_type')?.length ? c.req.queries('market_type') : undefined,
+      pension_type: c.req.queries('pension_type')?.length ? c.req.queries('pension_type') : undefined,
+      loan_type: c.req.queries('loan_type')?.length ? c.req.queries('loan_type') : undefined,
       agency_id: c.req.query('agency_id'),
       municipality,
       province,
