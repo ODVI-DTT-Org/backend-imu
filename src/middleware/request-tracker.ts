@@ -104,13 +104,21 @@ export function requestTracker() {
     // Collect request body
     let body: any = undefined;
     if (c.req.method !== 'GET' && c.req.method !== 'HEAD' && c.req.method !== 'OPTIONS') {
-      try {
-        const rawBody = await c.req.json().catch(() => null);
-        if (rawBody) {
-          body = sanitizeBody(rawBody);
+      // Check if request is FormData (multipart/form-data)
+      const contentType = c.req.header('content-type') || '';
+
+      if (contentType.includes('multipart/form-data')) {
+        // Don't consume FormData body - it will be parsed by formDataMiddleware
+        body = '[FormData - see parsedFormData in context]';
+      } else {
+        try {
+          const rawBody = await c.req.json().catch(() => null);
+          if (rawBody) {
+            body = sanitizeBody(rawBody);
+          }
+        } catch {
+          // Body not JSON or already consumed
         }
-      } catch {
-        // Body not JSON or already consumed
       }
     }
 

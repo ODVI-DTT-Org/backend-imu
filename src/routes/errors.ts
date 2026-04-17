@@ -250,10 +250,19 @@ errors.post('/', async (c) => {
         details,
         errors,
         stack_trace,
+        component_stack,
+        fingerprint,
+        last_fingerprint_seen_at,
+        occurrences_count,
+        app_version,
+        os_version,
+        platform,
+        device_info,
+        is_synced,
         suggestions,
         documentation_url
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
       )
       RETURNING id
     `;

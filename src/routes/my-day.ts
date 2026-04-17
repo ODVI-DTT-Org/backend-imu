@@ -798,8 +798,29 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
   try {
     const user = c.get('user');
 
-    // Parse multipart form data
-    const body = await c.req.parseBody();
+    // Check content type and parse accordingly
+    let body: Record<string, string | File>;
+    const contentType = c.req.header('content-type') || '';
+
+    if (contentType.includes('multipart/form-data')) {
+      // Try to use pre-parsed data from middleware
+      const parsedData = c.get('parsedFormData' as any) as Record<string, string | File>;
+
+      if (parsedData) {
+        body = parsedData;
+      } else {
+        // Fallback: Try Hono's parseBody() for FormData
+        try {
+          body = await c.req.parseBody();
+        } catch (parseError) {
+          console.error('[Submit Visit] FormData parse error:', parseError.message);
+          throw new Error('Failed to parse FormData request. Please try sending as JSON with base64 encoded photo.');
+        }
+      }
+    } else {
+      // Regular JSON parsing
+      body = await c.req.json();
+    }
 
     // Extract form fields
     const clientId = body['client_id'] as string;
@@ -820,6 +841,10 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     // Extract files
     const photoFile = body['photo'] as File | undefined;
     const audioFile = body['audio'] as File | undefined;
+
+    // Extract base64 encoded photo (alternative to FormData file upload)
+    const photoBase64 = body['photo_base64'] as string | undefined;
+    const photoFilename = body['photo_filename'] as string | undefined;
 
     // Validate required fields
     if (!clientId || !touchpointNumberStr || !type || !reason) {
@@ -862,6 +887,54 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     // Parse optional numeric fields
     const latitude = latitudeStr ? parseFloat(latitudeStr) : undefined;
     const longitude = longitudeStr ? parseFloat(longitudeStr) : undefined;
+
+    // Handle base64 encoded photo (alternative to FormData file upload)
+    if (photoBase64 && photoFilename) {
+      try {
+        console.log('[Submit Visit] Processing base64 encoded photo...');
+
+        // Decode base64 to buffer
+        const photoBuffer = Buffer.from(photoBase64, 'base64');
+        uploadedPhotoHash = calculateFileHash(photoBuffer);
+
+        // Check for duplicate file (same content already uploaded)
+        const duplicateCheck = await pool.query(
+          'SELECT url, storage_key FROM files WHERE hash = $1 AND entity_type = $2 ORDER BY created_at DESC LIMIT 1',
+          [uploadedPhotoHash, 'touchpoint']
+        );
+
+        if (duplicateCheck.rows.length > 0) {
+          // Use existing file instead of uploading again
+          uploadedPhotoUrl = duplicateCheck.rows[0].url;
+          uploadedPhotoKey = duplicateCheck.rows[0].storage_key;
+          console.log(`[File Deduplication] Reusing existing base64 photo: ${uploadedPhotoUrl}`);
+        } else {
+          // Upload new file
+          const photoResult = await storageService.upload({
+            file: photoBuffer,
+            filename: photoFilename,
+            mimetype: 'image/png', // Default to PNG for base64 uploads
+            folder: 'touchpoint_photo',
+            maxSize: MAX_PHOTO_SIZE,
+            allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+          });
+
+          if (!photoResult.success || !photoResult.url) {
+            throw new AppError('PHOTO_UPLOAD_FAILED', `Photo upload failed: ${photoResult.error || 'Unknown error'}`, 400)
+              .addDetail('requestId', requestId)
+              .addDetail('filename', photoFilename);
+          }
+
+          uploadedPhotoUrl = photoResult.url;
+          uploadedPhotoKey = photoResult.key;
+          console.log(`[Submit Visit] Base64 photo uploaded successfully: ${uploadedPhotoUrl}`);
+        }
+      } catch (error: any) {
+        console.error('[Submit Visit] Base64 photo processing error:', error);
+        throw new AppError('PHOTO_PROCESSING_FAILED', `Failed to process base64 photo: ${error.message}`, 400)
+          .addDetail('requestId', requestId);
+      }
+    }
 
     // Handle photo upload with deduplication
     if (photoFile && photoFile instanceof File) {
@@ -972,22 +1045,44 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
           WHERE id = $6 RETURNING *`,
           [
             touchpointNumber, type, reason,
-            uploadedPhotoUrl || existing.rows[0].visit_id,
-            uploadedAudioUrl || existing.rows[0].call_id,
+            existing.rows[0].visit_id, // Keep existing visit_id
+            existing.rows[0].call_id,  // Keep existing call_id
             existing.rows[0].id
           ]
         );
       } else {
+        // Auto-create visit record for all new touchpoints
+        console.log('[Submit Visit] Auto-creating visit record for touchpoint');
+
+        // Create a visit record from the touchpoint data
+        const visitResult = await pool.query(
+          `INSERT INTO visits (
+            client_id, user_id, type, reason, status, notes,
+            address, latitude, longitude, photo_url
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+          ) RETURNING *`,
+          [
+            clientId, user.sub, 'regular_visit',
+            reason, status || 'Interested', notes,
+            address, latitude, longitude,
+            uploadedPhotoUrl || '' // Use uploaded photo URL or empty string
+          ]
+        );
+
+        const visitId = visitResult.rows[0].id;
+        console.log('[Submit Visit] Auto-created visit record:', visitId);
+
         // Create new touchpoint using CURRENT_DATE
         result = await pool.query(
           `INSERT INTO touchpoints (
             id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id, created_at
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, NULL, NULL, NOW()
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW()
           ) RETURNING *`,
           [
             clientId, user.sub, touchpointNumber, type,
-            reason
+            reason, visitId, null
           ]
         );
       }
@@ -1119,11 +1214,19 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
       }, 404);
     }
 
-    console.error('[Submit Visit] Error:', {
+    // ENHANCED ERROR LOGGING FOR DEBUGGING
+    console.error('[Submit Visit] DETAILED ERROR:', {
       message: error.message,
-      code: error.code || 'INTERNAL_ERROR',
+      name: error.name,
+      code: error.code,
       requestId,
       stack: error.stack,
+      // Include full error details for debugging
+      errorDetails: {
+        ...error,
+        // Circular reference protection
+        cause: error.cause,
+      },
     });
 
     return c.json({
@@ -1131,6 +1234,9 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
       message: 'An error occurred while submitting your touchpoint. Please try again.',
       code: 'INTERNAL_ERROR',
       requestId,
+      // FOR DEBUGGING: Include actual error message
+      debugMessage: error.message,
+      debugName: error.name,
     }, 500);
   }
 });
@@ -1223,8 +1329,29 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
   try {
     const user = c.get('user');
 
-    // Parse multipart form data
-    const body = await c.req.parseBody();
+    // Check content type and parse accordingly
+    let body: Record<string, string | File>;
+    const contentType = c.req.header('content-type') || '';
+
+    if (contentType.includes('multipart/form-data')) {
+      // Try to use pre-parsed data from middleware
+      const parsedData = c.get('parsedFormData' as any) as Record<string, string | File>;
+
+      if (parsedData) {
+        body = parsedData;
+      } else {
+        // Fallback: Try Hono's parseBody() for FormData
+        try {
+          body = await c.req.parseBody();
+        } catch (parseError) {
+          console.error('[Submit Visit] FormData parse error:', parseError.message);
+          throw new Error('Failed to parse FormData request. Please try sending as JSON with base64 encoded photo.');
+        }
+      }
+    } else {
+      // Regular JSON parsing
+      body = await c.req.json();
+    }
 
     // Extract form fields
     const clientId = body['client_id'] as string;
@@ -1246,6 +1373,10 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     // Extract files
     const photoFile = body['photo'] as File | undefined;
     const audioFile = body['audio'] as File | undefined;
+
+    // Extract base64 encoded photo (alternative to FormData file upload)
+    const photoBase64 = body['photo_base64'] as string | undefined;
+    const photoFilename = body['photo_filename'] as string | undefined;
 
     // Validate required fields
     if (!clientId || !touchpointNumberStr || !type || !reason) {
@@ -1288,6 +1419,54 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     // Parse optional numeric fields
     const latitude = latitudeStr ? parseFloat(latitudeStr) : undefined;
     const longitude = longitudeStr ? parseFloat(longitudeStr) : undefined;
+
+    // Handle base64 encoded photo (alternative to FormData file upload)
+    if (photoBase64 && photoFilename) {
+      try {
+        console.log('[Submit Visit] Processing base64 encoded photo...');
+
+        // Decode base64 to buffer
+        const photoBuffer = Buffer.from(photoBase64, 'base64');
+        uploadedPhotoHash = calculateFileHash(photoBuffer);
+
+        // Check for duplicate file (same content already uploaded)
+        const duplicateCheck = await pool.query(
+          'SELECT url, storage_key FROM files WHERE hash = $1 AND entity_type = $2 ORDER BY created_at DESC LIMIT 1',
+          [uploadedPhotoHash, 'touchpoint']
+        );
+
+        if (duplicateCheck.rows.length > 0) {
+          // Use existing file instead of uploading again
+          uploadedPhotoUrl = duplicateCheck.rows[0].url;
+          uploadedPhotoKey = duplicateCheck.rows[0].storage_key;
+          console.log(`[File Deduplication] Reusing existing base64 photo: ${uploadedPhotoUrl}`);
+        } else {
+          // Upload new file
+          const photoResult = await storageService.upload({
+            file: photoBuffer,
+            filename: photoFilename,
+            mimetype: 'image/png', // Default to PNG for base64 uploads
+            folder: 'touchpoint_photo',
+            maxSize: MAX_PHOTO_SIZE,
+            allowedMimeTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+          });
+
+          if (!photoResult.success || !photoResult.url) {
+            throw new AppError('PHOTO_UPLOAD_FAILED', `Photo upload failed: ${photoResult.error || 'Unknown error'}`, 400)
+              .addDetail('requestId', requestId)
+              .addDetail('filename', photoFilename);
+          }
+
+          uploadedPhotoUrl = photoResult.url;
+          uploadedPhotoKey = photoResult.key;
+          console.log(`[Submit Visit] Base64 photo uploaded successfully: ${uploadedPhotoUrl}`);
+        }
+      } catch (error: any) {
+        console.error('[Submit Visit] Base64 photo processing error:', error);
+        throw new AppError('PHOTO_PROCESSING_FAILED', `Failed to process base64 photo: ${error.message}`, 400)
+          .addDetail('requestId', requestId);
+      }
+    }
 
     // Handle photo upload with deduplication
     if (photoFile && photoFile instanceof File) {
@@ -1393,22 +1572,44 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
           WHERE id = $6 RETURNING *`,
           [
             touchpointNumber, type, reason,
-            uploadedPhotoUrl || existing.rows[0].visit_id,
-            uploadedAudioUrl || existing.rows[0].call_id,
+            existing.rows[0].visit_id, // Keep existing visit_id
+            existing.rows[0].call_id,  // Keep existing call_id
             existing.rows[0].id
           ]
         );
       } else {
+        // Auto-create visit record for all new touchpoints
+        console.log('[Submit Visit] Auto-creating visit record for touchpoint');
+
+        // Create a visit record from the touchpoint data
+        const visitResult = await pool.query(
+          `INSERT INTO visits (
+            client_id, user_id, type, reason, status, notes,
+            address, latitude, longitude, photo_url
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+          ) RETURNING *`,
+          [
+            clientId, user.sub, 'regular_visit',
+            reason, status || 'Interested', notes,
+            address, latitude, longitude,
+            uploadedPhotoUrl || '' // Use uploaded photo URL or empty string
+          ]
+        );
+
+        const visitId = visitResult.rows[0].id;
+        console.log('[Submit Visit] Auto-created visit record:', visitId);
+
         // Create new touchpoint using CURRENT_DATE
         result = await pool.query(
           `INSERT INTO touchpoints (
             id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id, created_at
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, NULL, NULL, NOW()
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, NOW()
           ) RETURNING *`,
           [
             clientId, user.sub, touchpointNumber, type,
-            reason
+            reason, visitId, null
           ]
         );
       }

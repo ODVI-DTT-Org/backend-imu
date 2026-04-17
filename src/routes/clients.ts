@@ -150,6 +150,7 @@ function mapRowToClient(row: Record<string, any>) {
     touchpoint_summary: row.touchpoint_summary || [],
     touchpoint_number: row.touchpoint_number || 0,
     next_touchpoint: row.next_touchpoint || null,
+    next_touchpoint_number: row.next_touchpoint_number || null,
     // Legacy PCNICMS fields
     ext_name: row.ext_name,
     fullname: row.fullname,
@@ -419,12 +420,13 @@ clients.get('/', authMiddleware, async (c) => {
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        -- Calculate completed touchpoints from touchpoint_number
+        -- touchpoint_number already stores the actual count (0-7), not next number
+        COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
+        -- Calculate next touchpoint number (1-7 or null if complete)
         CASE
-          WHEN c.touchpoint_number IS NULL THEN 0
-          WHEN c.touchpoint_number > 1 THEN c.touchpoint_number - 1
-          ELSE 0
-        END as completed_touchpoints,
+          WHEN c.touchpoint_number >= 7 THEN NULL
+          ELSE c.touchpoint_number + 1
+        END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
         (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
@@ -449,7 +451,8 @@ clients.get('/', authMiddleware, async (c) => {
 
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
-      const nextTouchpointNumber = completedCount >= 7 ? null : completedCount + 1;
+      // Use next_touchpoint_number from SQL query instead of calculating
+      const nextTouchpointNumber = row.next_touchpoint_number;
       const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
       const loanReleased = row.loan_released || false;
 
@@ -745,12 +748,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
         COALESCE(
           json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
         ) as phone_numbers,
-        -- Calculate completed touchpoints from touchpoint_number
-        CASE
-          WHEN c.touchpoint_number IS NULL THEN 0
-          WHEN c.touchpoint_number > 1 THEN c.touchpoint_number - 1
-          ELSE 0
-        END as completed_touchpoints,
+        -- touchpoint_number already stores the actual count (0-7), not next number
+        COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
         (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,

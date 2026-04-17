@@ -35,11 +35,29 @@ visits.post('/', authMiddleware, async (c) => {
     const contentType = c.req.header('content-type') || '';
     console.log('[Visits] Content-Type:', contentType);
 
+    // Log all headers
+    const headers: Record<string, string> = {};
+    c.req.raw.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    console.log('[Visits] All headers:', JSON.stringify(headers, null, 2));
+
+    // Check raw header value
+    const rawContentType = c.req.raw.headers.get('content-type');
+    console.log('[Visits] Raw Content-Type:', rawContentType);
+
     if (contentType.includes('multipart/form-data')) {
       console.log('[Visits] Parsing FormData request...');
 
-      // Parse FormData to extract file and visit data
-      const body = await c.req.parseBody();
+      // Use pre-parsed data from middleware
+      const body = c.get('parsedFormData' as any) as Record<string, string | File>;
+
+      if (!body) {
+        console.error('[Visits] No parsed FormData found in context');
+        return c.json({ success: false, message: 'Failed to parse FormData' }, 500);
+      }
+
+      console.log('[Visits] FormData parsed successfully with busboy');
       const file = body['photo'];
 
       console.log('[Visits] FormData parsed, file present:', !!file);
