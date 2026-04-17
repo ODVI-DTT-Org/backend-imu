@@ -813,7 +813,8 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         try {
           body = await c.req.parseBody();
         } catch (parseError) {
-          console.error('[Submit Visit] FormData parse error:', parseError.message);
+          const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown error';
+          console.error('[Submit Visit] FormData parse error:', errorMessage);
           throw new Error('Failed to parse FormData request. Please try sending as JSON with base64 encoded photo.');
         }
       }
@@ -1344,7 +1345,8 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
         try {
           body = await c.req.parseBody();
         } catch (parseError) {
-          console.error('[Submit Visit] FormData parse error:', parseError.message);
+          const errorMessage = parseError instanceof Error ? parseError.message : 'Unknown error';
+          console.error('[Submit Visit] FormData parse error:', errorMessage);
           throw new Error('Failed to parse FormData request. Please try sending as JSON with base64 encoded photo.');
         }
       }
