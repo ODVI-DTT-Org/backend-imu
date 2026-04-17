@@ -103,7 +103,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         'itinerary' as type, i.id, i.created_at as date,
         c.first_name || ' ' || c.last_name as client_name
        FROM itineraries i
-       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
+       JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
        WHERE i.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 'i.user_id')}
        ORDER BY date DESC
        LIMIT 10`,
