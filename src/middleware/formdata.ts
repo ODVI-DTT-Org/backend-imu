@@ -79,7 +79,7 @@ export async function formDataMiddleware(c: Context, next: Next) {
       // Store parsed data in context
       c.set('parsedFormData' as any, fields);
       console.log('[FormData Middleware] Stored parsedFormData in context with', Object.keys(fields).length, 'fields');
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('[FormData Middleware] Error parsing FormData:', error);
       // Don't throw - let the route handle it
     }
