@@ -1228,29 +1228,50 @@ function mapRowToApproval(row: Record<string, any>) {
   };
 }
 
-// DELETE /api/clients/:id - Delete client (soft delete, admin only)
+// DELETE /api/clients/:id - Delete client (soft delete; approval required for tele/caravan)
 clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), auditMiddleware('client'), async (c) => {
+  const dbClient = await pool.connect();
   try {
+    await dbClient.query('BEGIN');
+
     const user = c.get('user');
     const id = c.req.param('id');
 
-    // Soft delete: Only admin users can delete clients
-    if (user.role !== 'admin') {
-      throw new AuthorizationError('Only administrators can delete clients');
-    }
-
     // Check if client exists and is not already deleted
-    const existingResult = await pool.query('SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
+    const existingResult = await dbClient.query('SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (existingResult.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
       throw new NotFoundError('Client');
     }
 
-    // Soft delete: Set deleted_at timestamp and deleted_by user instead of deleting the record
-    await pool.query('UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2', [user.sub, id]);
+    // Tele/Caravan: submit for approval instead of deleting directly
+    if (user.role === 'tele' || user.role === 'caravan') {
+      const approvalResult = await dbClient.query(
+        `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending')
+         RETURNING *`,
+        ['client_delete', id, user.sub, user.role, 'Delete Client Request', null]
+      );
+
+      await dbClient.query('COMMIT');
+
+      return c.json({
+        message: 'Client deletion submitted for approval',
+        approval: mapRowToApproval(approvalResult.rows[0]),
+        requires_approval: true
+      });
+    }
+
+    // Admin: soft delete immediately
+    await dbClient.query('UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2', [user.sub, id]);
+    await dbClient.query('COMMIT');
     return c.json({ message: 'Client deleted successfully' });
   } catch (error) {
+    await dbClient.query('ROLLBACK');
     console.error('Delete client error:', error);
-    throw new Error();
+    throw error;
+  } finally {
+    dbClient.release();
   }
 });
 

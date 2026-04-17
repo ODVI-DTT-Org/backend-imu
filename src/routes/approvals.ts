@@ -560,6 +560,21 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       }
     }
 
+    // For client_delete approvals, soft-delete the client
+    if (approval.type === 'client_delete') {
+      try {
+        await client.query(
+          'UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2 AND deleted_at IS NULL',
+          [approval.user_id, approval.client_id]
+        );
+        console.log(`Soft-deleted client ${approval.client_id} from approval`);
+      } catch (deleteError) {
+        console.error('Failed to soft-delete client from approval:', deleteError);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to delete client from approval');
+      }
+    }
+
     // For client edit approvals, apply the changes to the client
     let clientChanges: Record<string, any> | null = null;
     if (approval.type === 'client' && approval.reason === 'Client Edit Request') {
