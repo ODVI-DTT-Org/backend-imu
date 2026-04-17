@@ -48,26 +48,30 @@ function buildClientFilters(
   let idx = startIdx;
 
   if (q.client_type && q.client_type !== 'all') {
-    conditions.push(`c.client_type = $${idx}`);
-    params.push(q.client_type);
+    const values = q.client_type.split(',').map((v: string) => v.trim()).filter(Boolean);
+    conditions.push(`c.client_type = ANY($${idx}::text[])`);
+    params.push(values);
     idx++;
   }
 
   if (q.product_type && q.product_type !== 'all') {
-    conditions.push(`c.product_type = $${idx}`);
-    params.push(q.product_type);
+    const values = q.product_type.split(',').map((v: string) => v.trim()).filter(Boolean);
+    conditions.push(`c.product_type = ANY($${idx}::text[])`);
+    params.push(values);
     idx++;
   }
 
   if (q.market_type && q.market_type !== 'all') {
-    conditions.push(`c.market_type = $${idx}`);
-    params.push(q.market_type);
+    const values = q.market_type.split(',').map((v: string) => v.trim()).filter(Boolean);
+    conditions.push(`c.market_type = ANY($${idx}::text[])`);
+    params.push(values);
     idx++;
   }
 
   if (q.pension_type && q.pension_type !== 'all') {
-    conditions.push(`c.pension_type = $${idx}`);
-    params.push(q.pension_type);
+    const values = q.pension_type.split(',').map((v: string) => v.trim()).filter(Boolean);
+    conditions.push(`c.pension_type = ANY($${idx}::text[])`);
+    params.push(values);
     idx++;
   }
 
@@ -1413,8 +1417,9 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
     conditions.push(`c.deleted_at IS NULL`);
 
     if (clientType && clientType !== 'all') {
-      conditions.push(`c.client_type = $${paramIndex}`);
-      params.push(clientType);
+      const values = clientType.split(',').map((v: string) => v.trim()).filter(Boolean);
+      conditions.push(`c.client_type = ANY($${paramIndex}::text[])`);
+      params.push(values);
       paramIndex++;
     }
 
