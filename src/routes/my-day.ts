@@ -1059,15 +1059,16 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         const visitResult = await pool.query(
           `INSERT INTO visits (
             client_id, user_id, type, reason, status, notes,
-            address, latitude, longitude, photo_url
+            address, latitude, longitude, photo_url, time_in, time_out
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
           ) RETURNING *`,
           [
             clientId, user.sub, 'regular_visit',
             reason, status || 'Interested', notes,
             address, latitude, longitude,
-            uploadedPhotoUrl || '' // Use uploaded photo URL or empty string
+            uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
+            timeArrival || null, timeDeparture || null
           ]
         );
 
@@ -1587,15 +1588,16 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
         const visitResult = await pool.query(
           `INSERT INTO visits (
             client_id, user_id, type, reason, status, notes,
-            address, latitude, longitude, photo_url
+            address, latitude, longitude, photo_url, time_in, time_out
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
           ) RETURNING *`,
           [
             clientId, user.sub, 'regular_visit',
             reason, status || 'Interested', notes,
             address, latitude, longitude,
-            uploadedPhotoUrl || '' // Use uploaded photo URL or empty string
+            uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
+            timeArrival || null, timeDeparture || null
           ]
         );
 

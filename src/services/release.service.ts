@@ -6,13 +6,14 @@ export const createReleaseSchema = z.object({
   client_id: z.string().uuid('Invalid client ID format'),
   user_id: z.string().uuid('Invalid user ID format'),
   visit_id: z.string().uuid('Invalid visit ID format'),
-  product_type: z.enum(['PUSU', 'LIKA', 'SUB2K'], {
-    errorMap: () => ({ message: 'Product type must be one of: PUSU, LIKA, SUB2K' })
+  product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP'], {
+    errorMap: () => ({ message: 'Product type must be one of: BFP_ACTIVE, BFP_PENSION, PNP_PENSION, NAPOLCOM, BFP_STP' })
   }),
   loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM'], {
     errorMap: () => ({ message: 'Loan type must be one of: NEW, ADDITIONAL, RENEWAL, PRETERM' })
   }),
-  amount: z.number().positive('Amount must be positive').max(999999999.99, 'Amount exceeds maximum'),
+  amount: z.number().min(0, 'Amount must be non-negative').max(999999999.99, 'Amount exceeds maximum').default(0),
+  udi_number: z.number().int().positive().optional(),
   approval_notes: z.string().max(2000).optional(),
   status: z.enum(['pending', 'approved', 'rejected', 'disbursed']).default('pending'),
 });
@@ -27,9 +28,10 @@ export interface Release {
   client_id: string;
   user_id: string;
   visit_id: string;
-  product_type: 'PUSU' | 'LIKA' | 'SUB2K';
+  product_type: 'BFP_ACTIVE' | 'BFP_PENSION' | 'PNP_PENSION' | 'NAPOLCOM' | 'BFP_STP';
   loan_type: 'NEW' | 'ADDITIONAL' | 'RENEWAL' | 'PRETERM';
   amount: number;
+  udi_number?: number;
   approval_notes?: string;
   status: 'pending' | 'approved' | 'rejected' | 'disbursed';
   approved_by?: string;  // User ID of approver
@@ -43,6 +45,7 @@ const UPDATEABLE_RELEASE_FIELDS = [
   'product_type',
   'loan_type',
   'amount',
+  'udi_number',
   'approval_notes',
   'status',
   'approved_by',
@@ -91,11 +94,11 @@ export const releaseService = {
     const validated = createReleaseSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO releases (client_id, user_id, visit_id, product_type, loan_type, amount, approval_notes, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO releases (client_id, user_id, visit_id, product_type, loan_type, amount, udi_number, approval_notes, status)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [validated.client_id, validated.user_id, validated.visit_id, validated.product_type,
-       validated.loan_type, validated.amount, validated.approval_notes, validated.status]
+       validated.loan_type, validated.amount, validated.udi_number ?? null, validated.approval_notes, validated.status]
     );
     return result.rows[0];
   },
