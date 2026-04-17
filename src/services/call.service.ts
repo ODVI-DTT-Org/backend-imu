@@ -11,6 +11,7 @@ export const createCallSchema = z.object({
   notes: z.string().max(5000).optional(),
   reason: z.string().max(500).optional(),
   status: z.string().max(100).optional(),
+  photo_url: z.string().max(2048).optional().nullable(),
 });
 
 export const updateCallSchema = createCallSchema.partial();
@@ -25,6 +26,7 @@ export interface Call {
   notes?: string;
   reason?: string;
   status?: string;
+  photo_url?: string | null;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -36,6 +38,7 @@ const UPDATEABLE_CALL_FIELDS = [
   'notes',
   'reason',
   'status',
+  'photo_url',
 ];
 
 export const callService = {
@@ -68,11 +71,11 @@ export const callService = {
     const validated = createCallSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, notes, reason, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, notes, reason, status, photo_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        RETURNING *`,
       [validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
-       validated.duration, validated.notes, validated.reason, validated.status]
+       validated.duration, validated.notes, validated.reason, validated.status, validated.photo_url ?? null]
     );
     return result.rows[0];
   },
