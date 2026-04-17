@@ -340,7 +340,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     const clientIds = itinerariesResult.rows.map((row: any) => row.client_id);
     const addressesResult = clientIds.length > 0 ? await pool.query(
       `SELECT a.client_id, a.id, a.street_address, a.postal_code, a.is_primary,
-              p.region, p.province, p.municipality, p.barangay
+              p.region, p.province, p.mun_city as municipality, p.barangay
        FROM addresses a
        LEFT JOIN psgc p ON a.psgc_id = p.id
        WHERE a.client_id = ANY($1) AND a.deleted_at IS NULL

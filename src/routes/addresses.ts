@@ -148,7 +148,7 @@ addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
 
   // I23: Optimize N+1 query - use window function for single query with count
   const result = await pool.query(
-    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay,
+    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.mun_city as municipality, p.barangay,
             COUNT(*) OVER() as total_count
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
@@ -256,7 +256,7 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
 
   // Fetch with PSGC data
   const fullResult = await pool.query(
-    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay
+    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.mun_city as municipality, p.barangay
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1`,
@@ -289,7 +289,7 @@ addresses.get('/clients/:id/addresses/:addressId', authMiddleware, async (c) => 
   }
 
   const result = await pool.query(
-    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay
+    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.mun_city as municipality, p.barangay
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1 AND a.client_id = $2 AND a.deleted_at IS NULL`,
@@ -373,7 +373,7 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
 
   // Fetch with PSGC data
   const fullResult = await pool.query(
-    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay
+    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.mun_city as municipality, p.barangay
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1`,
@@ -479,7 +479,7 @@ addresses.patch('/clients/:id/addresses/:addressId/primary', authMiddleware, aud
 
   // Fetch with PSGC data
   const fullResult = await pool.query(
-    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.municipality, p.barangay
+    `SELECT a.*, p.code as psgc_code, p.region, p.province, p.mun_city as municipality, p.barangay
      FROM addresses a
      LEFT JOIN psgc p ON a.psgc_id = p.id
      WHERE a.id = $1`,
