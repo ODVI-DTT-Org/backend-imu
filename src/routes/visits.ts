@@ -16,15 +16,6 @@ visits.get('/', authMiddleware, async (c) => {
   return c.json(visits);
 });
 
-// Get visit by ID
-visits.get('/:id', authMiddleware, async (c) => {
-  const id = c.req.param('id');
-  if (!id) return c.json({ error: 'Invalid ID' }, 400);
-  const visit = await visitService.findById(id);
-  if (!visit) return c.json({ error: 'Visit not found' }, 404);
-  return c.json(visit);
-});
-
 // Create visit (supports FormData with photo upload or JSON)
 visits.post('/', authMiddleware, async (c) => {
   try {
@@ -396,6 +387,15 @@ visits.get('/admin/export', authMiddleware, requireRole('admin'), async (c) => {
   } finally {
     client.release();
   }
+});
+
+// Get visit by ID (must be after /admin and /admin/export to avoid route shadowing)
+visits.get('/:id', authMiddleware, async (c) => {
+  const id = c.req.param('id');
+  if (!id) return c.json({ error: 'Invalid ID' }, 400);
+  const visit = await visitService.findById(id);
+  if (!visit) return c.json({ error: 'Visit not found' }, 404);
+  return c.json(visit);
 });
 
 export default visits;
