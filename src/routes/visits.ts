@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { visitService, createVisitSchema, updateVisitSchema } from '../services/visit.service.js';
 import { ValidationError } from '../errors/index.js';
 import { storageService } from '../services/storage.js';
+import { pool } from '../db/index.js';
 
 const visits = new Hono();
 
@@ -189,6 +190,212 @@ visits.delete('/:id', authMiddleware, async (c) => {
   if (!id) return c.json({ error: 'Invalid ID' }, 400);
   await visitService.delete(id);
   return c.json({ success: true });
+});
+
+// Admin: paginated visits list with full JOINs
+visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
+  const client = await pool.connect();
+  try {
+    const q = c.req.query();
+    const page = Math.max(1, parseInt(q.page || '1'));
+    const perPage = Math.min(100, Math.max(1, parseInt(q.per_page || '20')));
+    const offset = (page - 1) * perPage;
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    if (q.search) {
+      conditions.push(`(c.first_name ILIKE $${idx} OR c.last_name ILIKE $${idx} OR c.middle_name ILIKE $${idx})`);
+      params.push(`%${q.search}%`);
+      idx++;
+    }
+    if (q.date_from) {
+      conditions.push(`COALESCE(v.time_in, v.created_at) >= $${idx}`);
+      params.push(q.date_from);
+      idx++;
+    }
+    if (q.date_to) {
+      conditions.push(`COALESCE(v.time_in, v.created_at) <= $${idx}`);
+      params.push(q.date_to);
+      idx++;
+    }
+    if (q.status && q.status !== 'all') {
+      conditions.push(`v.status = $${idx}`);
+      params.push(q.status);
+      idx++;
+    }
+    if (q.agent_id && q.agent_id !== 'all') {
+      const agentIds = Array.isArray(q.agent_id) ? q.agent_id : [q.agent_id];
+      conditions.push(`v.user_id = ANY($${idx})`);
+      params.push(agentIds);
+      idx++;
+    }
+    if (q.visit_type && q.visit_type !== 'all') {
+      const types = Array.isArray(q.visit_type) ? q.visit_type : [q.visit_type];
+      const typeClauses = types.map((t: string) => {
+        if (t === 'touchpoint') return 'tp.id IS NOT NULL';
+        if (t === 'release_loan') return '(r.id IS NOT NULL AND tp.id IS NULL)';
+        if (t === 'regular_visit') return '(tp.id IS NULL AND r.id IS NULL)';
+        return null;
+      }).filter(Boolean);
+      if (typeClauses.length) conditions.push(`(${typeClauses.join(' OR ')})`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const baseQuery = `
+      FROM visits v
+      JOIN clients c ON c.id = v.client_id
+      JOIN users u ON u.id = v.user_id
+      LEFT JOIN touchpoints tp ON tp.visit_id = v.id
+      LEFT JOIN releases r ON r.visit_id = v.id
+      ${where}
+    `;
+
+    const countResult = await client.query(`SELECT COUNT(*) ${baseQuery}`, params);
+    const totalItems = parseInt(countResult.rows[0].count);
+    const totalPages = Math.ceil(totalItems / perPage);
+
+    const dataResult = await client.query(`
+      SELECT
+        v.id,
+        v.client_id,
+        (c.first_name || ' ' || c.last_name) AS client_name,
+        COALESCE(v.time_in, v.created_at) AS visit_date,
+        CASE
+          WHEN tp.id IS NOT NULL THEN 'touchpoint'
+          WHEN r.id IS NOT NULL THEN 'release_loan'
+          ELSE 'regular_visit'
+        END AS visit_type,
+        tp.id AS touchpoint_id,
+        tp.touchpoint_number,
+        r.id AS release_id,
+        r.product_type,
+        r.loan_type,
+        r.amount AS udi_amount,
+        v.user_id AS agent_id,
+        (u.first_name || ' ' || u.last_name) AS agent_name,
+        v.status,
+        v.reason,
+        v.notes,
+        v.photo_url,
+        v.address,
+        v.latitude,
+        v.longitude,
+        v.time_in,
+        v.time_out
+      ${baseQuery}
+      ORDER BY COALESCE(v.time_in, v.created_at) DESC
+      LIMIT $${idx} OFFSET $${idx + 1}
+    `, [...params, perPage, offset]);
+
+    return c.json({
+      items: dataResult.rows,
+      page,
+      perPage,
+      totalItems,
+      totalPages,
+    });
+  } finally {
+    client.release();
+  }
+});
+
+// Admin: CSV export (all matching records, no pagination)
+visits.get('/admin/export', authMiddleware, requireRole('admin'), async (c) => {
+  const client = await pool.connect();
+  try {
+    const q = c.req.query();
+
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    if (q.search) {
+      conditions.push(`(c.first_name ILIKE $${idx} OR c.last_name ILIKE $${idx} OR c.middle_name ILIKE $${idx})`);
+      params.push(`%${q.search}%`);
+      idx++;
+    }
+    if (q.date_from) {
+      conditions.push(`COALESCE(v.time_in, v.created_at) >= $${idx}`);
+      params.push(q.date_from);
+      idx++;
+    }
+    if (q.date_to) {
+      conditions.push(`COALESCE(v.time_in, v.created_at) <= $${idx}`);
+      params.push(q.date_to);
+      idx++;
+    }
+    if (q.status && q.status !== 'all') {
+      conditions.push(`v.status = $${idx}`);
+      params.push(q.status);
+      idx++;
+    }
+    if (q.agent_id && q.agent_id !== 'all') {
+      const agentIds = Array.isArray(q.agent_id) ? q.agent_id : [q.agent_id];
+      conditions.push(`v.user_id = ANY($${idx})`);
+      params.push(agentIds);
+      idx++;
+    }
+    if (q.visit_type && q.visit_type !== 'all') {
+      const types = Array.isArray(q.visit_type) ? q.visit_type : [q.visit_type];
+      const typeClauses = types.map((t: string) => {
+        if (t === 'touchpoint') return 'tp.id IS NOT NULL';
+        if (t === 'release_loan') return '(r.id IS NOT NULL AND tp.id IS NULL)';
+        if (t === 'regular_visit') return '(tp.id IS NULL AND r.id IS NULL)';
+        return null;
+      }).filter(Boolean);
+      if (typeClauses.length) conditions.push(`(${typeClauses.join(' OR ')})`);
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    const result = await client.query(`
+      SELECT
+        (c.first_name || ' ' || c.last_name) AS "Client Name",
+        TO_CHAR(COALESCE(v.time_in, v.created_at), 'YYYY-MM-DD HH24:MI') AS "Visit Date",
+        CASE
+          WHEN tp.id IS NOT NULL THEN 'Touchpoint'
+          WHEN r.id IS NOT NULL THEN 'Release Loan'
+          ELSE 'Regular Visit'
+        END AS "Visit Type",
+        COALESCE(tp.touchpoint_number::text, '') AS "Touchpoint #",
+        COALESCE(r.product_type, '') AS "Product Type",
+        COALESCE(r.loan_type, '') AS "Loan Type",
+        COALESCE(r.amount::text, '') AS "UDI Amount",
+        (u.first_name || ' ' || u.last_name) AS "Agent",
+        COALESCE(v.status, '') AS "Status",
+        COALESCE(v.reason, '') AS "Reason"
+      FROM visits v
+      JOIN clients c ON c.id = v.client_id
+      JOIN users u ON u.id = v.user_id
+      LEFT JOIN touchpoints tp ON tp.visit_id = v.id
+      LEFT JOIN releases r ON r.visit_id = v.id
+      ${where}
+      ORDER BY COALESCE(v.time_in, v.created_at) DESC
+    `, params);
+
+    const headers = ['Client Name', 'Visit Date', 'Visit Type', 'Touchpoint #', 'Product Type', 'Loan Type', 'UDI Amount', 'Agent', 'Status', 'Reason'];
+    const csvRows = [
+      headers.join(','),
+      ...result.rows.map((row: any) =>
+        headers.map(h => {
+          const val = String(row[h] ?? '');
+          return val.includes(',') || val.includes('"') || val.includes('\n')
+            ? `"${val.replace(/"/g, '""')}"`
+            : val;
+        }).join(',')
+      )
+    ];
+
+    const filename = `visits-export-${new Date().toISOString().slice(0, 10)}.csv`;
+    c.header('Content-Type', 'text/csv');
+    c.header('Content-Disposition', `attachment; filename="${filename}"`);
+    return c.text(csvRows.join('\n'));
+  } finally {
+    client.release();
+  }
 });
 
 export default visits;
