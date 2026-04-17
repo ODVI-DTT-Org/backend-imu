@@ -25,6 +25,81 @@ function parseLoanType(value: any): string | null {
   return String(value);
 }
 
+interface ClientFilterResult {
+  conditions: string[];
+  params: any[];
+  nextIdx: number;
+}
+
+function buildClientFilters(
+  q: {
+    client_type?: string;
+    product_type?: string;
+    market_type?: string;
+    pension_type?: string;
+    agency_id?: string;
+    municipality?: string | string[];
+    province?: string | string[];
+  },
+  startIdx: number = 1
+): ClientFilterResult {
+  const conditions: string[] = [];
+  const params: any[] = [];
+  let idx = startIdx;
+
+  if (q.client_type && q.client_type !== 'all') {
+    conditions.push(`c.client_type = $${idx}`);
+    params.push(q.client_type);
+    idx++;
+  }
+
+  if (q.product_type && q.product_type !== 'all') {
+    conditions.push(`c.product_type = $${idx}`);
+    params.push(q.product_type);
+    idx++;
+  }
+
+  if (q.market_type && q.market_type !== 'all') {
+    conditions.push(`c.market_type = $${idx}`);
+    params.push(q.market_type);
+    idx++;
+  }
+
+  if (q.pension_type && q.pension_type !== 'all') {
+    conditions.push(`c.pension_type = $${idx}`);
+    params.push(q.pension_type);
+    idx++;
+  }
+
+  if (q.agency_id) {
+    conditions.push(`c.agency_id = $${idx}`);
+    params.push(q.agency_id);
+    idx++;
+  }
+
+  if (q.municipality) {
+    const values = Array.isArray(q.municipality) ? q.municipality : [q.municipality];
+    if (values.length > 0) {
+      const placeholders = values.map((_, i) => `$${idx + i}`).join(', ');
+      conditions.push(`c.municipality IN (${placeholders})`);
+      params.push(...values);
+      idx += values.length;
+    }
+  }
+
+  if (q.province) {
+    const values = Array.isArray(q.province) ? q.province : [q.province];
+    if (values.length > 0) {
+      const placeholders = values.map((_, i) => `$${idx + i}`).join(', ');
+      conditions.push(`c.province IN (${placeholders})`);
+      params.push(...values);
+      idx += values.length;
+    }
+  }
+
+  return { conditions, params, nextIdx: idx };
+}
+
 const clients = new Hono();
 
 // Pagination limits
@@ -199,22 +274,24 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     const search = c.req.query('search');
-    const clientType = c.req.query('client_type');
-    const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
-    // Use queries() for multi-value parameters (returns array or undefined)
-    const municipalityQuery = c.req.queries('municipality');
-    const provinceQuery = c.req.queries('province');
-    const productType = c.req.query('product_type');
-    const marketType = c.req.query('market_type');
-    const pensionType = c.req.query('pension_type');
     const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
-    // Handle multi-value query parameters
-    // queries() returns array if multiple values, string if single, undefined if not provided
-    const municipality = municipalityQuery && Array.isArray(municipalityQuery) ? municipalityQuery : (municipalityQuery ? [municipalityQuery] : undefined);
-    const province = provinceQuery && Array.isArray(provinceQuery) ? provinceQuery : (provinceQuery ? [provinceQuery] : undefined);
+    const municipalityQuery = c.req.queries('municipality');
+    const provinceQuery = c.req.queries('province');
+    const municipality = municipalityQuery?.length ? municipalityQuery : undefined;
+    const province = provinceQuery?.length ? provinceQuery : undefined;
+
+    const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
+      client_type: c.req.query('client_type'),
+      product_type: c.req.query('product_type'),
+      market_type: c.req.query('market_type'),
+      pension_type: c.req.query('pension_type'),
+      agency_id: c.req.query('agency_id'),
+      municipality,
+      province,
+    });
 
     // Handle touchpoint_status (can be array or string)
     let touchpointStatus: string[] | undefined;
@@ -289,11 +366,10 @@ clients.get('/', authMiddleware, async (c) => {
       }
     }
 
-    // Build WHERE clause conditions for basic client filtering
-    // Note: touchpoint_status filtering is done via direct column access
-    const baseWhereConditions: string[] = [];
-    const baseParams: any[] = [];
-    let baseParamIndex = 1;
+    // Build WHERE clause conditions — shared filters from helper, then search appended below
+    const baseWhereConditions: string[] = [...sharedConditions];
+    const baseParams: any[] = [...sharedParams];
+    let baseParamIndex = sharedNextIdx;
     let searchParam = ''; // Track search parameter for similarity scoring
     let searchStrategy = ''; // Track search strategy for SELECT clause
     let searchOrderBy = ''; // Track search ORDER BY clause
@@ -315,68 +391,6 @@ clients.get('/', authMiddleware, async (c) => {
 
       // Log search strategy for debugging
       logSearchStrategy(parsedSearch, 'GET /api/clients', searchResult.strategy);
-    }
-
-    if (clientType && clientType !== 'all') {
-      baseWhereConditions.push(`c.client_type = $${baseParamIndex}`);
-      baseParams.push(clientType);
-      baseParamIndex++;
-    }
-
-    if (productType && productType !== 'all') {
-      baseWhereConditions.push(`c.product_type = $${baseParamIndex}`);
-      baseParams.push(productType);
-      baseParamIndex++;
-    }
-
-    if (marketType && marketType !== 'all') {
-      baseWhereConditions.push(`c.market_type = $${baseParamIndex}`);
-      baseParams.push(marketType);
-      baseParamIndex++;
-    }
-
-    if (pensionType && pensionType !== 'all') {
-      baseWhereConditions.push(`c.pension_type = $${baseParamIndex}`);
-      baseParams.push(pensionType);
-      baseParamIndex++;
-    }
-
-    if (agencyId) {
-      baseWhereConditions.push(`c.agency_id = $${baseParamIndex}`);
-      baseParams.push(agencyId);
-      baseParamIndex++;
-    }
-
-    // Handle municipality filter (array for multiple selections, string for single)
-    if (municipality) {
-      if (Array.isArray(municipality)) {
-        if (municipality.length > 0) {
-          const municipalityPlaceholders = municipality.map((_, i) => `$${baseParamIndex + i}`).join(', ');
-          baseWhereConditions.push(`c.municipality IN (${municipalityPlaceholders})`);
-          baseParams.push(...municipality);
-          baseParamIndex += municipality.length;
-        }
-      } else {
-        baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
-        baseParams.push(municipality);
-        baseParamIndex++;
-      }
-    }
-
-    // Handle province filter (array for multiple selections, string for single)
-    if (province) {
-      if (Array.isArray(province)) {
-        if (province.length > 0) {
-          const provincePlaceholders = province.map((_, i) => `$${baseParamIndex + i}`).join(', ');
-          baseWhereConditions.push(`c.province IN (${provincePlaceholders})`);
-          baseParams.push(...province);
-          baseParamIndex += province.length;
-        }
-      } else {
-        baseWhereConditions.push(`c.province = $${baseParamIndex}`);
-        baseParams.push(province);
-        baseParamIndex++;
-      }
     }
 
     // Build WHERE clause for main query
@@ -532,19 +546,24 @@ clients.get('/assigned', authMiddleware, async (c) => {
     }
 
     const search = c.req.query('search');
-    const clientType = c.req.query('client_type');
-    const agencyId = c.req.query('agency_id');
     const caravanId = c.req.query('caravan_id');
-    // Use queries() for multi-value parameters (returns array or undefined)
-    const municipalityQuery = c.req.queries('municipality');
-    const provinceQuery = c.req.queries('province');
-    const productType = c.req.query('product_type');
     const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
 
-    // Handle multi-value query parameters
-    const municipality = municipalityQuery && Array.isArray(municipalityQuery) ? municipalityQuery : (municipalityQuery ? [municipalityQuery] : undefined);
-    const province = provinceQuery && Array.isArray(provinceQuery) ? provinceQuery : (provinceQuery ? [provinceQuery] : undefined);
+    const municipalityQuery = c.req.queries('municipality');
+    const provinceQuery = c.req.queries('province');
+    const municipality = municipalityQuery?.length ? municipalityQuery : undefined;
+    const province = provinceQuery?.length ? provinceQuery : undefined;
+
+    const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
+      client_type: c.req.query('client_type'),
+      product_type: c.req.query('product_type'),
+      market_type: c.req.query('market_type'),
+      pension_type: c.req.query('pension_type'),
+      agency_id: c.req.query('agency_id'),
+      municipality,
+      province,
+    });
 
     // Handle touchpoint_status (can be array or string)
     let touchpointStatus: string[] | undefined;
@@ -596,17 +615,17 @@ clients.get('/assigned', authMiddleware, async (c) => {
     let cachedClientIds: string[] | null = null;
     const clientsCache = getClientsCacheService();
 
-    if (shouldFilterByArea && !search && !clientType && !productType && !agencyId && !municipality && !province) {
+    if (shouldFilterByArea && !search && sharedConditions.length === 0) {
       // Only use cache when no additional filters are present
       // (cache stores base assigned client IDs for the user)
       cachedClientIds = await clientsCache.getAssignedClientIds(user.sub);
       console.debug(`[AssignedClients] Cache ${cachedClientIds ? 'HIT' : 'MISS'} for user ${user.sub}`);
     }
 
-    // Build WHERE clause conditions for basic client filtering
-    const baseWhereConditions: string[] = [];
-    const baseParams: any[] = [];
-    let baseParamIndex = 1;
+    // Build WHERE clause conditions — soft delete + shared filters, then search appended below
+    const baseWhereConditions: string[] = ['c.deleted_at IS NULL', ...sharedConditions];
+    const baseParams: any[] = [...sharedParams];
+    let baseParamIndex = sharedNextIdx;
     let searchParam = ''; // Track search parameter for similarity scoring
     let searchStrategy = ''; // Track search strategy for SELECT clause
     let searchOrderBy = ''; // Track search ORDER BY clause
@@ -627,59 +646,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
       // Log search strategy for debugging
       logSearchStrategy(parsedSearch, 'GET /api/clients/assigned', searchResult.strategy);
-    }
-
-    // Soft delete filter: Only show active clients (not deleted)
-    baseWhereConditions.push(`c.deleted_at IS NULL`);
-
-    if (clientType && clientType !== 'all') {
-      baseWhereConditions.push(`c.client_type = $${baseParamIndex}`);
-      baseParams.push(clientType);
-      baseParamIndex++;
-    }
-
-    if (productType && productType !== 'all') {
-      baseWhereConditions.push(`c.product_type = $${baseParamIndex}`);
-      baseParams.push(productType);
-      baseParamIndex++;
-    }
-
-    if (agencyId) {
-      baseWhereConditions.push(`c.agency_id = $${baseParamIndex}`);
-      baseParams.push(agencyId);
-      baseParamIndex++;
-    }
-
-    // Handle municipality filter (array for multiple selections, string for single)
-    if (municipality) {
-      if (Array.isArray(municipality)) {
-        if (municipality.length > 0) {
-          const municipalityPlaceholders = municipality.map((_, i) => `$${baseParamIndex + i}`).join(', ');
-          baseWhereConditions.push(`c.municipality IN (${municipalityPlaceholders})`);
-          baseParams.push(...municipality);
-          baseParamIndex += municipality.length;
-        }
-      } else {
-        baseWhereConditions.push(`c.municipality = $${baseParamIndex}`);
-        baseParams.push(municipality);
-        baseParamIndex++;
-      }
-    }
-
-    // Handle province filter (array for multiple selections, string for single)
-    if (province) {
-      if (Array.isArray(province)) {
-        if (province.length > 0) {
-          const provincePlaceholders = province.map((_, i) => `$${baseParamIndex + i}`).join(', ');
-          baseWhereConditions.push(`c.province IN (${provincePlaceholders})`);
-          baseParams.push(...province);
-          baseParamIndex += province.length;
-        }
-      } else {
-        baseWhereConditions.push(`c.province = $${baseParamIndex}`);
-        baseParams.push(province);
-        baseParamIndex++;
-      }
     }
 
     // Build WHERE clause for main query
@@ -790,7 +756,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // ============================================
     // If cache was empty, populate it with the client IDs from this query
     // Only cache when no additional filters were present (base assigned clients)
-    if (shouldFilterByArea && !cachedClientIds && !search && !clientType && !productType && !agencyId && !municipality && !province) {
+    if (shouldFilterByArea && !cachedClientIds && !search && sharedConditions.length === 0) {
       // Extract client IDs from the result
       const clientIds = result.rows.map(row => row.id);
       if (clientIds.length > 0) {
