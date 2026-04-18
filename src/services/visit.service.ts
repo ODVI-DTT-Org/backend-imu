@@ -10,7 +10,7 @@ export const createVisitSchema = z.object({
   time_out: z.coerce.date().optional(),
   odometer_arrival: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
   odometer_departure: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
-  photo_url: z.preprocess(v => (!v ? undefined : v), z.string().url().optional()),
+  photo_url: z.string().url('photo_url must be a valid URL'),
   notes: z.preprocess(v => (v === '' ? null : v), z.string().max(5000).nullish()),
   reason: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
   status: z.preprocess(v => (v === '' ? null : v), z.string().max(100).nullish()),
@@ -31,7 +31,7 @@ export interface Visit {
   time_out?: Date;
   odometer_arrival?: string;
   odometer_departure?: string;
-  photo_url?: string;
+  photo_url: string;
   notes?: string;
   reason?: string;
   status?: string;
@@ -120,7 +120,7 @@ export const visitService = {
        RETURNING *`,
       [
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
-        validated.odometer_arrival, validated.odometer_departure, validated.photo_url ?? null,
+        validated.odometer_arrival, validated.odometer_departure, validated.photo_url,
         validated.notes, validated.reason, validated.status, validated.address,
         validated.latitude, validated.longitude, 'IMU'
       ]

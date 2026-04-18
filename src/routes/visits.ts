@@ -114,7 +114,7 @@ visits.post('/', authMiddleware, async (c) => {
             }, 500);
           }
 
-          photoUrl = uploadResult.url || null;
+          photoUrl = uploadResult.url;
           visitData.photo_url = photoUrl;
 
           console.log('[Visits] Photo uploaded successfully:', photoUrl);
