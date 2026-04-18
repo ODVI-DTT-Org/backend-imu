@@ -172,7 +172,7 @@ auth.get('/me', authMiddleware, async (c) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, email, first_name, last_name, role, created_at FROM users WHERE id = $1',
+      'SELECT id, email, first_name, last_name, role, theme_color, theme_mode, created_at FROM users WHERE id = $1',
       [user.sub]
     );
 

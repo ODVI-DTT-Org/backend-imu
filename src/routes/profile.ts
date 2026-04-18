@@ -17,6 +17,8 @@ const updateProfileSchema = z.object({
   last_name: z.string().min(1).max(100).optional(),
   phone: z.string().max(20).optional(),
   avatar_url: z.string().url().optional(),
+  theme_color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
+  theme_mode: z.enum(['light', 'dark']).optional(),
 });
 
 const changePasswordSchema = z.object({
@@ -60,6 +62,8 @@ profile.get('/:id', authMiddleware, requirePermission('users', 'read'), async (c
       avatar_url: row.avatar_url || row.profile_avatar_url,
       area_manager_id: row.area_manager_id,
       assistant_area_manager_id: row.assistant_area_manager_id,
+      theme_color: row.theme_color ?? '#3B82F6',
+      theme_mode: row.theme_mode ?? 'light',
       created: row.created_at,
       updated: row.updated_at,
     });
@@ -102,6 +106,14 @@ profile.put('/:id', authMiddleware, requirePermission('users', 'update'), async 
       updateFields.push(`avatar_url = $${paramIndex++}`);
       updateValues.push(validated.avatar_url);
     }
+    if (validated.theme_color !== undefined) {
+      updateFields.push(`theme_color = $${paramIndex++}`);
+      updateValues.push(validated.theme_color);
+    }
+    if (validated.theme_mode !== undefined) {
+      updateFields.push(`theme_mode = $${paramIndex++}`);
+      updateValues.push(validated.theme_mode);
+    }
 
     if (updateFields.length === 0) {
       throw new ValidationError('No fields to update');
@@ -138,6 +150,8 @@ profile.put('/:id', authMiddleware, requirePermission('users', 'update'), async 
       avatar_url: row.avatar_url,
       area_manager_id: row.area_manager_id,
       assistant_area_manager_id: row.assistant_area_manager_id,
+      theme_color: row.theme_color ?? '#3B82F6',
+      theme_mode: row.theme_mode ?? 'light',
       updated: row.updated_at,
     });
   } catch (error: any) {
