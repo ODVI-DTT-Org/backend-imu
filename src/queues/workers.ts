@@ -12,6 +12,7 @@ import { csvExportsProcessor } from './processors/csv-exports-processor.js';
 import { locationAssignmentsProcessor } from './processors/location-assignments-processor.js';
 import { syncOperationsProcessor } from './processors/sync-operations-processor.js';
 import { excelReportsProcessor } from './processors/excel-reports-processor.js';
+import { bulkUploadProcessor } from './processors/bulk-upload-processor.js';
 import { getQueueManager } from './queue-manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -73,6 +74,13 @@ export async function startWorkers() {
       queueManager.registerWorker('reports', excelReportsWorker);
     }
 
+    // Register bulk upload processor
+    await bulkUploadProcessor.start();
+    const bulkUploadWorker = bulkUploadProcessor.getWorker();
+    if (bulkUploadWorker) {
+      queueManager.registerWorker('bulk-upload', bulkUploadWorker);
+    }
+
     // Removed verbose startup logs - now handled by init-logger
   } catch (error) {
     logger.error('Workers', 'Failed to start workers', error);
@@ -105,6 +113,9 @@ export async function stopWorkers() {
 
     logger.info('Workers', 'Stopping Excel reports processor...');
     await excelReportsProcessor.stop();
+
+    logger.info('Workers', 'Stopping bulk upload processor...');
+    await bulkUploadProcessor.stop();
 
     logger.info('Workers', 'All workers stopped successfully');
   } catch (error) {
