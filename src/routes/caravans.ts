@@ -11,6 +11,8 @@ import {
   AuthenticationError,
   ConflictError,
 } from '../errors/index.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const caravans = new Hono();
 
@@ -306,12 +308,22 @@ caravans.post('/bulk-delete', authMiddleware, requirePermission('caravans', 'del
       throw new ValidationError('Cannot delete your own account');
     }
 
-    await pool.query(
-      `UPDATE users SET deleted_at = NOW() WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-      [ids]
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_CARAVANS,
+      user.sub,
+      ids,
+      { preventSelfDeletion: true }
     );
 
-    return c.json({ success: true, message: `Deleted ${ids.length} caravans` });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} caravans`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -321,7 +333,7 @@ caravans.post('/bulk-delete', authMiddleware, requirePermission('caravans', 'del
       throw validationError;
     }
     console.error('Bulk delete caravans error:', error);
-    throw error;
+    throw new Error('Failed to create bulk delete job');
   }
 });
 

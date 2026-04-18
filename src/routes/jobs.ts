@@ -22,7 +22,9 @@ import { psgcMatchingProcessor } from '../services/psgcJobProcessor.js';
 import { reportsJobProcessor } from '../services/reportsJobProcessor.js';
 import { userLocationAssignmentProcessor } from '../services/userLocationJobProcessor.js';
 import { logger } from '../utils/logger.js';
+import { getQueueManager } from '../queues/index.js';
 import { requireRole } from '../middleware/auth.js';
+import { getJobStatus, cancelJob as cancelBullMQJob } from '../queues/utils/job-helpers.js';
 import { manualRefreshActionItems } from '../services/actionItemsRefreshService.js';
 import { getSchedulerStatus, triggerTask } from '../services/cronScheduler.js';
 
@@ -285,6 +287,28 @@ jobs.delete('/:id', async (c) => {
   }
 });
 
+/**
+ * GET /api/jobs/health
+ * Get queue system health status (admin only)
+ */
+jobs.get('/health', authMiddleware, requireRole('admin'), async (c) => {
+  try {
+    const queueManager = getQueueManager();
+    const health = await queueManager.getHealth();
+
+    return c.json({
+      success: true,
+      health,
+    });
+  } catch (error: any) {
+    logger.error('jobs/health', error);
+    return c.json({
+      success: false,
+      message: 'Failed to get queue health',
+      error: error.message,
+    }, 500);
+  }
+});
 
 /**
  * POST /api/jobs/refresh/action-items
@@ -355,5 +379,175 @@ jobs.post('/scheduler/trigger/:taskName', authMiddleware, requireRole('admin'), 
 // Start job processor when this module is loaded
 startJobProcessor([psgcMatchingProcessor, reportsJobProcessor, userLocationAssignmentProcessor], 5000);
 
+// ============================================================================
+// BullMQ Queue Job Routes (New System)
+// ============================================================================
+
+/**
+ * GET /api/jobs/queue/jobs
+ * Get BullMQ jobs for the current user (admin sees all jobs)
+ */
+jobs.get('/queue/jobs', async (c) => {
+  try {
+    const user = c.get('user');
+    const queueManager = getQueueManager();
+    const queues = ['bulk-operations', 'reports', 'location-assignments', 'sync-operations'] as const;
+
+    const allJobs: any[] = [];
+
+    for (const queueName of queues) {
+      try {
+        const queue = queueManager.getQueue({ name: queueName });
+        const counts = await queue.getJobCounts('waiting', 'active', 'completed', 'failed', 'delayed');
+
+        // Get recent jobs from each state
+        const states = ['waiting', 'active', 'completed', 'failed', 'delayed'] as const;
+
+        for (const state of states) {
+          if (counts[state] === 0) continue;
+
+          const jobs = await queue.getJobs([state], 0, 24);
+
+          for (const job of jobs) {
+            // Filter jobs by user (admin sees all, regular users see only their own)
+            const jobUserId = job.data?.userId;
+            if (user.role !== 'admin' && jobUserId !== user.sub) {
+              continue;
+            }
+
+            const jobState = await job.getState();
+            allJobs.push({
+              id: job.id,
+              name: job.name,
+              queueName,
+              state: jobState,
+              progress: job.progress,
+              data: job.data,
+              result: job.returnvalue,
+              failedReason: job.failedReason,
+              processedOn: job.processedOn,
+              finishedOn: job.finishedOn,
+              attemptsMade: job.attemptsMade,
+            });
+          }
+        }
+      } catch (error) {
+        logger.error('jobs/queue/jobs', `Failed to get jobs from queue ${queueName}`, error);
+        continue;
+      }
+    }
+
+    // Sort by processedOn (newest first)
+    allJobs.sort((a, b) => {
+      const aTime = a.processedOn ? new Date(a.processedOn).getTime() : 0;
+      const bTime = b.processedOn ? new Date(b.processedOn).getTime() : 0;
+      return bTime - aTime;
+    });
+
+    return c.json({
+      success: true,
+      jobs: allJobs.slice(0, 100), // Limit to 100 most recent jobs
+    });
+  } catch (error: any) {
+    logger.error('jobs/queue/jobs', error);
+    return c.json({
+      success: false,
+      message: 'Failed to get queue jobs',
+      error: error.message,
+    }, 500);
+  }
+});
+
+/**
+ * GET /api/jobs/queue/:jobId
+ * Get specific BullMQ job status (user must own the job or be admin)
+ */
+jobs.get('/queue/:jobId', async (c) => {
+  try {
+    const user = c.get('user');
+    const jobId = c.req.param('jobId');
+
+    const jobStatus = await getJobStatus(jobId);
+
+    if (!jobStatus) {
+      return c.json({
+        success: false,
+        message: 'Job not found',
+      }, 404);
+    }
+
+    // Check if user owns this job or is admin
+    const jobUserId = jobStatus.data?.userId;
+    if (user.role !== 'admin' && jobUserId !== user.sub) {
+      return c.json({
+        success: false,
+        message: 'You do not have permission to view this job',
+      }, 403);
+    }
+
+    return c.json({
+      success: true,
+      job: jobStatus,
+    });
+  } catch (error: any) {
+    logger.error('jobs/queue/get', error);
+    return c.json({
+      success: false,
+      message: 'Failed to get job status',
+      error: error.message,
+    }, 500);
+  }
+});
+
+/**
+ * DELETE /api/jobs/queue/:jobId
+ * Cancel a BullMQ job
+ */
+jobs.delete('/queue/:jobId', async (c) => {
+  try {
+    const jobId = c.req.param('jobId');
+    const user = c.get('user');
+
+    const jobStatus = await getJobStatus(jobId);
+
+    if (!jobStatus) {
+      return c.json({
+        success: false,
+        message: 'Job not found',
+      }, 404);
+    }
+
+    // Check if user owns this job or is admin
+    const jobUserId = jobStatus.data?.userId;
+    if (user.role !== 'admin' && jobUserId !== user.sub) {
+      return c.json({
+        success: false,
+        message: 'You do not have permission to cancel this job',
+      }, 403);
+    }
+
+    // Can only cancel waiting or active jobs
+    if (jobStatus.state !== 'waiting' && jobStatus.state !== 'active') {
+      return c.json({
+        success: false,
+        message: `Cannot cancel job with status ${jobStatus.state}`,
+      }, 400);
+    }
+
+    await cancelBullMQJob(jobId);
+
+    return c.json({
+      success: true,
+      message: 'Job cancelled',
+    });
+  } catch (error: any) {
+    logger.error('jobs/queue/cancel', error);
+    return c.json({
+      success: false,
+      message: 'Failed to cancel job',
+      error: error.message,
+    }, 500);
+  }
+});
 
 export default jobs;

@@ -7,6 +7,8 @@ import {
   ValidationError,
   AuthorizationError,
 } from '../errors/index.js';
+import { addReportJob, addLocationJob } from '../queues/utils/job-helpers.js';
+import { ReportJobType, LocationJobType } from '../queues/jobs/job-types.js';
 import {
   exportTouchpointsToExcel,
   exportClientsToExcel,
@@ -664,14 +666,160 @@ reports.get('/export', authMiddleware, requirePermission('reports', 'export'), a
   }
 });
 
-// POST /api/reports/generate - Not implemented
+// POST /api/reports/generate - Generate a report asynchronously (queued)
 reports.post('/generate', authMiddleware, requirePermission('reports', 'read'), async (c) => {
-  return c.json({ error: 'Not implemented' }, 501);
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ message: 'Unauthorized' }, 401);
+    }
+
+    const body = await c.req.json();
+
+    // Validation schema
+    const generateReportSchema = z.object({
+      reportType: z.enum([
+        'agent_performance',
+        'client_activity',
+        'touchpoint_summary',
+        'attendance_summary',
+        'target_achievement',
+        'conversion',
+        'area_coverage'
+      ]),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      userId: z.string().uuid().optional(),
+      municipality: z.string().optional(),
+      province: z.string().optional(),
+      clientType: z.string().optional(),
+    });
+
+    const validated = generateReportSchema.parse(body);
+
+    // Map report type to job type
+    const reportTypeMap: Record<string, ReportJobType> = {
+      agent_performance: ReportJobType.REPORT_AGENT_PERFORMANCE,
+      client_activity: ReportJobType.REPORT_CLIENT_ACTIVITY,
+      touchpoint_summary: ReportJobType.REPORT_TOUCHPOINT_SUMMARY,
+      attendance_summary: ReportJobType.REPORT_ATTENDANCE_SUMMARY,
+      target_achievement: ReportJobType.REPORT_TARGET_ACHIEVEMENT,
+      conversion: ReportJobType.REPORT_CONVERSION,
+      area_coverage: ReportJobType.REPORT_AREA_COVERAGE,
+    };
+
+    const jobType = reportTypeMap[validated.reportType];
+    if (!jobType) {
+      throw new ValidationError('Invalid report type');
+    }
+
+    // Create report generation job
+    const job = await addReportJob(
+      jobType,
+      user.sub,
+      {
+        startDate: validated.startDate,
+        endDate: validated.endDate,
+        userId: validated.userId,
+        municipality: validated.municipality,
+        province: validated.province,
+        clientType: validated.clientType,
+      }
+    );
+
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Report generation job started for ${validated.reportType}`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: '1-2 minutes',
+    }, 201);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    console.error('Generate report error:', error);
+    throw new Error('Failed to create report job');
+  }
 });
 
-// POST /api/reports/export-csv - Not implemented
+// POST /api/reports/export-csv - Export data to CSV asynchronously (queued)
 reports.post('/export-csv', authMiddleware, requirePermission('reports', 'export'), async (c) => {
-  return c.json({ error: 'Not implemented' }, 501);
+  try {
+    const user = c.get('user');
+    if (!user) {
+      return c.json({ message: 'Unauthorized' }, 401);
+    }
+
+    const body = await c.req.json();
+
+    // Validation schema
+    const exportCsvSchema = z.object({
+      exportType: z.enum([
+        'touchpoints',
+        'clients',
+        'attendance'
+      ]),
+      startDate: z.string().optional(),
+      endDate: z.string().optional(),
+      userId: z.string().uuid().optional(),
+      municipality: z.string().optional(),
+      province: z.string().optional(),
+      clientType: z.string().optional(),
+    });
+
+    const validated = exportCsvSchema.parse(body);
+
+    // Map export type to job type
+    const exportTypeMap: Record<string, ReportJobType> = {
+      touchpoints: ReportJobType.EXPORT_TOUCHPOINTS_CSV,
+      clients: ReportJobType.EXPORT_CLIENTS_CSV,
+      attendance: ReportJobType.EXPORT_ATTENDANCE_CSV,
+    };
+
+    const jobType = exportTypeMap[validated.exportType];
+    if (!jobType) {
+      throw new ValidationError('Invalid export type');
+    }
+
+    // Create CSV export job
+    const job = await addReportJob(
+      jobType,
+      user.sub,
+      {
+        startDate: validated.startDate,
+        endDate: validated.endDate,
+        userId: validated.userId,
+        municipality: validated.municipality,
+        province: validated.province,
+        clientType: validated.clientType,
+      }
+    );
+
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `CSV export job started for ${validated.exportType}`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: '2-5 minutes',
+    }, 201);
+  } catch (error: any) {
+    if (error.name === 'ZodError') {
+      const validationError = new ValidationError('Invalid request body');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    console.error('Export CSV error:', error);
+    throw new Error('Failed to create CSV export job');
+  }
 });
 
 // GET /api/reports/releases - Releases report

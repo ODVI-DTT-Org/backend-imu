@@ -17,6 +17,8 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getClientsCacheService } from '../services/cache/clients-cache.js';
+import { getQueueManager, QUEUE_NAMES, BulkJobType } from '../queues/index.js';
+import type { BulkUploadJobData } from '../queues/jobs/job-types.js';
 
 // Helper function to ensure loan_type is always returned as string
 function parseLoanType(value: any): string | null {
@@ -2137,7 +2139,7 @@ clients.post('/check-duplicates', authMiddleware, async (c) => {
   }
 })
 
-// POST /api/clients/bulk-upload - Inline bulk upload processing
+// POST /api/clients/bulk-upload - Enqueue a bulk upload job
 clients.post('/bulk-upload', authMiddleware, requirePermission('clients', 'create'), async (c) => {
   try {
     const user = c.get('user')
@@ -2172,63 +2174,50 @@ clients.post('/bulk-upload', authMiddleware, requirePermission('clients', 'creat
     })
 
     const { rows } = schema.parse(body)
-    const successful: Array<any> = []
-    const failed: Array<any> = []
 
-    for (const row of rows) {
-      const dbClient = await pool.connect()
-      try {
-        await dbClient.query('BEGIN')
-        if (user.role === 'tele' || user.role === 'caravan') {
-          await dbClient.query(
-            `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
-             VALUES (gen_random_uuid(), $1, NULL, $2, $3, $4, $5, 'pending')`,
-            ['client', user.sub, user.role, 'Bulk Client Creation Request', JSON.stringify(row)]
-          )
-          successful.push({ ...row, id: 'pending-approval' })
-        } else {
-          const result = await dbClient.query(
-            `INSERT INTO clients (
-              id, first_name, last_name, middle_name, ext_name, birth_date, email, phone,
-              client_type, product_type, market_type, pension_type, pan,
-              facebook_link, remarks, province, municipality, barangay,
-              rank, account_number, atm_number, unit_code,
-              is_starred, created_by
-            ) VALUES (
-              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7,
-              $8, $9, $10, $11, $12,
-              $13, $14, $15, $16, $17,
-              $18, $19, $20, $21,
-              false, $22
-            ) RETURNING id`,
-            [
-              row.first_name, row.last_name, row.middle_name || null, row.ext_name || null,
-              row.birth_date || null, row.email || null, row.phone || null,
-              row.client_type || 'POTENTIAL', row.product_type || null, row.market_type || null,
-              row.pension_type || null, row.pan || null, row.facebook_link || null,
-              row.remarks || null, row.province || null, row.municipality || null,
-              row.barangay || null, row.rank || null, row.account_number || null,
-              row.atm_number || null, row.unit_code || null, user.sub,
-            ]
-          )
-          successful.push({ ...row, id: result.rows[0].id })
-        }
-        await dbClient.query('COMMIT')
-      } catch (err: any) {
-        await dbClient.query('ROLLBACK')
-        failed.push({ ...row, error: err.message || 'Insert failed' })
-      } finally {
-        dbClient.release()
-      }
+    const jobData: BulkUploadJobData = {
+      userId: user.sub,
+      userRole: user.role,
+      rows,
     }
 
-    return c.json({ successful, failed })
+    const queueManager = getQueueManager()
+    const queue = queueManager.getQueue({ name: QUEUE_NAMES.BULK_UPLOAD })
+    const job = await queue.add(BulkJobType.BULK_UPLOAD_CLIENTS, jobData, {
+      attempts: 1,
+      removeOnComplete: { age: 7 * 24 * 3600 },
+      removeOnFail: { age: 30 * 24 * 3600 },
+    })
+
+    return c.json({ jobId: job.id ?? '' })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return c.json({ error: 'Invalid request', details: error.errors }, 400)
     }
     throw error
   }
+})
+
+// GET /api/clients/bulk-upload/:jobId/status - Poll job status
+clients.get('/bulk-upload/:jobId/status', authMiddleware, async (c) => {
+  const jobId = c.req.param('jobId')
+  if (!jobId) return c.json({ error: 'Job ID is required' }, 400)
+  const queueManager = getQueueManager()
+  const queue = queueManager.getQueue({ name: QUEUE_NAMES.BULK_UPLOAD })
+  const job = await queue.getJob(jobId)
+
+  if (!job) {
+    return c.json({ error: 'Job not found' }, 404)
+  }
+
+  const state = await job.getState()
+
+  return c.json({
+    state,
+    progress: job.progress,
+    result: state === 'completed' ? job.returnvalue : null,
+    failedReason: state === 'failed' ? job.failedReason : null,
+  })
 })
 
 // POST /api/clients/bulk-create - Bulk create clients from CSV upload

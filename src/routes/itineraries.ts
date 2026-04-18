@@ -9,6 +9,8 @@ import {
   NotFoundError,
   AuthorizationError,
 } from '../errors/index.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const itineraries = new Hono();
 
@@ -563,12 +565,21 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
 
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
-    await pool.query(
-      `DELETE FROM itineraries WHERE id = ANY($1::uuid[])`,
-      [ids]
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_ITINERARIES,
+      user.sub,
+      ids
     );
 
-    return c.json({ success: true, message: `Deleted ${ids.length} itineraries` });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} itineraries`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -578,7 +589,7 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
       throw validationError;
     }
     console.error('Bulk delete itineraries error:', error);
-    throw error;
+    throw new Error('Failed to create bulk delete job');
   }
 });
 

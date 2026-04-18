@@ -2,6 +2,8 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog, auditAuth } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
@@ -1311,12 +1313,22 @@ users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware
       throw new ValidationError('Cannot delete your own account');
     }
 
-    await pool.query(
-      `UPDATE users SET deleted_at = NOW() WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL`,
-      [ids]
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_USERS,
+      user.sub,
+      ids,
+      { preventSelfDeletion: true }
     );
 
-    return c.json({ success: true, message: `Deleted ${ids.length} users` });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} users`,
+      status_url: `/api/jobs/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -1326,7 +1338,7 @@ users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware
       throw validationError;
     }
     console.error('Bulk delete users error:', error);
-    throw error;
+    throw new Error('Failed to create bulk delete job');
   }
 });
 

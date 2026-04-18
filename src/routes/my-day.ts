@@ -7,6 +7,8 @@ import { requirePermission } from '../middleware/permissions.js';
 import { rateLimit } from '../middleware/rate-limit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
+import { addBulkJob } from '../queues/utils/job-helpers.js';
+import { BulkJobType } from '../queues/jobs/job-types.js';
 import {
   ValidationError,
   NotFoundError,
@@ -232,12 +234,21 @@ myDay.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'del
 
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
-    await pool.query(
-      `DELETE FROM itineraries WHERE id = ANY($1::uuid[]) AND user_id = $2`,
-      [ids, user.sub]
+    // Create bulk delete job
+    const job = await addBulkJob(
+      BulkJobType.BULK_DELETE_MY_DAY,
+      user.sub,
+      ids
     );
 
-    return c.json({ success: true, message: `Removed ${ids.length} items from My Day` });
+    // Return immediately with job information
+    return c.json({
+      success: true,
+      job_id: job.id,
+      message: `Bulk delete job started for ${ids.length} my day items`,
+      status_url: `/api/jobs/queue/${job.id}`,
+      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
+    }, 201);
   } catch (error: any) {
     if (error.name === 'ZodError') {
       return c.json({

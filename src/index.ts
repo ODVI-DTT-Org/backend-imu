@@ -56,6 +56,7 @@ import addressesRoutes from './routes/addresses.js';
 import phoneNumbersRoutes from './routes/phone-numbers.js';
 import cacheStatsRoutes from './routes/cache-stats.js';
 import healthRoutes from './routes/health.js';
+import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
 
