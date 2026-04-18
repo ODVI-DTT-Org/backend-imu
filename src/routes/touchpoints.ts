@@ -58,12 +58,12 @@ async function getNextTouchpointNumber(clientId: string): Promise<number | null>
 // Validation schemas (normalized schema - visit/call data moved to separate tables)
 const createTouchpointSchema = z.object({
   client_id: z.string().uuid(),
-  user_id: z.string().uuid().optional(), // Optional - will be set to current user if not provided
-  touchpoint_number: z.number().int().min(1).max(7),
+  user_id: z.string().uuid().nullish(), // Optional - will be set to current user if not provided; nullish allows null from PowerSync CRUD queue
+  touchpoint_number: z.union([z.number().int(), z.string().transform(Number)]).pipe(z.number().int().min(1).max(7)), // coerce string→number from PowerSync CRUD
   type: z.enum(['Visit', 'Call']),
-  rejection_reason: z.string().optional(),
-  visit_id: z.string().uuid().optional(),
-  call_id: z.string().uuid().optional(),
+  rejection_reason: z.string().nullish(),
+  visit_id: z.string().uuid().nullish(),
+  call_id: z.string().uuid().nullish(),
 });
 
 const updateTouchpointSchema = createTouchpointSchema.partial();
