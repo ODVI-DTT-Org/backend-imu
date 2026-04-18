@@ -20,6 +20,7 @@ addresses.use('/*', apiRateLimit);
 
 // Validation schemas
 const createAddressSchema = z.object({
+  id: z.string().uuid().optional(),
   psgc_id: z.number().int().positive().optional(),
   type: z.enum(['Home', 'Work', 'Relative', 'Other']),
   street: z.string().min(1).max(500),
@@ -268,10 +269,11 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
   }
 
   const result = await pool.query(
-    `INSERT INTO addresses (client_id, type, street, barangay, city, province, postal_code, latitude, longitude, is_primary)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+    `INSERT INTO addresses (id, client_id, type, street, barangay, city, province, postal_code, latitude, longitude, is_primary)
+     VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+     ON CONFLICT (id) DO UPDATE SET updated_at = addresses.updated_at
      RETURNING *`,
-    [clientId, data.type, data.street, data.barangay, data.city, data.province, data.postal_code, data.latitude, data.longitude, isPrimary]
+    [data.id ?? null, clientId, data.type, data.street, data.barangay, data.city, data.province, data.postal_code, data.latitude, data.longitude, isPrimary]
   );
 
   // Fetch with PSGC data

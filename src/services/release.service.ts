@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 // Validation schemas
 export const createReleaseSchema = z.object({
+  id: z.string().uuid('Invalid release ID format').optional(),
   client_id: z.string().uuid('Invalid client ID format'),
   user_id: z.string().uuid('Invalid user ID format'),
   visit_id: z.string().uuid('Invalid visit ID format'),
@@ -94,10 +95,11 @@ export const releaseService = {
     const validated = createReleaseSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO releases (client_id, user_id, visit_id, product_type, loan_type, amount, udi_number, approval_notes, status)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO releases (id, client_id, user_id, visit_id, product_type, loan_type, amount, udi_number, approval_notes, status)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       ON CONFLICT (id) DO UPDATE SET updated_at = releases.updated_at
        RETURNING *`,
-      [validated.client_id, validated.user_id, validated.visit_id, validated.product_type,
+      [validated.id ?? null, validated.client_id, validated.user_id, validated.visit_id, validated.product_type,
        validated.loan_type, validated.amount, validated.udi_number ?? null, validated.approval_notes, validated.status]
     );
     return result.rows[0];

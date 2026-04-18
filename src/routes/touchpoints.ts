@@ -57,6 +57,7 @@ async function getNextTouchpointNumber(clientId: string): Promise<number | null>
 
 // Validation schemas (normalized schema - visit/call data moved to separate tables)
 const createTouchpointSchema = z.object({
+  id: z.string().uuid().optional(),
   client_id: z.string().uuid(),
   user_id: z.preprocess(v => (v === '' ? null : v), z.string().uuid().nullish()), // empty string from PowerSync CRUD coerced to null
   touchpoint_number: z.union([z.number().int(), z.string().transform(Number)]).pipe(z.number().int().min(1).max(7)), // coerce string→number from PowerSync CRUD
@@ -546,6 +547,11 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     if (existingTouchpoint.rows.length > 0) {
       const existing = existingTouchpoint.rows[0];
+      // Idempotent: same id means this is a retry — return the existing record as success
+      if (validated.id && existing.id === validated.id) {
+        const fullResult = await pool.query('SELECT * FROM touchpoints WHERE id = $1', [existing.id]);
+        return c.json(mapRowToTouchpoint(fullResult.rows[0]), 200);
+      }
       return c.json({
         message: `Touchpoint #${validated.touchpoint_number} already exists for this client`,
         existingTouchpoint: {
@@ -617,11 +623,13 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     const result = await pool.query(
       `INSERT INTO touchpoints (
-        client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
+        id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7
-      ) RETURNING *`,
+        COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8
+      ) ON CONFLICT (id) DO UPDATE SET updated_at = touchpoints.updated_at
+      RETURNING *`,
       [
+        validated.id ?? null,
         validated.client_id, validated.user_id, validated.touchpoint_number, validated.type,
         validated.rejection_reason, visitId, callId
       ]

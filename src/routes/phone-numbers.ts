@@ -18,6 +18,7 @@ phoneNumbers.use('/*', apiRateLimit);
 
 // Validation schemas
 const createPhoneSchema = z.object({
+  id: z.string().uuid().optional(),
   label: z.enum(['Mobile', 'Home', 'Work']),
   number: z.string().min(1).max(20).regex(
     // Philippine phone number formats:
@@ -220,6 +221,11 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
   );
 
   if (duplicateCheck.rows.length > 0) {
+    // Idempotent: same id means this is a retry — return the existing record as success
+    if (data.id && duplicateCheck.rows[0].id === data.id) {
+      const existing = await pool.query('SELECT * FROM phone_numbers WHERE id = $1', [data.id]);
+      return c.json({ success: true, data: mapRowToPhoneNumber(existing.rows[0]) }, 200);
+    }
     throw new ValidationError('Phone number already exists for this client');
   }
 
@@ -249,10 +255,11 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
   }
 
   const result = await pool.query(
-    `INSERT INTO phone_numbers (client_id, label, number, is_primary)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO phone_numbers (id, client_id, label, number, is_primary)
+     VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5)
+     ON CONFLICT (id) DO UPDATE SET updated_at = phone_numbers.updated_at
      RETURNING *`,
-    [clientId, data.label, data.number, isPrimary]
+    [data.id ?? null, clientId, data.label, data.number, isPrimary]
   );
 
   await invalidateClientPhoneNumbersCache(clientId);

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 // Validation schemas
 export const createCallSchema = z.object({
+  id: z.string().uuid('Invalid call ID format').optional(),
   client_id: z.string().uuid('Invalid client ID format'),
   user_id: z.string().uuid('Invalid user ID format'),
   phone_number: z.string().min(10, 'Phone number must be at least 10 digits').max(20),
@@ -91,10 +92,11 @@ export const callService = {
     const validated = createCallSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, notes, reason, status, photo_url, source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'IMU')
+      `INSERT INTO calls (id, client_id, user_id, phone_number, dial_time, duration, notes, reason, status, photo_url, source)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, 'IMU')
+       ON CONFLICT (id) DO UPDATE SET updated_at = calls.updated_at
        RETURNING *`,
-      [validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
+      [validated.id ?? null, validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
        validated.duration, validated.notes, validated.reason, validated.status, validated.photo_url ?? null]
     );
     return result.rows[0];

@@ -103,6 +103,7 @@ const MAX_PER_PAGE = 100;
 
 // Validation schemas
 const createClientSchema = z.object({
+  id: z.string().uuid().optional(),
   first_name: z.string().min(1).max(255),
   last_name: z.string().min(1).max(255),
   middle_name: z.string().max(255).optional(),
@@ -999,9 +1000,10 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         unit_code, pcni_acct_code, dob, g_company, g_status, status,
         created_by
       ) VALUES (
-        gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+        COALESCE($42, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
         $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41
-      ) RETURNING *`,
+      ) ON CONFLICT (id) DO UPDATE SET updated_at = clients.updated_at
+      RETURNING *`,
       [
         validated.first_name, validated.last_name, validated.middle_name, validated.birth_date,
         validated.email, validated.phone, validated.agency_name, validated.department,
@@ -1015,7 +1017,8 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         validated.monthly_pension_gross, validated.atm_number, validated.applicable_republic_act,
         validated.unit_code, validated.pcni_acct_code, validated.dob, validated.g_company,
         validated.g_status, validated.status,
-        user.sub
+        user.sub,
+        validated.id ?? null
       ]
     );
 
