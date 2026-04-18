@@ -4,20 +4,20 @@ import { z } from 'zod';
 // Validation schemas
 export const createVisitSchema = z.object({
   client_id: z.string().uuid('Invalid client ID format'),
-  user_id: z.string().uuid('Invalid user ID format'),
+  user_id: z.preprocess(v => (v === '' ? null : v), z.string().uuid('Invalid user ID format').nullish()),
   type: z.enum(['regular_visit', 'release_loan']).default('regular_visit'),
   time_in: z.coerce.date().optional(),
   time_out: z.coerce.date().optional(),
-  odometer_arrival: z.string().max(50).optional(),
-  odometer_departure: z.string().max(50).optional(),
-  photo_url: z.string().url().optional().or(z.literal('')),
-  notes: z.string().max(5000).optional(),
-  reason: z.string().max(500).optional(),
-  status: z.string().max(100).optional(),
-  address: z.string().max(500).optional(),
-  latitude: z.number().min(-90).max(90).optional(),
-  longitude: z.number().min(-180).max(180).optional(),
-  source: z.string().max(200).optional(),
+  odometer_arrival: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
+  odometer_departure: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
+  photo_url: z.preprocess(v => (v === '' ? null : v), z.string().url().nullish()),
+  notes: z.preprocess(v => (v === '' ? null : v), z.string().max(5000).nullish()),
+  reason: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
+  status: z.preprocess(v => (v === '' ? null : v), z.string().max(100).nullish()),
+  address: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
+  latitude: z.preprocess(v => (v === '' ? null : v), z.number().min(-90).max(90).nullish()),
+  longitude: z.preprocess(v => (v === '' ? null : v), z.number().min(-180).max(180).nullish()),
+  source: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
 });
 
 export const updateVisitSchema = createVisitSchema.partial();
