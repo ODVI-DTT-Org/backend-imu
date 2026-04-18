@@ -39,10 +39,11 @@ streams:
       SELECT c.id, c.first_name, c.last_name, c.middle_name, c.birth_date,
         c.email, c.phone, c.agency_name, c.department, c.position,
         c.employment_status, c.payroll_date, c.tenure, c.client_type,
-        c.product_type, c.market_type, c.pension_type, c.pan, c.facebook_link,
-        c.remarks, c.agency_id, c.is_starred, c.psgc_id, c.region, c.province,
-        c.municipality, c.barangay, c.udi, c.loan_released, c.loan_released_at,
-        c.created_at, c.updated_at, c.deleted_at,
+        c.product_type, c.market_type, c.pension_type, c.loan_type, c.pan,
+        c.facebook_link, c.remarks, c.agency_id, c.is_starred, c.psgc_id,
+        c.region, c.province, c.municipality, c.barangay, c.udi,
+        c.loan_released, c.loan_released_at, c.created_at, c.updated_at,
+        c.deleted_at, c.created_by, c.deleted_by,
         c.touchpoint_summary, c.touchpoint_number, c.next_touchpoint
       FROM clients c
       WHERE c.deleted_at IS NULL
