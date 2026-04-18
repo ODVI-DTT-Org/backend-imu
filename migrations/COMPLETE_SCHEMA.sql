@@ -176,7 +176,7 @@ CREATE TABLE IF NOT EXISTS visits (
     type TEXT NOT NULL DEFAULT 'regular_visit' CHECK (type IN ('regular_visit', 'release_loan')),
     odometer_arrival TEXT,
     odometer_departure TEXT,
-    photo_url TEXT NOT NULL,
+    photo_url TEXT,
     notes TEXT,
     reason TEXT,
     status TEXT,
