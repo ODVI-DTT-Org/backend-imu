@@ -55,7 +55,7 @@ visits.post('/', authMiddleware, async (c) => {
       console.log('[Visits] FormData parsed, file present:', !!file);
 
       // Extract visit data from form fields
-      const formDataFields = ['client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'reason', 'status', 'address', 'latitude', 'longitude'];
+      const formDataFields = ['client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'reason', 'status', 'address', 'latitude', 'longitude', 'source'];
       formDataFields.forEach(field => {
         if (body[field] !== undefined) {
           visitData[field] = body[field];

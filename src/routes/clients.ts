@@ -909,6 +909,16 @@ clients.get('/:id', authMiddleware, async (c) => {
       }
     }
 
+    // Fetch visits for this client
+    const visitsResult = await pool.query(
+      `SELECT v.*, u.first_name as agent_first_name, u.last_name as agent_last_name
+       FROM visits v
+       LEFT JOIN users u ON u.id = v.user_id
+       WHERE v.client_id = $1
+       ORDER BY v.time_in DESC NULLS LAST`,
+      [id]
+    );
+
     return c.json({
       ...mapRowToClient(client),
       // Put touchpoints at root level for mobile Client.fromJson() compatibility
@@ -916,6 +926,7 @@ clients.get('/:id', authMiddleware, async (c) => {
       expand: {
         addresses: client.addresses,
         phone_numbers: client.phone_numbers,
+        visits: visitsResult.rows,
       },
       touchpoint_status: {
         completed_touchpoints: completedTouchpoints,
