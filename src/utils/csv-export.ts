@@ -316,10 +316,9 @@ export function getReportQuery(
   startDate?: string,
   endDate?: string
 ): { query: string; params: any[] } {
-  const dateCondition = getDateRangeCondition(startDate, endDate);
-
   switch (reportType) {
-    case 'releases':
+    case 'releases': {
+      const dateCondition = getDateRangeCondition(startDate, endDate, 'r.created_at::date');
       return {
         query: `
           SELECT
@@ -346,8 +345,10 @@ export function getReportQuery(
         `,
         params: dateCondition.params,
       };
+    }
 
-    case 'visits':
+    case 'visits': {
+      const dateCondition = getDateRangeCondition(startDate, endDate, 'v.created_at::date');
       return {
         query: `
           SELECT
@@ -379,6 +380,7 @@ export function getReportQuery(
         `,
         params: dateCondition.params,
       };
+    }
 
     default:
       throw new Error('Invalid report type');
