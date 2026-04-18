@@ -2189,7 +2189,7 @@ clients.post('/bulk-upload', authMiddleware, requirePermission('clients', 'creat
       removeOnFail: { age: 30 * 24 * 3600 },
     })
 
-    return c.json({ jobId: job.id })
+    return c.json({ jobId: job.id ?? '' })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return c.json({ error: 'Invalid request', details: error.errors }, 400)
