@@ -56,10 +56,10 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       const [touchpointResult] = await Promise.all([
         pool.query(
           `SELECT COUNT(*) as total,
-                  COUNT(*) FILTER (WHERE type = 'Visit') as visits,
-                  COUNT(*) FILTER (WHERE type = 'Call') as calls
-           FROM touchpoints
-           WHERE date::date >= $1 AND date::date <= $2 AND user_id = $3`,
+                  COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits,
+                  COUNT(*) FILTER (WHERE tp.type = 'Call') as calls
+           FROM touchpoints tp
+           WHERE tp.date >= $1 AND tp.date <= $2 AND tp.user_id = $3`,
           [start, end, user.sub]
         ),
       ]);
@@ -80,10 +80,10 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const [touchpointResult, caravanResult, teleResult, groupResult] = await Promise.all([
       pool.query(
         `SELECT COUNT(*) as total,
-                COUNT(*) FILTER (WHERE type = 'Visit') as visits,
-                COUNT(*) FILTER (WHERE type = 'Call') as calls
-         FROM touchpoints
-         WHERE date::date >= $1 AND date::date <= $2`,
+                COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits,
+                COUNT(*) FILTER (WHERE tp.type = 'Call') as calls
+         FROM touchpoints tp
+         WHERE tp.date >= $1 AND tp.date <= $2`,
         [start, end]
       ),
       pool.query(
@@ -93,7 +93,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
          JOIN users u ON u.id = t.user_id
          WHERE u.role = 'caravan'
            AND t.type = 'Visit'
-           AND t.date::date >= $1 AND t.date::date <= $2
+           AND t.date >= $1 AND t.date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY visits DESC
          LIMIT 3`,
@@ -106,7 +106,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
          JOIN users u ON u.id = t.user_id
          WHERE u.role = 'tele'
            AND t.type = 'Call'
-           AND t.date::date >= $1 AND t.date::date <= $2
+           AND t.date >= $1 AND t.date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY calls DESC
          LIMIT 3`,
@@ -120,7 +120,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
          JOIN group_members gm ON gm.group_id = g.id
          JOIN touchpoints t ON t.client_id = gm.client_id
          LEFT JOIN users u ON u.id = g.caravan_id
-         WHERE t.date::date >= $1 AND t.date::date <= $2
+         WHERE t.date >= $1 AND t.date <= $2
          GROUP BY g.id, g.name, u.first_name, u.last_name
          ORDER BY total_touchpoints DESC
          LIMIT 3`,
