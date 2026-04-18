@@ -231,6 +231,23 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
 
   const isPrimary = data.is_primary || existingCount.rows[0].count === '0';
 
+  // Tele/Caravan: submit for approval instead of inserting directly
+  const user = c.get('user');
+  if (user.role === 'tele' || user.role === 'caravan') {
+    const approval = await pool.query(
+      `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+       VALUES (gen_random_uuid(), 'phone_add', $1, $2, $3, 'Add Phone Number Request', $4, 'pending')
+       RETURNING *`,
+      [clientId, userId, user.role, JSON.stringify({ ...data, is_primary: isPrimary })]
+    );
+    await invalidateClientPhoneNumbersCache(clientId);
+    return c.json({
+      message: 'Phone number addition submitted for approval',
+      approval: approval.rows[0],
+      requires_approval: true,
+    }, 202);
+  }
+
   const result = await pool.query(
     `INSERT INTO phone_numbers (client_id, label, number, is_primary)
      VALUES ($1, $2, $3, $4)
@@ -238,13 +255,8 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
     [clientId, data.label, data.number, isPrimary]
   );
 
-  // Invalidate cache for this client's phone numbers
   await invalidateClientPhoneNumbersCache(clientId);
-
-  return c.json({
-    success: true,
-    data: mapRowToPhoneNumber(result.rows[0]),
-  }, 201);
+  return c.json({ success: true, data: mapRowToPhoneNumber(result.rows[0]) }, 201);
 });
 
 // GET /api/clients/:id/phone-numbers/:phoneId - Get single phone number

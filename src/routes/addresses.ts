@@ -235,14 +235,12 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
     throw new NotFoundError('Client not found or access denied');
   }
 
-  // Verify PSGC exists
-  const psgcCheck = await pool.query(
-    'SELECT id FROM psgc WHERE id = $1',
-    [data.psgc_id]
-  );
-
-  if (psgcCheck.rows.length === 0) {
-    throw new ValidationError('Invalid PSGC ID - geographic location not found');
+  // Verify PSGC exists (only if psgc_id provided)
+  if (data.psgc_id) {
+    const psgcCheck = await pool.query('SELECT id FROM psgc WHERE id = $1', [data.psgc_id]);
+    if (psgcCheck.rows.length === 0) {
+      throw new ValidationError('Invalid PSGC ID - geographic location not found');
+    }
   }
 
   // If this is the first address, automatically set as primary
@@ -250,8 +248,24 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
     'SELECT COUNT(*) FROM addresses WHERE client_id = $1 AND deleted_at IS NULL',
     [clientId]
   );
-
   const isPrimary = data.is_primary || existingCount.rows[0].count === '0';
+
+  // Tele/Caravan: submit for approval instead of inserting directly
+  const user = c.get('user');
+  if (user.role === 'tele' || user.role === 'caravan') {
+    const approval = await pool.query(
+      `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+       VALUES (gen_random_uuid(), 'address_add', $1, $2, $3, 'Add Address Request', $4, 'pending')
+       RETURNING *`,
+      [clientId, userId, user.role, JSON.stringify({ ...data, is_primary: isPrimary })]
+    );
+    await invalidateClientAddressesCache(clientId);
+    return c.json({
+      message: 'Address addition submitted for approval',
+      approval: approval.rows[0],
+      requires_approval: true,
+    }, 202);
+  }
 
   const result = await pool.query(
     `INSERT INTO addresses (client_id, type, street, barangay, city, province, postal_code, latitude, longitude, is_primary)
@@ -269,13 +283,8 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
     [result.rows[0]!.id!]
   );
 
-  // Invalidate cache for this client's addresses
   await invalidateClientAddressesCache(clientId);
-
-  return c.json({
-    success: true,
-    data: mapRowToAddress(fullResult.rows[0]),
-  }, 201);
+  return c.json({ success: true, data: mapRowToAddress(fullResult.rows[0]) }, 201);
 });
 
 // GET /api/clients/:id/addresses/:addressId - Get single address

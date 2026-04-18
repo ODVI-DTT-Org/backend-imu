@@ -546,11 +546,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         // CREATE phone_numbers record (matching existing schema)
         await client.query(`
           INSERT INTO phone_numbers (
-            id, client_id, type, number, label, is_primary
+            id, client_id, number, label, is_primary
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5
+            gen_random_uuid(), $1, $2, $3, $4
           )
-        `, [approval.client_id, notes.type, notes.number, notes.label, notes.is_primary]);
+        `, [approval.client_id, notes.number, notes.label, notes.is_primary]);
       } catch (parseError) {
         console.error('Failed to process phone approval:', parseError);
         await client.query('ROLLBACK');
