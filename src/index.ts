@@ -10,6 +10,7 @@ if (process.env.NODE_ENV !== 'production') {
 
 import { pool } from './db/index.js';
 import { authMiddleware, requireRole } from './middleware/auth.js';
+import { formDataMiddleware } from './middleware/formdata.js';
 import { logger, simpleRequestLogger } from './utils/logger.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { errorLogger } from './services/errorLogger.js';
@@ -113,6 +114,9 @@ app.use('*', cors({
   credentials: true,
   maxAge: 86400,
 }));
+
+// Parse multipart/form-data requests before route handlers
+app.use('*', formDataMiddleware);
 
 // Mount health check routes (comprehensive health monitoring)
 app.route('/api/health', healthRoutes);
