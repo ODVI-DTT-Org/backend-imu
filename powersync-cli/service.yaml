@@ -30,7 +30,7 @@ replication:
       # [optional] Alternative to uri: individual connection parameters.
       hostname: imu-do-user-21438450-0.j.db.ondigitalocean.com
       port: 25060
-      database: qa
+      database: qa2
       username: doadmin
       # [optional] Connection identifiers.
       name: Default

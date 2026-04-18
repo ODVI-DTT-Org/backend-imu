@@ -79,7 +79,7 @@ streams:
   phone_numbers:
     auto_subscribe: true
     query: |
-      SELECT p.id, p.client_id, p.type, p.number, p.label, p.is_primary,
+      SELECT p.id, p.client_id, p.number, p.label, p.is_primary,
         p.created_at
       FROM phone_numbers p
       JOIN clients c ON c.id = p.client_id

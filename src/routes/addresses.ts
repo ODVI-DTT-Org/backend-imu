@@ -20,9 +20,9 @@ addresses.use('/*', apiRateLimit);
 
 // Validation schemas
 const createAddressSchema = z.object({
-  psgc_id: z.number().int().positive(),
-  label: z.enum(['Home', 'Work', 'Relative', 'Other']),
-  street_address: z.string().min(1).max(500),
+  psgc_id: z.number().int().positive().optional(),
+  type: z.enum(['Home', 'Work', 'Relative', 'Other']),
+  street: z.string().min(1).max(500),
   postal_code: z.string().max(10).optional(),
   latitude: z.number().min(-90).max(90).optional(),
   longitude: z.number().min(-180).max(180).optional(),
@@ -37,8 +37,8 @@ function mapRowToAddress(row: Record<string, any>) {
     id: row.id,
     client_id: row.client_id,
     psgc_id: row.psgc_id,
-    label: row.label,
-    street_address: row.street_address,
+    type: row.type,
+    street: row.street,
     postal_code: row.postal_code,
     latitude: row.latitude,
     longitude: row.longitude,
@@ -248,10 +248,10 @@ addresses.post('/clients/:id/addresses', authMiddleware, auditMiddleware('client
   const isPrimary = data.is_primary || existingCount.rows[0].count === '0';
 
   const result = await pool.query(
-    `INSERT INTO addresses (client_id, psgc_id, label, street_address, postal_code, latitude, longitude, is_primary)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO addresses (client_id, type, street, postal_code, latitude, longitude, is_primary)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING *`,
-    [clientId, data.psgc_id, data.label, data.street_address, data.postal_code, data.latitude, data.longitude, isPrimary]
+    [clientId, data.type, data.street, data.postal_code, data.latitude, data.longitude, isPrimary]
   );
 
   // Fetch with PSGC data
@@ -348,7 +348,7 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
   }
 
   // Build update query dynamically with whitelist
-  const ALLOWED_UPDATE_FIELDS = ['label', 'street_address', 'postal_code', 'latitude', 'longitude', 'is_primary'];
+  const ALLOWED_UPDATE_FIELDS = ['type', 'street', 'postal_code', 'latitude', 'longitude', 'is_primary'];
   const updates: string[] = [];
   const values: any[] = [];
   let paramIndex = 1;
