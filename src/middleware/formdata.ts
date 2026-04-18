@@ -45,18 +45,20 @@ export async function formDataMiddleware(c: Context, next: Next) {
           fields[fieldname] = value;
         });
 
-        busboy.on('file', (fieldname: string, file: any, filename: string, encoding: string, mimetype: string) => {
-          console.log('[FormData Middleware] File:', fieldname, 'filename:', filename, 'mimetype:', mimetype);
+        // busboy v1.x API: (name, stream, info) where info = { filename, encoding, mimeType }
+        busboy.on('file', (fieldname: string, stream: any, info: { filename: string; encoding: string; mimeType: string }) => {
+          const { filename, mimeType } = info;
+          console.log('[FormData Middleware] File:', fieldname, 'filename:', filename, 'mimetype:', mimeType);
           const chunks: Buffer[] = [];
 
-          file.on('data', (data: any) => {
+          stream.on('data', (data: any) => {
             chunks.push(data);
           });
 
-          file.on('end', () => {
+          stream.on('end', () => {
             const fileBuffer = Buffer.concat(chunks);
             console.log('[FormData Middleware] File size:', fileBuffer.length, 'bytes');
-            const fileObj = new File([fileBuffer], filename || 'unknown', { type: mimetype || 'application/octet-stream' });
+            const fileObj = new File([fileBuffer], filename || 'unknown', { type: mimeType || 'application/octet-stream' });
             fields[fieldname] = fileObj;
             console.log('[FormData Middleware] File object created:', filename);
           });
