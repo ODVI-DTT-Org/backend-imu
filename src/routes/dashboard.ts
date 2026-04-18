@@ -37,157 +37,124 @@ function getLocalDateString(date = new Date()): string {
   return `${year}-${month}-${day}`;
 }
 
-// GET /api/dashboard - Get dashboard statistics
+// GET /api/dashboard - Get dashboard summary + leaderboards
 dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
     const startDate = c.req.query('start_date');
     const endDate = c.req.query('end_date');
 
-    // Default to current month if no dates provided
     const now = new Date();
-    const monthStart = startDate || getLocalDateString(new Date(now.getFullYear(), now.getMonth(), 1));
-    const monthEnd = endDate || getLocalDateString(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const start = startDate || fmt(new Date(now.getFullYear(), now.getMonth(), 1));
+    const end = endDate || fmt(now);
 
-    // Build role-based filter
-    const caravanFilter = user.role === 'caravan' ? 'AND user_id = $3' : '';
-    const caravanParams = user.role === 'caravan' ? [user.sub] : [];
+    const isCaravan = user.role === 'caravan';
 
-    const isManager = ['area_manager', 'assistant_area_manager'].includes(user.role);
-    let managerMemberIds: string[] = [];
-    let groupName: string | null = null;
-    if (isManager) {
-      managerMemberIds = await getManagerGroupMemberIds(user.sub);
-      const groupNameResult = await pool.query(
-        `SELECT name FROM groups WHERE area_manager_id = $1 OR assistant_area_manager_id = $1 LIMIT 1`,
-        [user.sub]
-      );
-      groupName = groupNameResult.rows[0]?.name || null;
-    }
-    const managerFilter = isManager && managerMemberIds.length > 0
-      ? `AND user_id = ANY($3::uuid[])`
-      : '';
-    const managerParams = isManager && managerMemberIds.length > 0
-      ? [managerMemberIds]
-      : [];
-
-    // Get client statistics
-    const clientStats = await pool.query(
-      `SELECT
-        COUNT(*) FILTER (WHERE client_type = 'POTENTIAL') as potential_clients,
-        COUNT(*) FILTER (WHERE client_type = 'EXISTING') as existing_clients,
-        COUNT(*) as total_clients
-       FROM clients
-       WHERE 1=1 ${user.role === 'caravan' ? 'AND user_id = $1' : ''}`,
-      caravanParams
-    );
-
-    // Get touchpoint statistics for the period
-    const touchpointStats = await pool.query(
-      `SELECT
-        COUNT(*) as total_touchpoints,
-        COUNT(*) FILTER (WHERE type = 'Visit') as visits,
-        COUNT(*) FILTER (WHERE type = 'Call') as calls
-       FROM touchpoints
-       WHERE created_at::date >= $1 AND created_at::date <= $2 ${caravanFilter}${managerFilter}`,
-      [monthStart, monthEnd, ...caravanParams, ...managerParams]
-    );
-
-    // Get itinerary statistics
-    const itineraryStats = await pool.query(
-      `SELECT
-        COUNT(*) as total_itineraries,
-        COUNT(*) FILTER (WHERE status = 'pending') as pending,
-        COUNT(*) FILTER (WHERE status = 'completed') as completed,
-        COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled,
-        COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress
-       FROM itineraries
-       WHERE scheduled_date >= $1 AND scheduled_date <= $2 ${caravanFilter}${managerFilter}`,
-      [monthStart, monthEnd, ...caravanParams, ...managerParams]
-    );
-
-    // Get caravan statistics (admin only)
-    let caravanStats = { total_caravans: 0, active_caravans: 0 };
-    if (user.role === 'admin' || user.role === 'staff') {
-      const caravanResult = await pool.query(
-        `SELECT
-          COUNT(*) as total_caravans,
-          COUNT(*) FILTER (WHERE u.is_active = true) as active_caravans
-         FROM users u
-         WHERE u.role = 'caravan'`
-      );
-      caravanStats = caravanResult.rows[0];
+    if (isCaravan) {
+      const [touchpointResult] = await Promise.all([
+        pool.query(
+          `SELECT COUNT(*) as total,
+                  COUNT(*) FILTER (WHERE type = 'Visit') as visits,
+                  COUNT(*) FILTER (WHERE type = 'Call') as calls
+           FROM touchpoints
+           WHERE date::date >= $1 AND date::date <= $2 AND user_id = $3`,
+          [start, end, user.sub]
+        ),
+      ]);
+      const tp = touchpointResult.rows[0];
+      return c.json({
+        period: { start_date: start, end_date: end },
+        summary: {
+          total_touchpoints: parseInt(tp.total),
+          visits: parseInt(tp.visits),
+          calls: parseInt(tp.calls),
+        },
+        top_caravans: [],
+        top_teles: [],
+        top_groups: [],
+      });
     }
 
-    // Get recent activity
-    const recentActivity = await pool.query(
-      `SELECT
-        'touchpoint' as type, t.id, t.created_at as date,
-        c.first_name || ' ' || c.last_name as client_name
-       FROM touchpoints t
-       JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
-       WHERE t.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 't.user_id')}
-       UNION ALL
-       SELECT
-        'itinerary' as type, i.id, i.created_at as date,
-        c.first_name || ' ' || c.last_name as client_name
-       FROM itineraries i
-       JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
-       WHERE i.created_at >= NOW() - INTERVAL '7 days' ${caravanFilter.replace('caravan_id', 'i.user_id')}
-       ORDER BY date DESC
-       LIMIT 10`,
-      user.role === 'caravan' ? [user.sub, user.sub] : []
-    );
+    const [touchpointResult, caravanResult, teleResult, groupResult] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) as total,
+                COUNT(*) FILTER (WHERE type = 'Visit') as visits,
+                COUNT(*) FILTER (WHERE type = 'Call') as calls
+         FROM touchpoints
+         WHERE date::date >= $1 AND date::date <= $2`,
+        [start, end]
+      ),
+      pool.query(
+        `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
+                COUNT(*) as visits
+         FROM touchpoints t
+         JOIN users u ON u.id = t.user_id
+         WHERE u.role = 'caravan'
+           AND t.type = 'Visit'
+           AND t.date::date >= $1 AND t.date::date <= $2
+         GROUP BY u.id, u.first_name, u.last_name
+         ORDER BY visits DESC
+         LIMIT 3`,
+        [start, end]
+      ),
+      pool.query(
+        `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
+                COUNT(*) as calls
+         FROM touchpoints t
+         JOIN users u ON u.id = t.user_id
+         WHERE u.role = 'tele'
+           AND t.type = 'Call'
+           AND t.date::date >= $1 AND t.date::date <= $2
+         GROUP BY u.id, u.first_name, u.last_name
+         ORDER BY calls DESC
+         LIMIT 3`,
+        [start, end]
+      ),
+      pool.query(
+        `SELECT g.id as group_id, g.name,
+                u.first_name || ' ' || u.last_name as caravan_name,
+                COUNT(t.id) as total_touchpoints
+         FROM groups g
+         JOIN group_members gm ON gm.group_id = g.id
+         JOIN touchpoints t ON t.client_id = gm.client_id
+         LEFT JOIN users u ON u.id = g.caravan_id
+         WHERE t.date::date >= $1 AND t.date::date <= $2
+         GROUP BY g.id, g.name, u.first_name, u.last_name
+         ORDER BY total_touchpoints DESC
+         LIMIT 3`,
+        [start, end]
+      ),
+    ]);
 
-    // Get clients by agency breakdown
-    const clientsByAgency = await pool.query(
-      `SELECT a.name as agency_name, COUNT(c.id) as client_count
-       FROM clients c
-       LEFT JOIN agencies a ON a.id = c.agency_id
-       ${user.role === 'caravan' ? 'WHERE c.user_id = $1' : ''}
-       GROUP BY a.name
-       ORDER BY client_count DESC
-       LIMIT 5`,
-      caravanParams
-    );
-
+    const tp = touchpointResult.rows[0];
     return c.json({
-      period: {
-        start_date: monthStart,
-        end_date: monthEnd,
+      period: { start_date: start, end_date: end },
+      summary: {
+        total_touchpoints: parseInt(tp.total),
+        visits: parseInt(tp.visits),
+        calls: parseInt(tp.calls),
       },
-      group_name: groupName,
-      clients: {
-        total: parseInt(clientStats.rows[0].total_clients),
-        potential: parseInt(clientStats.rows[0].potential_clients),
-        existing: parseInt(clientStats.rows[0].existing_clients),
-      },
-      touchpoints: {
-        total: parseInt(touchpointStats.rows[0].total_touchpoints),
-        visits: parseInt(touchpointStats.rows[0].visits),
-        calls: parseInt(touchpointStats.rows[0].calls),
-      },
-      itineraries: {
-        total: parseInt(itineraryStats.rows[0].total_itineraries),
-        pending: parseInt(itineraryStats.rows[0].pending),
-        completed: parseInt(itineraryStats.rows[0].completed),
-        cancelled: parseInt(itineraryStats.rows[0].cancelled),
-        in_progress: parseInt(itineraryStats.rows[0].in_progress),
-      },
-      caravans: caravanStats,
-      clients_by_agency: clientsByAgency.rows.map(r => ({
-        agency: r.agency_name || 'Unassigned',
-        count: parseInt(r.client_count),
+      top_caravans: caravanResult.rows.map((r: any) => ({
+        user_id: r.user_id,
+        name: r.name,
+        visits: parseInt(r.visits),
       })),
-      recent_activity: recentActivity.rows.map(r => ({
-        type: r.type,
-        id: r.id,
-        date: r.date,
-        client_name: r.client_name,
+      top_teles: teleResult.rows.map((r: any) => ({
+        user_id: r.user_id,
+        name: r.name,
+        calls: parseInt(r.calls),
+      })),
+      top_groups: groupResult.rows.map((r: any) => ({
+        group_id: r.group_id,
+        name: r.name,
+        caravan_name: r.caravan_name || null,
+        total_touchpoints: parseInt(r.total_touchpoints),
       })),
     });
   } catch (error) {
-    console.error('Dashboard stats error:', error);
+    console.error('Dashboard error:', error);
     throw error;
   }
 });
