@@ -18,6 +18,17 @@ import { kpiCalculatorService } from '../services/kpi-calculator.js';
 
 const dashboard = new Hono();
 
+async function getManagerGroupMemberIds(userId: string): Promise<string[]> {
+  const result = await pool.query(
+    `SELECT gm.client_id as user_id
+     FROM groups g
+     JOIN group_members gm ON gm.group_id = g.id
+     WHERE g.area_manager_id = $1 OR g.assistant_area_manager_id = $1`,
+    [userId]
+  );
+  return result.rows.map((r: any) => r.user_id);
+}
+
 // Helper function to get local date string (not UTC)
 function getLocalDateString(date = new Date()): string {
   const year = date.getFullYear();
@@ -42,6 +53,24 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const caravanFilter = user.role === 'caravan' ? 'AND user_id = $3' : '';
     const caravanParams = user.role === 'caravan' ? [user.sub] : [];
 
+    const isManager = ['area_manager', 'assistant_area_manager'].includes(user.role);
+    let managerMemberIds: string[] = [];
+    let groupName: string | null = null;
+    if (isManager) {
+      managerMemberIds = await getManagerGroupMemberIds(user.sub);
+      const groupNameResult = await pool.query(
+        `SELECT name FROM groups WHERE area_manager_id = $1 OR assistant_area_manager_id = $1 LIMIT 1`,
+        [user.sub]
+      );
+      groupName = groupNameResult.rows[0]?.name || null;
+    }
+    const managerFilter = isManager && managerMemberIds.length > 0
+      ? `AND user_id = ANY($3::uuid[])`
+      : '';
+    const managerParams = isManager && managerMemberIds.length > 0
+      ? [managerMemberIds]
+      : [];
+
     // Get client statistics
     const clientStats = await pool.query(
       `SELECT
@@ -60,8 +89,8 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         COUNT(*) FILTER (WHERE type = 'Visit') as visits,
         COUNT(*) FILTER (WHERE type = 'Call') as calls
        FROM touchpoints
-       WHERE created_at::date >= $1 AND created_at::date <= $2 ${caravanFilter}`,
-      [monthStart, monthEnd, ...caravanParams]
+       WHERE created_at::date >= $1 AND created_at::date <= $2 ${caravanFilter}${managerFilter}`,
+      [monthStart, monthEnd, ...caravanParams, ...managerParams]
     );
 
     // Get itinerary statistics
@@ -73,8 +102,8 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled,
         COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress
        FROM itineraries
-       WHERE scheduled_date >= $1 AND scheduled_date <= $2 ${caravanFilter.replace('user_id', 'user_id')}`,
-      [monthStart, monthEnd, ...caravanParams]
+       WHERE scheduled_date >= $1 AND scheduled_date <= $2 ${caravanFilter}${managerFilter}`,
+      [monthStart, monthEnd, ...caravanParams, ...managerParams]
     );
 
     // Get caravan statistics (admin only)
@@ -127,6 +156,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         start_date: monthStart,
         end_date: monthEnd,
       },
+      group_name: groupName,
       clients: {
         total: parseInt(clientStats.rows[0].total_clients),
         potential: parseInt(clientStats.rows[0].potential_clients),
