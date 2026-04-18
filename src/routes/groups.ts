@@ -109,6 +109,37 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
   }
 });
 
+// GET /api/groups/my - Get the group managed by the current user
+groups.get('/my', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const result = await pool.query(
+      `SELECT g.id, g.name, g.area_manager_id, g.assistant_area_manager_id,
+              array_agg(gm.client_id) FILTER (WHERE gm.client_id IS NOT NULL) as members
+       FROM groups g
+       LEFT JOIN group_members gm ON gm.group_id = g.id
+       WHERE g.area_manager_id = $1 OR g.assistant_area_manager_id = $1
+       GROUP BY g.id
+       LIMIT 1`,
+      [user.sub]
+    );
+    if (!result.rows[0]) {
+      return c.json({ error: 'No group found' }, 404);
+    }
+    const row = result.rows[0];
+    return c.json({
+      id: row.id,
+      name: row.name,
+      area_manager_id: row.area_manager_id,
+      assistant_area_manager_id: row.assistant_area_manager_id,
+      members: row.members || [],
+    });
+  } catch (error) {
+    console.error('Get my group error:', error);
+    throw new Error('Failed to get group');
+  }
+});
+
 // GET /api/groups/:id - Get single group with members
 groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c) => {
   try {
