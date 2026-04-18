@@ -10,7 +10,7 @@ export const createVisitSchema = z.object({
   time_out: z.coerce.date().optional(),
   odometer_arrival: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
   odometer_departure: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
-  photo_url: z.preprocess(v => (v === '' ? null : v), z.string().url().nullish()),
+  photo_url: z.preprocess(v => (!v ? undefined : v), z.string().url().optional()),
   notes: z.preprocess(v => (v === '' ? null : v), z.string().max(5000).nullish()),
   reason: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
   status: z.preprocess(v => (v === '' ? null : v), z.string().max(100).nullish()),
