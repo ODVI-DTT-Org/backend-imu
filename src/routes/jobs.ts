@@ -1,8 +1,7 @@
 /**
  * Background Jobs API Routes
  *
- * Endpoints for managing background jobs like PSGC matching and report generation.
- * Supports both legacy background jobs (database) and new BullMQ jobs (Redis).
+ * Endpoints for managing background jobs via BullMQ/Redis.
  */
 
 import { Hono } from 'hono';
@@ -10,21 +9,11 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { ValidationError } from '../errors/index.js';
-import {
-  createJob,
-  getJob,
-  getJobsForUser,
-  cancelJob,
-  updateProgress,
-  startJobProcessor,
-} from '../services/backgroundJob.js';
-import { psgcMatchingProcessor } from '../services/psgcJobProcessor.js';
-import { reportsJobProcessor } from '../services/reportsJobProcessor.js';
-import { userLocationAssignmentProcessor } from '../services/userLocationJobProcessor.js';
 import { logger } from '../utils/logger.js';
 import { getQueueManager } from '../queues/index.js';
 import { requireRole } from '../middleware/auth.js';
-import { getJobStatus, cancelJob as cancelBullMQJob } from '../queues/utils/job-helpers.js';
+import { addLocationJob, addReportJob, getJobStatus, cancelJob as cancelBullMQJob } from '../queues/utils/job-helpers.js';
+import { LocationJobType, ReportJobType } from '../queues/jobs/job-types.js';
 import { manualRefreshActionItems } from '../services/actionItemsRefreshService.js';
 import { getSchedulerStatus, triggerTask } from '../services/cronScheduler.js';
 
@@ -54,7 +43,7 @@ const createUserLocationAssignmentSchema = z.object({
 
 /**
  * POST /api/jobs/psgc/matching
- * Start PSGC matching background job
+ * Start PSGC matching job via BullMQ
  */
 jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) => {
   try {
@@ -62,19 +51,13 @@ jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) =>
     const body = await c.req.json();
     const validated = createPSGCJobSchema.parse(body);
 
-    // Create background job
-    const job = await createJob({
-      type: 'psgc_matching',
-      params: validated,
-      created_by: user.sub,
-    });
+    const job = await addLocationJob(LocationJobType.PSGC_MATCHING, user.sub, [], validated);
 
-    // Return immediately with job ID
     return c.json({
       success: true,
       job_id: job.id,
       message: 'PSGC matching job started',
-      status_url: `/api/jobs/${job.id}`,
+      status_url: `/api/jobs/queue/${job.id}`,
     }, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
@@ -91,7 +74,7 @@ jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) =>
 
 /**
  * POST /api/jobs/reports/generate
- * Generate report in background
+ * Generate report in background via BullMQ
  */
 jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) => {
   try {
@@ -99,19 +82,24 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
     const body = await c.req.json();
     const validated = createReportJobSchema.parse(body);
 
-    // Create background job
-    const job = await createJob({
-      type: 'report_generation',
-      params: validated,
-      created_by: user.sub,
+    const reportTypeMap: Record<string, ReportJobType> = {
+      agent_performance: ReportJobType.REPORT_AGENT_PERFORMANCE,
+      client_activity: ReportJobType.REPORT_CLIENT_ACTIVITY,
+      touchpoint_summary: ReportJobType.REPORT_TOUCHPOINT_SUMMARY,
+    };
+    const jobType = reportTypeMap[validated.report_type] ?? ReportJobType.REPORT_AGENT_PERFORMANCE;
+
+    const job = await addReportJob(jobType, user.sub, {
+      startDate: validated.start_date,
+      endDate: validated.end_date,
+      userId: validated.user_id,
     });
 
-    // Return immediately with job ID
     return c.json({
       success: true,
       job_id: job.id,
       message: 'Report generation job started',
-      status_url: `/api/jobs/${job.id}`,
+      status_url: `/api/jobs/queue/${job.id}`,
     }, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
@@ -128,7 +116,7 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
 
 /**
  * POST /api/jobs/user-locations/assign
- * Assign municipalities to users in background
+ * Assign municipalities to users via BullMQ
  */
 jobs.post('/user-locations/assign', requirePermission('users', 'update'), async (c) => {
   try {
@@ -136,19 +124,18 @@ jobs.post('/user-locations/assign', requirePermission('users', 'update'), async 
     const body = await c.req.json();
     const validated = createUserLocationAssignmentSchema.parse(body);
 
-    // Create background job
-    const job = await createJob({
-      type: 'user_location_assignment',
-      params: validated,
-      created_by: user.sub,
-    });
+    const job = await addLocationJob(
+      LocationJobType.BULK_ASSIGN_USER_MUNICIPALITIES,
+      user.sub,
+      validated.municipality_ids,
+      { userId: validated.user_id }
+    );
 
-    // Return immediately with job ID
     return c.json({
       success: true,
       job_id: job.id,
       message: 'User location assignment job started',
-      status_url: `/api/jobs/${job.id}`,
+      status_url: `/api/jobs/queue/${job.id}`,
     }, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
@@ -163,129 +150,6 @@ jobs.post('/user-locations/assign', requirePermission('users', 'update'), async 
   }
 });
 
-/**
- * GET /api/jobs/:id
- * Get job status and result
- */
-jobs.get('/:id', async (c) => {
-  try {
-    const jobId = c.req.param('id');
-
-    const job = await getJob(jobId);
-
-    if (!job) {
-      return c.json({
-        success: false,
-        message: 'Job not found',
-      }, 404);
-    }
-
-    // Check if user owns this job or is admin
-    const user = c.get('user');
-
-    if (job.created_by && job.created_by !== user.sub && user.role !== 'admin') {
-      return c.json({
-        success: false,
-        message: 'You do not have permission to view this job',
-      }, 403);
-    }
-
-    return c.json({
-      success: true,
-      job: {
-        id: job.id,
-        type: job.type,
-        status: job.status,
-        progress: job.progress,
-        total_items: job.total_items,
-        result: job.result,
-        error: job.error,
-        created_at: job.created_at,
-        started_at: job.started_at,
-        completed_at: job.completed_at,
-      },
-    });
-  } catch (error: any) {
-    logger.error('jobs/get', error);
-    throw error;
-  }
-});
-
-/**
- * GET /api/jobs
- * Get jobs for current user
- */
-jobs.get('/', async (c) => {
-  try {
-    const user = c.get('user');
-    const type = c.req.query('type') as any;
-    const limit = parseInt(c.req.query('limit') || '20');
-
-    const jobs = await getJobsForUser(user.sub, type, limit);
-
-    return c.json({
-      success: true,
-      jobs: jobs.map(job => ({
-        id: job.id,
-        type: job.type,
-        status: job.status,
-        progress: job.progress,
-        total_items: job.total_items,
-        created_at: job.created_at,
-        completed_at: job.completed_at,
-      })),
-    });
-  } catch (error: any) {
-    logger.error('jobs/list', error);
-    throw error;
-  }
-});
-
-/**
- * DELETE /api/jobs/:id
- * Cancel a job
- */
-jobs.delete('/:id', async (c) => {
-  try {
-    const jobId = c.req.param('id');
-    const user = c.get('user');
-
-    const job = await getJob(jobId);
-
-    if (!job) {
-      return c.json({
-        success: false,
-        message: 'Job not found',
-      }, 404);
-    }
-
-    // Check if user owns this job or is admin
-    if (job.created_by && job.created_by !== user.sub && user.role !== 'admin') {
-      return c.json({
-        success: false,
-        message: 'You do not have permission to cancel this job',
-      }, 403);
-    }
-
-    // Can only cancel pending or processing jobs
-    if (job.status !== 'pending' && job.status !== 'processing') {
-      return c.json({
-        success: false,
-        message: `Cannot cancel job with status ${job.status}`,
-      }, 400);
-    }
-
-    await cancelJob(jobId);
-
-    return c.json({
-      success: true,
-      message: 'Job cancelled',
-    });
-  } catch (error: any) {
-    logger.error('jobs/cancel', error);
-    throw error;
-  }
-});
 
 /**
  * GET /api/jobs/health
@@ -376,12 +240,6 @@ jobs.post('/scheduler/trigger/:taskName', authMiddleware, requireRole('admin'), 
   }
 });
 
-// Start job processor when this module is loaded
-startJobProcessor([psgcMatchingProcessor, reportsJobProcessor, userLocationAssignmentProcessor], 5000);
-
-// ============================================================================
-// BullMQ Queue Job Routes (New System)
-// ============================================================================
 
 /**
  * GET /api/jobs/queue/jobs
