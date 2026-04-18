@@ -63,11 +63,7 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
       paramIndex++;
     }
 
-    if (status && status !== 'all') {
-      conditions.push(`g.status = $${paramIndex}`);
-      params.push(status);
-      paramIndex++;
-    }
+    // Note: groups table has no 'status' column — filter omitted
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
@@ -200,9 +196,9 @@ groups.post('/', authMiddleware, requirePermission('groups', 'create'), auditMid
 
     // Insert members into group_members table if provided
     if (members.length > 0) {
-      const memberValues = members.map((memberId: string) => `('${groupId}', '${memberId}')`).join(',');
+      const placeholders = members.map((_: string, i: number) => `(gen_random_uuid(), $1, $${i + 2})`).join(', ');
       await pool.query(
-        `INSERT INTO group_members (id, group_id, client_id) VALUES ${members.map(() => '(gen_random_uuid(), $1, $2)').join(', ')} ON CONFLICT DO NOTHING`,
+        `INSERT INTO group_members (id, group_id, client_id) VALUES ${placeholders} ON CONFLICT DO NOTHING`,
         [groupId, ...members]
       );
     }
@@ -278,8 +274,9 @@ groups.put('/:id', authMiddleware, requirePermission('groups', 'update'), auditM
 
       // Add new members if provided
       if (validated.members.length > 0) {
+        const placeholders = validated.members.map((_: string, i: number) => `(gen_random_uuid(), $1, $${i + 2})`).join(', ');
         await pool.query(
-          `INSERT INTO group_members (id, group_id, client_id) VALUES ${validated.members.map(() => '(gen_random_uuid(), $1, $2)').join(', ')} ON CONFLICT DO NOTHING`,
+          `INSERT INTO group_members (id, group_id, client_id) VALUES ${placeholders} ON CONFLICT DO NOTHING`,
           [id, ...validated.members]
         );
       }

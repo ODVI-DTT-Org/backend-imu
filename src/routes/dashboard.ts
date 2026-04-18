@@ -39,7 +39,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const monthEnd = endDate || getLocalDateString(new Date(now.getFullYear(), now.getMonth() + 1, 0));
 
     // Build role-based filter
-    const caravanFilter = user.role === 'caravan' ? 'AND caravan_id = $3' : '';
+    const caravanFilter = user.role === 'caravan' ? 'AND user_id = $3' : '';
     const caravanParams = user.role === 'caravan' ? [user.sub] : [];
 
     // Get client statistics
@@ -60,7 +60,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         COUNT(*) FILTER (WHERE type = 'Visit') as visits,
         COUNT(*) FILTER (WHERE type = 'Call') as calls
        FROM touchpoints
-       WHERE date >= $1 AND date <= $2 ${caravanFilter}`,
+       WHERE created_at::date >= $1 AND created_at::date <= $2 ${caravanFilter}`,
       [monthStart, monthEnd, ...caravanParams]
     );
 
@@ -73,7 +73,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled,
         COUNT(*) FILTER (WHERE status = 'in_progress') as in_progress
        FROM itineraries
-       WHERE scheduled_date >= $1 AND scheduled_date <= $2 ${caravanFilter}`,
+       WHERE scheduled_date >= $1 AND scheduled_date <= $2 ${caravanFilter.replace('user_id', 'user_id')}`,
       [monthStart, monthEnd, ...caravanParams]
     );
 
@@ -158,7 +158,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     });
   } catch (error) {
     console.error('Dashboard stats error:', error);
-    throw new Error();
+    throw error;
   }
 });
 
