@@ -27,6 +27,13 @@ const createItinerarySchema = z.object({
 
 const updateItinerarySchema = createItinerarySchema.partial();
 
+const bulkCreateItinerarySchema = z.object({
+  caravan_ids: z.array(z.string().uuid()).min(1),
+  client_ids: z.array(z.string().uuid()).min(1),
+  scheduled_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  priority: z.enum(['low', 'normal', 'high']).default('normal'),
+});
+
 // Helper to map DB row to Itinerary type
 function mapRowToItinerary(row: Record<string, any>) {
   return {
@@ -120,6 +127,16 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
       conditions.push(`c.province = $${paramIndex}`);
       params.push(province);
       paramIndex++;
+    }
+
+    const caravanIdsParam = c.req.query('caravan_ids');
+    if (caravanIdsParam) {
+      const ids = caravanIdsParam.split(',').filter(Boolean);
+      if (ids.length > 0) {
+        conditions.push(`i.user_id = ANY($${paramIndex}::uuid[])`);
+        params.push(ids);
+        paramIndex++;
+      }
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -247,6 +264,44 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
   } catch (error) {
     console.error('Fetch itinerary error:', error);
     throw new Error();
+  }
+});
+
+// POST /api/itineraries/bulk - Create N×M itinerary records for manager bulk-assign
+itineraries.post('/bulk', authMiddleware, requirePermission('itineraries', 'create'), async (c) => {
+  try {
+    const user = c.get('user');
+    const body = await c.req.json();
+    const validated = bulkCreateItinerarySchema.parse(body);
+
+    const { caravan_ids, client_ids, scheduled_date, priority } = validated;
+
+    const values: string[] = [];
+    const params: any[] = [];
+    let idx = 1;
+
+    for (const caravanId of caravan_ids) {
+      for (const clientId of client_ids) {
+        values.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4})`);
+        params.push(caravanId, clientId, scheduled_date, priority, user.sub);
+        idx += 5;
+      }
+    }
+
+    await pool.query(
+      `INSERT INTO itineraries (user_id, client_id, scheduled_date, priority, created_by)
+       VALUES ${values.join(', ')}`,
+      params
+    );
+
+    const created = caravan_ids.length * client_ids.length;
+    return c.json({ created }, 201);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Validation failed', details: error.errors }, 400);
+    }
+    console.error('Bulk create itineraries error:', error);
+    throw new Error('Failed to bulk create itineraries');
   }
 });
 
