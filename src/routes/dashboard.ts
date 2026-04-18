@@ -154,8 +154,9 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       })),
     });
   } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
     console.error('Dashboard error:', error);
-    throw error;
+    return c.json({ error: msg, message: msg }, 500);
   }
 });
 
