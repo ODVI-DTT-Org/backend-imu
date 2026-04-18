@@ -21,6 +21,9 @@ export enum BulkJobType {
   // Bulk Approvals
   BULK_APPROVE = 'bulk_approve',
   BULK_REJECT = 'bulk_reject',
+
+  // Bulk Upload
+  BULK_UPLOAD_CLIENTS = 'bulk_upload_clients',
 }
 
 /**
@@ -87,6 +90,7 @@ export const QUEUE_NAMES = {
   REPORTS: 'reports',
   LOCATION_ASSIGNMENTS: 'location-assignments',
   SYNC_OPERATIONS: 'sync-operations',
+  BULK_UPLOAD: 'bulk-upload',
 } as const;
 
 export type QueueName = typeof QUEUE_NAMES[keyof typeof QUEUE_NAMES];
@@ -153,6 +157,47 @@ export interface SyncJobData extends BaseJobData {
     table: string;
     data: any;
   }>;
+}
+
+/**
+ * Individual client row for bulk upload
+ */
+export interface BulkUploadClientRow {
+  last_name: string
+  first_name: string
+  middle_name?: string
+  suffix?: string
+  pension_type: string
+  client_type?: string
+  product_type?: string
+  market_type?: string
+  phone?: string
+  email?: string
+  birth_date?: string
+  province?: string
+  municipality?: string
+  barangay?: string
+  pan?: string
+  facebook_link?: string
+  remarks?: string
+  _originalRow: Record<string, string>
+  _rowNumber: number
+}
+
+/**
+ * Job data for bulk client upload
+ */
+export interface BulkUploadJobData extends BaseJobData {
+  rows: BulkUploadClientRow[]
+  userRole: string
+}
+
+/**
+ * Result type for bulk upload job
+ */
+export interface BulkUploadJobResult {
+  successful: Array<BulkUploadClientRow & { id: string }>
+  failed: Array<BulkUploadClientRow & { error: string }>
 }
 
 /**
