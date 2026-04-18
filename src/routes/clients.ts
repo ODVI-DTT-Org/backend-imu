@@ -646,6 +646,15 @@ clients.get('/assigned', authMiddleware, async (c) => {
       logSearchStrategy(parsedSearch, 'GET /api/clients/assigned', searchResult.strategy);
     }
 
+    // Add tele_member_ids filter for managers: restrict to clients assigned to specific tele users
+    const teleMemberIdsQuery = c.req.queries('tele_member_ids');
+    const teleMemberIds = teleMemberIdsQuery?.length ? teleMemberIdsQuery : undefined;
+    if (teleMemberIds && teleMemberIds.length > 0) {
+      baseWhereConditions.push(`c.user_id = ANY($${baseParamIndex}::uuid[])`);
+      baseParams.push(teleMemberIds);
+      baseParamIndex += 1;
+    }
+
     // Build WHERE clause for main query
     // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
     // This will be handled differently in each endpoint
