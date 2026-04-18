@@ -96,7 +96,7 @@ async function checkRolePermission(
     if (resource === 'clients' && ['create', 'read'].includes(action)) return true;
     if (resource === 'touchpoints' && action === 'create' && constraint === 'visit') return true;
     if (resource === 'touchpoints' && ['read', 'update'].includes(action)) return true;
-    if (resource === 'itineraries' && ['create', 'read', 'update'].includes(action)) return true;
+    if (resource === 'itineraries' && ['create', 'read', 'update', 'delete'].includes(action)) return true;
     if (resource === 'targets' && action === 'read') return true;
     if (resource === 'attendance' && action === 'create') return true;
     return false;
