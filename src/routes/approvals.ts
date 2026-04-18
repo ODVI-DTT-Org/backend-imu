@@ -11,8 +11,6 @@ import {
   AuthorizationError,
   ConflictError,
 } from '../errors/index.js';
-import { addBulkJob } from '../queues/utils/job-helpers.js';
-import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const approvals = new Hono();
 
@@ -774,31 +772,80 @@ approvals.post('/:id/reject', authMiddleware, requirePermission('approvals', 'up
   }
 });
 
-// POST /api/approvals/bulk-approve - Bulk approve multiple approvals (now queued)
+// POST /api/approvals/bulk-approve - Bulk approve multiple approvals
 approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval', 'bulk_approve'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
 
+  const client = await pool.connect();
   try {
     const body = await c.req.json();
     const { ids } = bulkApproveSchema.parse(body);
 
-    // Create bulk approve job
-    const job = await addBulkJob(
-      BulkJobType.BULK_APPROVE,
-      user.sub,
-      ids
-    );
+    await client.query('BEGIN');
 
-    // Return immediately with job information
-    return c.json({
-      success: true,
-      job_id: job.id,
-      message: `Bulk approve job started for ${ids.length} approvals`,
-      status_url: `/api/jobs/queue/${job.id}`,
-      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
-    }, 201);
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    const fieldMappings: Record<string, string> = {
+      first_name: 'first_name', last_name: 'last_name', middle_name: 'middle_name',
+      birth_date: 'birth_date', email: 'email', phone: 'phone',
+      agency_name: 'agency_name', department: 'department', position: 'position',
+      employment_status: 'employment_status', payroll_date: 'payroll_date', tenure: 'tenure',
+      client_type: 'client_type', product_type: 'product_type', market_type: 'market_type',
+      pension_type: 'pension_type', pan: 'pan', facebook_link: 'facebook_link',
+      remarks: 'remarks', agency_id: 'agency_id', caravan_id: 'caravan_id', is_starred: 'is_starred',
+    };
+
+    for (const id of ids) {
+      try {
+        const existing = await client.query('SELECT * FROM approvals WHERE id = $1', [id]);
+        if (existing.rows.length === 0) { succeeded.push(id); continue; }
+
+        const approval = existing.rows[0];
+        if (approval.status !== 'pending') {
+          failed.push({ id, error: 'Approval is not in pending status' });
+          continue;
+        }
+
+        if (approval.type === 'client' && approval.reason === 'Client Edit Request') {
+          try {
+            const changes = JSON.parse(approval.notes || '{}');
+            const updateFields: string[] = [];
+            const updateValues: any[] = [];
+            let paramIndex = 1;
+            for (const [key, dbField] of Object.entries(fieldMappings)) {
+              if (key in changes && changes[key] !== undefined) {
+                updateFields.push(`${dbField} = $${paramIndex}`);
+                updateValues.push(changes[key]);
+                paramIndex++;
+              }
+            }
+            if (updateFields.length > 0) {
+              updateValues.push(approval.client_id);
+              await client.query(
+                `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} AND deleted_at IS NULL`,
+                updateValues
+              );
+            }
+          } catch (_) { /* skip parse errors */ }
+        }
+
+        await client.query(
+          `UPDATE approvals SET status = 'approved', approved_by = $1, approved_at = NOW(), updated_at = NOW() WHERE id = $2`,
+          [user.sub, id]
+        );
+        succeeded.push(id);
+      } catch (err: any) {
+        failed.push({ id, error: err.message || 'Unknown error' });
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return c.json({ success: succeeded, failed, message: `${succeeded.length} approval(s) approved` });
   } catch (error: any) {
+    await client.query('ROLLBACK');
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
       error.errors.forEach((err: any) => {
@@ -807,36 +854,53 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
       throw validationError;
     }
     console.error('Bulk approve approvals error:', error);
-    throw new Error('Failed to create bulk approve job');
+    throw new Error('Failed to bulk approve approvals');
+  } finally {
+    client.release();
   }
 });
 
-// POST /api/approvals/bulk-reject - Bulk reject multiple approvals (now queued)
+// POST /api/approvals/bulk-reject - Bulk reject multiple approvals
 approvals.post('/bulk-reject', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval', 'bulk_reject'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
 
+  const client = await pool.connect();
   try {
     const body = await c.req.json();
     const { ids, reason } = bulkRejectSchema.parse(body);
 
-    // Create bulk reject job with reason as parameter
-    const job = await addBulkJob(
-      BulkJobType.BULK_REJECT,
-      user.sub,
-      ids,
-      { reason }
-    );
+    await client.query('BEGIN');
 
-    // Return immediately with job information
-    return c.json({
-      success: true,
-      job_id: job.id,
-      message: `Bulk reject job started for ${ids.length} approvals`,
-      status_url: `/api/jobs/queue/${job.id}`,
-      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
-    }, 201);
+    const succeeded: string[] = [];
+    const failed: Array<{ id: string; error: string }> = [];
+
+    for (const id of ids) {
+      try {
+        const existing = await client.query('SELECT * FROM approvals WHERE id = $1', [id]);
+        if (existing.rows.length === 0) { succeeded.push(id); continue; }
+
+        const approval = existing.rows[0];
+        if (approval.status !== 'pending') {
+          failed.push({ id, error: 'Approval is not in pending status' });
+          continue;
+        }
+
+        await client.query(
+          `UPDATE approvals SET status = 'rejected', rejected_by = $1, rejected_at = NOW(), rejection_reason = $2, updated_at = NOW() WHERE id = $3`,
+          [user.sub, reason, id]
+        );
+        succeeded.push(id);
+      } catch (err: any) {
+        failed.push({ id, error: err.message || 'Unknown error' });
+      }
+    }
+
+    await client.query('COMMIT');
+
+    return c.json({ success: succeeded, failed, message: `${succeeded.length} approval(s) rejected` });
   } catch (error: any) {
+    await client.query('ROLLBACK');
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
       error.errors.forEach((err: any) => {
@@ -845,7 +909,9 @@ approvals.post('/bulk-reject', authMiddleware, requirePermission('approvals', 'u
       throw validationError;
     }
     console.error('Bulk reject approvals error:', error);
-    throw new Error('Failed to create bulk reject job');
+    throw new Error('Failed to bulk reject approvals');
+  } finally {
+    client.release();
   }
 });
 

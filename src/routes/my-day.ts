@@ -7,8 +7,6 @@ import { requirePermission } from '../middleware/permissions.js';
 import { rateLimit } from '../middleware/rate-limit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
-import { addBulkJob } from '../queues/utils/job-helpers.js';
-import { BulkJobType } from '../queues/jobs/job-types.js';
 import {
   ValidationError,
   NotFoundError,
@@ -226,7 +224,7 @@ const bulkDeleteSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100)
 });
 
-// POST /api/my-day/bulk-delete - Bulk delete from My Day (now queued)
+// POST /api/my-day/bulk-delete - Bulk delete from My Day
 myDay.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'delete'), async (c) => {
   try {
     const user = c.get('user');
@@ -234,21 +232,17 @@ myDay.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'del
 
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
-    // Create bulk delete job
-    const job = await addBulkJob(
-      BulkJobType.BULK_DELETE_MY_DAY,
-      user.sub,
-      ids
+    const result = await pool.query(
+      'DELETE FROM itineraries WHERE id = ANY($1::uuid[]) AND user_id = $2 RETURNING id',
+      [ids, user.sub]
     );
+    const deleted = result.rows.map((r: any) => r.id);
 
-    // Return immediately with job information
     return c.json({
-      success: true,
-      job_id: job.id,
-      message: `Bulk delete job started for ${ids.length} my day items`,
-      status_url: `/api/jobs/queue/${job.id}`,
-      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
-    }, 201);
+      success: deleted,
+      failed: [],
+      message: `${deleted.length} item(s) removed from My Day`,
+    });
   } catch (error: any) {
     if (error.name === 'ZodError') {
       return c.json({
@@ -261,7 +255,7 @@ myDay.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'del
     console.error('Bulk delete my day error:', error);
     return c.json({
       success: false,
-      message: 'Failed to create bulk delete job',
+      message: 'Failed to bulk delete from My Day',
     }, 500);
   }
 });

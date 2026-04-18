@@ -2,8 +2,6 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { authMiddleware, requireRole, requireAnyRole } from '../middleware/auth.js';
-import { addBulkJob } from '../queues/utils/job-helpers.js';
-import { BulkJobType } from '../queues/jobs/job-types.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog, auditAuth } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
@@ -1299,7 +1297,7 @@ const bulkDeleteSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100)
 });
 
-// Bulk delete users (now queued)
+// Bulk delete users
 users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware('user', 'bulk_delete'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
@@ -1313,22 +1311,19 @@ users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware
       throw new ValidationError('Cannot delete your own account');
     }
 
-    // Create bulk delete job
-    const job = await addBulkJob(
-      BulkJobType.BULK_DELETE_USERS,
-      user.sub,
-      ids,
-      { preventSelfDeletion: true }
+    const result = await pool.query(
+      `UPDATE users SET deleted_at = NOW(), updated_at = NOW()
+       WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+       RETURNING id`,
+      [ids]
     );
+    const deleted = result.rows.map((r: any) => r.id);
 
-    // Return immediately with job information
     return c.json({
-      success: true,
-      job_id: job.id,
-      message: `Bulk delete job started for ${ids.length} users`,
-      status_url: `/api/jobs/${job.id}`,
-      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
-    }, 201);
+      success: deleted,
+      failed: [],
+      message: `${deleted.length} user(s) deleted`,
+    });
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -1338,7 +1333,7 @@ users.post('/bulk-delete', authMiddleware, requireRole('admin'), auditMiddleware
       throw validationError;
     }
     console.error('Bulk delete users error:', error);
-    throw new Error('Failed to create bulk delete job');
+    throw new Error('Failed to bulk delete users');
   }
 });
 

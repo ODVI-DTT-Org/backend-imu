@@ -9,8 +9,6 @@ import {
   NotFoundError,
   AuthorizationError,
 } from '../errors/index.js';
-import { addBulkJob } from '../queues/utils/job-helpers.js';
-import { BulkJobType } from '../queues/jobs/job-types.js';
 
 const itineraries = new Hono();
 
@@ -557,7 +555,7 @@ const bulkDeleteSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100)
 });
 
-// POST /api/itineraries/bulk-delete - Bulk delete itineraries (now queued)
+// POST /api/itineraries/bulk-delete - Bulk delete itineraries
 itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries', 'delete'), auditMiddleware('itinerary', 'bulk_delete'), async (c) => {
   try {
     const user = c.get('user');
@@ -565,21 +563,17 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
 
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
-    // Create bulk delete job
-    const job = await addBulkJob(
-      BulkJobType.BULK_DELETE_ITINERARIES,
-      user.sub,
-      ids
+    const result = await pool.query(
+      'DELETE FROM itineraries WHERE id = ANY($1::uuid[]) RETURNING id',
+      [ids]
     );
+    const deleted = result.rows.map((r: any) => r.id);
 
-    // Return immediately with job information
     return c.json({
-      success: true,
-      job_id: job.id,
-      message: `Bulk delete job started for ${ids.length} itineraries`,
-      status_url: `/api/jobs/queue/${job.id}`,
-      estimated_time: `${Math.ceil(ids.length / 50)} minutes`,
-    }, 201);
+      success: deleted,
+      failed: [],
+      message: `${deleted.length} itinerary(s) deleted`,
+    });
   } catch (error: any) {
     if (error.name === 'ZodError') {
       const validationError = new ValidationError('Invalid request body');
@@ -589,7 +583,7 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
       throw validationError;
     }
     console.error('Bulk delete itineraries error:', error);
-    throw new Error('Failed to create bulk delete job');
+    throw new Error('Failed to bulk delete itineraries');
   }
 });
 
