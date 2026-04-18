@@ -26,6 +26,7 @@ import clientsRoutes from './routes/clients.js';
 import usersRoutes from './routes/users.js';
 import agenciesRoutes from './routes/agencies.js';
 import caravansRoutes from './routes/caravans.js';
+import telesRoutes from './routes/teles.js';
 import touchpointsRoutes from './routes/touchpoints.js';
 import visitsRoutes from './routes/visits.js';
 import callsRoutes from './routes/calls.js';
@@ -632,6 +633,7 @@ app.get('/', (c) => {
       users: '/api/users',
       agencies: '/api/agencies',
       caravans: '/api/caravans',
+      teles: '/api/teles',
       touchpoints: '/api/touchpoints',
       itineraries: '/api/itineraries',
       dashboard: '/api/dashboard',
@@ -661,6 +663,7 @@ app.route('/api/clients', clientsRoutes);
 app.route('/api/users', usersRoutes);
 app.route('/api/agencies', agenciesRoutes);
 app.route('/api/caravans', caravansRoutes);
+app.route('/api/teles', telesRoutes);
 app.route('/api/touchpoints/analytics', touchpointsAnalyticsRoutes);
 app.route('/api/touchpoints', touchpointsRoutes);
 app.route('/api/visits', visitsRoutes);
