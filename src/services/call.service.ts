@@ -27,6 +27,7 @@ export interface Call {
   reason?: string;
   status?: string;
   photo_url?: string | null;
+  source?: string;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -43,18 +44,37 @@ const UPDATEABLE_CALL_FIELDS = [
 
 export const callService = {
   async findAll(userId: string, filters: any = {}): Promise<Call[]> {
-    const { client_id, limit = 50, offset = 0 } = filters;
+    const { limit = 50, offset = 0 } = filters;
 
     let query = 'SELECT * FROM calls WHERE user_id = $1';
     const params: any[] = [userId];
     let paramIndex = 2;
 
-    if (client_id) {
-      query += ` AND client_id = $${paramIndex++}`;
-      params.push(client_id);
+    query += ` ORDER BY dial_time DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+    return result.rows;
+  },
+
+  async findByClientId(clientId: string, filters: any = {}): Promise<Call[]> {
+    const { source, limit = 100, offset = 0 } = filters;
+
+    let query = `
+      SELECT c.*, u.first_name AS agent_first_name, u.last_name AS agent_last_name
+      FROM calls c
+      LEFT JOIN users u ON u.id = c.user_id
+      WHERE c.client_id = $1
+    `;
+    const params: any[] = [clientId];
+    let paramIndex = 2;
+
+    if (source) {
+      query += ` AND c.source = $${paramIndex++}`;
+      params.push(source);
     }
 
-    query += ` ORDER BY dial_time DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+    query += ` ORDER BY c.dial_time DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
@@ -71,8 +91,8 @@ export const callService = {
     const validated = createCallSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, notes, reason, status, photo_url)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, notes, reason, status, photo_url, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'IMU')
        RETURNING *`,
       [validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
        validated.duration, validated.notes, validated.reason, validated.status, validated.photo_url ?? null]

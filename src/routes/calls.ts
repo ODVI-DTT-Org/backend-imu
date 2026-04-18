@@ -10,8 +10,13 @@ const calls = new Hono();
 calls.get('/', authMiddleware, async (c) => {
   const user = c.get('user');
   const filters = c.req.query();
-  const calls = await callService.findAll(user.sub, filters);
-  return c.json(calls);
+  let result;
+  if (filters.client_id) {
+    result = await callService.findByClientId(filters.client_id, filters);
+  } else {
+    result = await callService.findAll(user.sub, filters);
+  }
+  return c.json(result);
 });
 
 // Get call by ID
