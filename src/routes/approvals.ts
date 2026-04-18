@@ -424,14 +424,6 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             'UPDATE clients SET udi = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
             [udiNumber, approval.client_id]
           );
-
-          // Remove client from itinerary after loan release approval
-          // This prevents the client from appearing in My Day and Itinerary
-          await client.query(
-            'DELETE FROM itineraries WHERE client_id = $1',
-            [approval.client_id]
-          );
-          console.log(`Removed client ${approval.client_id} from itinerary after loan release approval`);
         }
       } catch (error) {
         console.error('Failed to parse UDI number or remove from itinerary:', error);
