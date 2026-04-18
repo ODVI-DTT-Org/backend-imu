@@ -466,7 +466,7 @@ class StorageService {
 
       // Generate presigned URL with expiration
       const signedUrl = await getSignedUrl(this.s3Client, command, {
-        expiresIn: expiresIn * 1000, // Convert to milliseconds
+        expiresIn, // seconds
       });
 
       console.log(`[S3Storage] Generated presigned URL for ${storageKey}, expires in ${expiresIn}s`);

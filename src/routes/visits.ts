@@ -8,18 +8,45 @@ import { pool } from '../db/index.js';
 
 const visits = new Hono();
 
+const SIGNED_URL_EXPIRY = 3600; // 1 hour
+
+function extractS3Key(url: string): string | null {
+  if (!url) return null;
+  const bucket = process.env.STORAGE_BUCKET || 'imu-uploads';
+  const region = process.env.AWS_REGION || 'ap-southeast-1';
+  const prefix = `https://${bucket}.s3.${region}.amazonaws.com/`;
+  if (url.startsWith(prefix)) return url.slice(prefix.length);
+  return null;
+}
+
+async function signVisitPhoto<T extends { photo_url?: string | null }>(visit: T): Promise<T> {
+  if (!visit.photo_url || !storageService.isS3Ready()) return visit;
+  const key = extractS3Key(visit.photo_url);
+  if (!key) return visit;
+  try {
+    const signed = await storageService.getSignedUrl(key, SIGNED_URL_EXPIRY);
+    return { ...visit, photo_url: signed };
+  } catch {
+    return visit;
+  }
+}
+
+async function signVisitPhotos<T extends { photo_url?: string | null }>(items: T[]): Promise<T[]> {
+  return Promise.all(items.map(signVisitPhoto));
+}
+
 // Get all visits (with filters)
 // If client_id is provided, returns all visits for that client (any user) so CMS history panel works
 visits.get('/', authMiddleware, async (c) => {
   const user = c.get('user');
   const filters = c.req.query();
-  let visits: Visit[];
+  let results: Visit[];
   if (filters.client_id) {
-    visits = await visitService.findByClientId(filters.client_id, filters);
+    results = await visitService.findByClientId(filters.client_id, filters);
   } else {
-    visits = await visitService.findAll(user.sub, filters);
+    results = await visitService.findAll(user.sub, filters);
   }
-  return c.json(visits);
+  return c.json(await signVisitPhotos(results));
 });
 
 // Create visit (supports FormData with photo upload or JSON)
@@ -313,7 +340,7 @@ visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
     `, [...params, perPage, offset]);
 
     return c.json({
-      items: dataResult.rows,
+      items: await signVisitPhotos(dataResult.rows),
       page,
       perPage,
       totalItems,
@@ -426,7 +453,7 @@ visits.get('/:id', authMiddleware, async (c) => {
   if (!id) return c.json({ error: 'Invalid ID' }, 400);
   const visit = await visitService.findById(id);
   if (!visit) return c.json({ error: 'Visit not found' }, 404);
-  return c.json(visit);
+  return c.json(await signVisitPhoto(visit));
 });
 
 export default visits;
