@@ -38,6 +38,7 @@ function getLocalDateString(date = new Date()): string {
 }
 
 // GET /api/dashboard - Get dashboard summary + leaderboards
+// Data lives in `visits` and `calls` tables (not `touchpoints`), filtered by created_at::date
 dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
@@ -53,47 +54,48 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const isCaravan = user.role === 'caravan';
 
     if (isCaravan) {
-      const [touchpointResult] = await Promise.all([
+      const [visitResult, callResult] = await Promise.all([
         pool.query(
-          `SELECT COUNT(*) as total,
-                  COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits,
-                  COUNT(*) FILTER (WHERE tp.type = 'Call') as calls
-           FROM touchpoints tp
-           WHERE tp.date >= $1 AND tp.date <= $2 AND tp.user_id = $3`,
-          [start, end, user.sub]
+          `SELECT COUNT(*) as visits FROM visits
+           WHERE user_id = $1 AND created_at::date >= $2 AND created_at::date <= $3`,
+          [user.sub, start, end]
+        ),
+        pool.query(
+          `SELECT COUNT(*) as calls FROM calls
+           WHERE user_id = $1 AND created_at::date >= $2 AND created_at::date <= $3`,
+          [user.sub, start, end]
         ),
       ]);
-      const tp = touchpointResult.rows[0];
+      const visits = parseInt(visitResult.rows[0].visits);
+      const calls = parseInt(callResult.rows[0].calls);
       return c.json({
         period: { start_date: start, end_date: end },
-        summary: {
-          total_touchpoints: parseInt(tp.total),
-          visits: parseInt(tp.visits),
-          calls: parseInt(tp.calls),
-        },
+        summary: { total_touchpoints: visits + calls, visits, calls },
         top_caravans: [],
         top_teles: [],
         top_groups: [],
       });
     }
 
-    const [touchpointResult, caravanResult, teleResult, groupResult] = await Promise.all([
+    const [summaryResult, caravanResult, teleResult, groupResult] = await Promise.all([
       pool.query(
-        `SELECT COUNT(*) as total,
-                COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits,
-                COUNT(*) FILTER (WHERE tp.type = 'Call') as calls
-         FROM touchpoints tp
-         WHERE tp.date >= $1 AND tp.date <= $2`,
+        `SELECT
+           COUNT(*) as total,
+           COUNT(*) FILTER (WHERE src = 'visit') as visits,
+           COUNT(*) FILTER (WHERE src = 'call') as calls
+         FROM (
+           SELECT 'visit' as src FROM visits WHERE created_at::date >= $1 AND created_at::date <= $2
+           UNION ALL
+           SELECT 'call' as src FROM calls WHERE created_at::date >= $1 AND created_at::date <= $2
+         ) tp`,
         [start, end]
       ),
       pool.query(
         `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
-                COUNT(*) as visits
-         FROM touchpoints t
-         JOIN users u ON u.id = t.user_id
-         WHERE u.role = 'caravan'
-           AND t.type = 'Visit'
-           AND t.date >= $1 AND t.date <= $2
+                COUNT(v.id) as visits
+         FROM visits v
+         JOIN users u ON u.id = v.user_id
+         WHERE v.created_at::date >= $1 AND v.created_at::date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY visits DESC
          LIMIT 3`,
@@ -101,40 +103,49 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       ),
       pool.query(
         `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
-                COUNT(*) as calls
-         FROM touchpoints t
-         JOIN users u ON u.id = t.user_id
-         WHERE u.role = 'tele'
-           AND t.type = 'Call'
-           AND t.date >= $1 AND t.date <= $2
+                COUNT(c.id) as calls
+         FROM calls c
+         JOIN users u ON u.id = c.user_id
+         WHERE c.created_at::date >= $1 AND c.created_at::date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY calls DESC
          LIMIT 3`,
         [start, end]
       ),
+      // group_members.client_id references users.id (the agent assigned to the group)
       pool.query(
         `SELECT g.id as group_id, g.name,
-                u.first_name || ' ' || u.last_name as caravan_name,
-                COUNT(t.id) as total_touchpoints
+                uc.first_name || ' ' || uc.last_name as caravan_name,
+                COALESCE(v_agg.visits, 0) + COALESCE(c_agg.calls, 0) as total_touchpoints
          FROM groups g
-         JOIN group_members gm ON gm.group_id = g.id
-         JOIN touchpoints t ON t.client_id = gm.client_id
-         LEFT JOIN users u ON u.id = g.caravan_id
-         WHERE t.date >= $1 AND t.date <= $2
-         GROUP BY g.id, g.name, u.first_name, u.last_name
+         LEFT JOIN users uc ON uc.id = g.caravan_id
+         LEFT JOIN (
+           SELECT gm.group_id, COUNT(v.id) as visits
+           FROM group_members gm
+           JOIN visits v ON v.user_id = gm.client_id
+           WHERE v.created_at::date >= $1 AND v.created_at::date <= $2
+           GROUP BY gm.group_id
+         ) v_agg ON v_agg.group_id = g.id
+         LEFT JOIN (
+           SELECT gm.group_id, COUNT(c.id) as calls
+           FROM group_members gm
+           JOIN calls c ON c.user_id = gm.client_id
+           WHERE c.created_at::date >= $1 AND c.created_at::date <= $2
+           GROUP BY gm.group_id
+         ) c_agg ON c_agg.group_id = g.id
          ORDER BY total_touchpoints DESC
          LIMIT 3`,
         [start, end]
       ),
     ]);
 
-    const tp = touchpointResult.rows[0];
+    const sr = summaryResult.rows[0];
     return c.json({
       period: { start_date: start, end_date: end },
       summary: {
-        total_touchpoints: parseInt(tp.total),
-        visits: parseInt(tp.visits),
-        calls: parseInt(tp.calls),
+        total_touchpoints: parseInt(sr.total),
+        visits: parseInt(sr.visits),
+        calls: parseInt(sr.calls),
       },
       top_caravans: caravanResult.rows.map((r: any) => ({
         user_id: r.user_id,
