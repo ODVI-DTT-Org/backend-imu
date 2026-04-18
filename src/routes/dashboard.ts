@@ -160,6 +160,32 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
   }
 });
 
+// GET /api/dashboard/debug - Test each query individually (temporary)
+dashboard.get('/debug', authMiddleware, async (c) => {
+  const today = new Date();
+  const start = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`;
+  const end = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const results: Record<string, string> = {};
+
+  const queries: [string, string, any[]][] = [
+    ['touchpoints_summary', `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits, COUNT(*) FILTER (WHERE tp.type = 'Call') as calls FROM touchpoints tp WHERE tp.date >= $1 AND tp.date <= $2`, [start, end]],
+    ['caravan_leaderboard', `SELECT u.id as user_id FROM touchpoints t JOIN users u ON u.id = t.user_id WHERE u.role = 'caravan' AND t.type = 'Visit' AND t.date >= $1 AND t.date <= $2 GROUP BY u.id LIMIT 3`, [start, end]],
+    ['tele_leaderboard', `SELECT u.id as user_id FROM touchpoints t JOIN users u ON u.id = t.user_id WHERE u.role = 'tele' AND t.type = 'Call' AND t.date >= $1 AND t.date <= $2 GROUP BY u.id LIMIT 3`, [start, end]],
+    ['group_leaderboard', `SELECT g.id as group_id FROM groups g JOIN group_members gm ON gm.group_id = g.id JOIN touchpoints t ON t.client_id = gm.client_id LEFT JOIN users u ON u.id = g.caravan_id WHERE t.date >= $1 AND t.date <= $2 GROUP BY g.id LIMIT 3`, [start, end]],
+  ];
+
+  for (const [name, sql, params] of queries) {
+    try {
+      await pool.query(sql, params);
+      results[name] = 'OK';
+    } catch (e: any) {
+      results[name] = e.message;
+    }
+  }
+
+  return c.json({ start, end, results });
+});
+
 // GET /api/dashboard/performance - Get performance metrics
 dashboard.get('/performance', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
