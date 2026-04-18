@@ -211,8 +211,9 @@ class ErrorLoggerService {
           errors,
           stack_trace,
           suggestions,
-          documentation_url
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          documentation_url,
+          platform
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
         ON CONFLICT (request_id) DO NOTHING
       `;
 
@@ -232,6 +233,7 @@ class ErrorLoggerService {
         logData.stack_trace,
         logData.suggestions,
         logData.documentation_url,
+        'backend',
       ]);
 
       const duration = Date.now() - startTime;
@@ -325,6 +327,7 @@ class ErrorLoggerService {
           stack_trace,
           suggestions,
           documentation_url,
+          platform,
           resolved,
           resolved_at,
           resolved_by,
