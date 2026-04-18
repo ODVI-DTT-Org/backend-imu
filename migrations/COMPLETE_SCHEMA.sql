@@ -3,7 +3,7 @@
 -- ============================================================
 -- This script creates the complete IMU database schema
 -- including all tables, indexes, triggers, and views
--- Version: 1.4 (as of 2026-04-08)
+-- Version: 1.5 (as of 2026-04-18)
 -- Changes:
 -- - Added deleted_at column to clients table for soft deletes
 -- - Added index on clients.deleted_at for performance
@@ -158,6 +158,11 @@ CREATE TABLE IF NOT EXISTS touchpoints (
     touchpoint_number INTEGER NOT NULL CHECK (touchpoint_number BETWEEN 1 AND 7),
     type TEXT NOT NULL CHECK (type IN ('Visit', 'Call')),
     rejection_reason TEXT,
+    date DATE,
+    status TEXT,
+    next_visit_date DATE,
+    notes TEXT,
+    is_legacy BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT touchpoint_has_record CHECK (visit_id IS NOT NULL OR call_id IS NOT NULL)
@@ -169,17 +174,18 @@ CREATE TABLE IF NOT EXISTS visits (
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
     type TEXT NOT NULL DEFAULT 'regular_visit' CHECK (type IN ('regular_visit', 'release_loan')),
-    time_in TIMESTAMPTZ,
-    time_out TIMESTAMPTZ,
     odometer_arrival TEXT,
     odometer_departure TEXT,
-    photo_url TEXT,
+    photo_url TEXT NOT NULL,
     notes TEXT,
     reason TEXT,
     status TEXT,
     address TEXT,
     latitude REAL,
     longitude REAL,
+    time_in TIMESTAMPTZ,
+    time_out TIMESTAMPTZ,
+    source TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -190,11 +196,14 @@ CREATE TABLE IF NOT EXISTS calls (
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
     phone_number TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'regular_call' CHECK (type IN ('regular_call', 'release_loan')),
     dial_time TIMESTAMPTZ,
     duration INTEGER,
     notes TEXT,
     reason TEXT,
     status TEXT,
+    photo_url TEXT,
+    source TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -204,12 +213,16 @@ CREATE TABLE IF NOT EXISTS releases (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE SET NULL,
-    visit_id UUID NOT NULL REFERENCES visits(id) ON DELETE CASCADE,
+    visit_id UUID REFERENCES visits(id),
+    call_id UUID REFERENCES calls(id),
     product_type TEXT NOT NULL CHECK (product_type IN ('BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP')),
     loan_type TEXT NOT NULL CHECK (loan_type IN ('NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM')),
     amount NUMERIC NOT NULL,
     approval_notes TEXT,
+    udi_number TEXT,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'disbursed')),
+    approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+    approved_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -244,19 +257,9 @@ CREATE TABLE IF NOT EXISTS attendance (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Targets table
-CREATE TABLE IF NOT EXISTS targets (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID REFERENCES users(id),
-    period TEXT NOT NULL,
-    year INTEGER NOT NULL,
-    month INTEGER,
-    week INTEGER,
-    target_clients INTEGER DEFAULT 0,
-    target_touchpoints INTEGER DEFAULT 0,
-    target_visits INTEGER DEFAULT 0,
-    created_at TIMESTAMPTZ DEFAULT NOW()
-);
+-- Targets table (full definition — see dashboard section below for reference)
+-- This is a forward-reference placeholder; the actual CREATE is in the DASHBOARD TABLES section
+-- using gen_random_uuid() and the complete column set including quarter, updated_at, created_by
 
 -- Groups table
 CREATE TABLE IF NOT EXISTS groups (
@@ -270,10 +273,11 @@ CREATE TABLE IF NOT EXISTS groups (
 );
 
 -- Group members junction table
+-- NOTE: client_id column actually stores user IDs (caravan agents) — naming is legacy
 CREATE TABLE IF NOT EXISTS group_members (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     group_id UUID REFERENCES groups(id) ON DELETE CASCADE,
-    client_id UUID REFERENCES clients(id) ON DELETE CASCADE,
+    client_id UUID REFERENCES users(id) ON DELETE CASCADE,
     joined_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE(group_id, client_id)
 );
@@ -386,6 +390,55 @@ CREATE TABLE IF NOT EXISTS background_jobs (
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     created_by UUID REFERENCES users(id) ON DELETE SET NULL
+);
+
+-- Files table (for uploaded photos, audio, and documents)
+CREATE TABLE IF NOT EXISTS files (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    filename TEXT NOT NULL,
+    original_filename TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size BIGINT NOT NULL,
+    url TEXT NOT NULL,
+    storage_key TEXT NOT NULL,
+    uploaded_by UUID NOT NULL REFERENCES users(id),
+    entity_type TEXT,
+    entity_id UUID,
+    hash VARCHAR(64),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Report jobs table (for async report generation)
+CREATE TABLE IF NOT EXISTS report_jobs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    report_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    params JSONB DEFAULT '{}',
+    result JSONB,
+    error_message TEXT,
+    created_by UUID NOT NULL REFERENCES users(id),
+    file_url TEXT,
+    file_size BIGINT,
+    started_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Scheduled reports table (for recurring report delivery)
+CREATE TABLE IF NOT EXISTS scheduled_reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name TEXT NOT NULL,
+    report_type TEXT NOT NULL,
+    frequency TEXT NOT NULL,
+    params JSONB DEFAULT '{}',
+    is_active BOOLEAN DEFAULT true,
+    created_by UUID NOT NULL REFERENCES users(id),
+    last_run_at TIMESTAMPTZ,
+    next_run_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- ============================================================
@@ -1282,31 +1335,30 @@ CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
 
 DROP PUBLICATION IF EXISTS powersync;
 CREATE PUBLICATION powersync FOR TABLE
-    -- Core data tables
+    -- Core client data
     clients,
-    itineraries,
-    touchpoints,
-    visits,      -- NEW
-    calls,       -- NEW
-    releases,    -- NEW
-
-    -- Related data tables
     addresses,
     phone_numbers,
 
-    -- User profile table (for PowerSync sync metadata)
-    user_profiles,
+    -- Activity data
+    visits,
+    calls,
+    itineraries,
+    touchpoints,
+    releases,
 
-    -- User location assignments (for municipality-based filtering)
+    -- Agent-specific data
+    groups,
+    targets,
+    attendance,
+
+    -- User data
+    user_profiles,
     user_locations,
 
-    -- Approvals (for caravan/tele approval workflow)
+    -- Legacy (kept for backward compatibility during migration)
     approvals,
-
-    -- PSGC geographic data (for location picker)
     psgc,
-
-    -- Touchpoint reasons (global data for touchpoint form dropdowns)
     touchpoint_reasons;
 
 COMMIT;
