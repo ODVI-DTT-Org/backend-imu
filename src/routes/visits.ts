@@ -184,8 +184,8 @@ visits.post('/', authMiddleware, async (c) => {
     // Save file record if photo was uploaded
     if (uploadKey && visit.id) {
       await pool.query(
-        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, storage_provider, uploaded_by, entity_type, entity_id)
-         VALUES ($1, $2, $3, $4, $5, $6, 's3', $7, 'visit', $8)`,
+        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'visit', $8)`,
         [uploadKey, uploadOriginalName, uploadMime, uploadSize, visitData.photo_url, uploadKey, user.sub, visit.id]
       );
       console.log('[Visits] File record saved for visit:', visit.id);
