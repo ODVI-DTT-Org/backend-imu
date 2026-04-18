@@ -6,7 +6,6 @@
  */
 
 import { pool } from '../db/index.js';
-import { QueueManager } from '../queues/queue-manager.js';
 import { storageService } from '../services/storage.js';
 import { emailService } from '../services/email.js';
 import { logger } from './logger.js';
@@ -325,78 +324,6 @@ export async function initDatabase(): Promise<InitResult> {
   }
 }
 
-/**
- * Initialize and log Redis/BullMQ connection
- */
-export async function initRedis(): Promise<InitResult> {
-  const startTime = Date.now();
-
-  try {
-    const redisUrl = process.env.REDIS_URL;
-    const redisHost = process.env.REDIS_HOST;
-    const redisPort = process.env.REDIS_PORT;
-    const redisDb = process.env.REDIS_DB;
-
-    if (!redisUrl && !redisHost) {
-      return {
-        service: 'Redis / BullMQ',
-        status: 'skipped',
-        message: 'Redis not configured (BullMQ features disabled)',
-        duration: Date.now() - startTime,
-      };
-    }
-
-    // Get queue manager instance
-    const queueManager = QueueManager.getInstance();
-
-    const duration = Date.now() - startTime;
-
-    // Queue names in the system
-    const queueNames = ['bulk-operations', 'reports', 'location-assignments', 'sync-operations'];
-
-    // Check if using localhost in production/qa
-    const isLocalhost = !redisUrl && (
-      redisHost === 'localhost' ||
-      redisHost === '127.0.0.1' ||
-      redisHost === '::1' ||
-      redisUrl?.includes('localhost') ||
-      redisUrl?.includes('127.0.0.1')
-    );
-    const isProdOrQA = isProductionOrQA();
-    const status = (isProdOrQA && isLocalhost) ? 'warning' : 'success';
-    const message = (isProdOrQA && isLocalhost)
-      ? `Connected with ${queueNames.length} queues configured (WARNING: Using localhost in ${process.env.NODE_ENV})`
-      : `Connected with ${queueNames.length} queues configured`;
-
-    return {
-      service: 'Redis / BullMQ',
-      status,
-      message,
-      duration,
-      details: {
-        'Connection': sanitizeConnectionString(redisUrl) || `${redisHost}:${redisPort}/${redisDb}`,
-        'Queues': queueNames.join(', '),
-        ...(isProdOrQA && isLocalhost ? {
-          '⚠️ WARNING': 'Using localhost Redis in production/qa is not recommended',
-        } : {}),
-      },
-    };
-  } catch (error: any) {
-    const duration = Date.now() - startTime;
-    const connectionString = sanitizeConnectionString(process.env.REDIS_URL);
-
-    return {
-      service: 'Redis / BullMQ',
-      status: 'error',
-      message: 'Failed to connect to Redis',
-      duration,
-      details: {
-        'Connection': connectionString || `${process.env.REDIS_HOST}:${process.env.REDIS_PORT}/${process.env.REDIS_DB}`,
-      },
-      error,
-    };
-  }
-}
 
 /**
  * Initialize and log storage service
@@ -894,7 +821,6 @@ export async function initializeBackend(): Promise<{ summary: InitSummary; resul
   // Initialize services in order
   results.push(await initJWT());
   results.push(await initDatabase());
-  results.push(await initRedis());
   results.push(await initStorage());
   results.push(await initEmailService());
   results.push(await initPowerSync());
