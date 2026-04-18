@@ -321,10 +321,12 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     // Get itineraries for the target date with client info
     const itinerariesResult = await pool.query(
       `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.client_type,
-              a.name as agency_name
+              a.name as agency_name,
+              u.name as assigned_by_name
        FROM itineraries i
        JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
        LEFT JOIN agencies a ON a.id = c.agency_id
+       LEFT JOIN users u ON u.id = i.created_by
        WHERE i.user_id = $1 AND i.scheduled_date = $2
        ORDER BY i.scheduled_time ASC NULLS LAST, i.priority DESC`,
       [caravanId, targetDate]
@@ -425,6 +427,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
           agency: row.agency_name,
           addresses: addresses,
         },
+        assigned_by_name: row.assigned_by_name || null,
         location: primaryAddress?.street_address || null,
       };
     });
