@@ -2064,6 +2064,59 @@ clients.post(
   }
 );
 
+// POST /api/clients/check-duplicates - Check which name+pension_type combos already exist in DB
+clients.post('/check-duplicates', authMiddleware, async (c) => {
+  try {
+    const body = await c.req.json()
+    const schema = z.object({
+      rows: z.array(z.object({
+        name: z.string(),
+        pension_type: z.string()
+      }))
+    })
+    const { rows } = schema.parse(body)
+
+    const result = await pool.query(
+      `SELECT last_name, first_name, middle_name, pension_type
+       FROM clients
+       WHERE deleted_at IS NULL`
+    )
+
+    const dbDupKeys = new Set<string>()
+    const dbNameKeys = new Set<string>()
+
+    for (const row of result.rows) {
+      const nameKey = [row.last_name, row.first_name, row.middle_name]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .trim()
+      dbDupKeys.add(`${nameKey}|${(row.pension_type || '').toLowerCase().trim()}`)
+      dbNameKeys.add(nameKey)
+    }
+
+    const duplicates: string[] = []
+    const nameConflicts: string[] = []
+
+    for (const row of rows) {
+      const normalizedName = row.name.toLowerCase().trim()
+      const dupKey = `${normalizedName}|${row.pension_type.toLowerCase().trim()}`
+      if (dbDupKeys.has(dupKey)) {
+        duplicates.push(dupKey)
+      } else if (dbNameKeys.has(normalizedName)) {
+        nameConflicts.push(normalizedName)
+      }
+    }
+
+    return c.json({ duplicates, nameConflicts })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Invalid request', details: error.errors }, 400)
+    }
+    throw error
+  }
+})
+
 // POST /api/clients/bulk-create - Bulk create clients from CSV upload
 clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'create'), auditMiddleware('client'), async (c) => {
   const client = await pool.connect();
