@@ -17,6 +17,8 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getClientsCacheService } from '../services/cache/clients-cache.js';
+import { getQueueManager, QUEUE_NAMES, BulkJobType } from '../queues/index.js';
+import type { BulkUploadJobData } from '../queues/jobs/job-types.js';
 
 // Helper function to ensure loan_type is always returned as string
 function parseLoanType(value: any): string | null {
@@ -2115,6 +2117,82 @@ clients.post('/check-duplicates', authMiddleware, async (c) => {
     }
     throw error
   }
+})
+
+// POST /api/clients/bulk-upload - Enqueue a bulk upload job
+clients.post('/bulk-upload', authMiddleware, requirePermission('clients', 'create'), async (c) => {
+  try {
+    const user = c.get('user')
+    const body = await c.req.json()
+
+    const schema = z.object({
+      rows: z.array(z.object({
+        last_name: z.string().min(1),
+        first_name: z.string().min(1),
+        middle_name: z.string().optional(),
+        suffix: z.string().optional(),
+        pension_type: z.string().min(1),
+        client_type: z.string().optional(),
+        product_type: z.string().optional(),
+        market_type: z.string().optional(),
+        phone: z.string().optional(),
+        email: z.string().optional(),
+        birth_date: z.string().optional(),
+        province: z.string().optional(),
+        municipality: z.string().optional(),
+        barangay: z.string().optional(),
+        pan: z.string().optional(),
+        facebook_link: z.string().optional(),
+        remarks: z.string().optional(),
+        _originalRow: z.record(z.string()),
+        _rowNumber: z.number(),
+      })).min(1, 'At least one row is required')
+    })
+
+    const { rows } = schema.parse(body)
+
+    const jobData: BulkUploadJobData = {
+      userId: user.sub,
+      userRole: user.role,
+      rows,
+    }
+
+    const queueManager = getQueueManager()
+    const queue = queueManager.getQueue({ name: QUEUE_NAMES.BULK_UPLOAD })
+    const job = await queue.add(BulkJobType.BULK_UPLOAD_CLIENTS, jobData, {
+      attempts: 1,
+      removeOnComplete: { age: 7 * 24 * 3600 },
+      removeOnFail: { age: 30 * 24 * 3600 },
+    })
+
+    return c.json({ jobId: job.id })
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return c.json({ error: 'Invalid request', details: error.errors }, 400)
+    }
+    throw error
+  }
+})
+
+// GET /api/clients/bulk-upload/:jobId/status - Poll job status
+clients.get('/bulk-upload/:jobId/status', authMiddleware, async (c) => {
+  const jobId = c.req.param('jobId')
+  const queueManager = getQueueManager()
+  const queue = queueManager.getQueue({ name: QUEUE_NAMES.BULK_UPLOAD })
+  const job = await queue.getJob(jobId)
+
+  if (!job) {
+    return c.json({ error: 'Job not found' }, 404)
+  }
+
+  const state = await job.getState()
+
+  return c.json({
+    state,
+    progress: job.progress,
+    result: state === 'completed' ? job.returnvalue : null,
+    failedReason: state === 'failed' ? job.failedReason : null,
+  })
 })
 
 // POST /api/clients/bulk-create - Bulk create clients from CSV upload
