@@ -88,7 +88,7 @@ visits.post('/', authMiddleware, async (c) => {
       console.log('[Visits] FormData parsed, file present:', !!file);
 
       // Extract visit data from form fields
-      const formDataFields = ['client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'reason', 'status', 'address', 'latitude', 'longitude', 'source'];
+      const formDataFields = ['id', 'client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'reason', 'status', 'address', 'latitude', 'longitude', 'source'];
       formDataFields.forEach(field => {
         if (body[field] !== undefined) {
           visitData[field] = body[field];
@@ -181,14 +181,18 @@ visits.post('/', authMiddleware, async (c) => {
     const visit = await visitService.create(visitData);
     console.log('[Visits] Visit created successfully:', visit.id);
 
-    // Save file record if photo was uploaded
+    // Save file record if photo was uploaded (non-critical metadata — don't fail the request if this errors)
     if (uploadKey && visit.id) {
-      await pool.query(
-        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'visit', $8)`,
-        [uploadKey, uploadOriginalName, uploadMime, uploadSize, visitData.photo_url, uploadKey, user.sub, visit.id]
-      );
-      console.log('[Visits] File record saved for visit:', visit.id);
+      try {
+        await pool.query(
+          `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, uploaded_by, entity_type, entity_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, 'visit', $8)`,
+          [uploadKey, uploadOriginalName, uploadMime, uploadSize, visitData.photo_url, uploadKey, user.sub, visit.id]
+        );
+        console.log('[Visits] File record saved for visit:', visit.id);
+      } catch (fileError: any) {
+        console.error('[Visits] Failed to save file record (non-critical):', fileError.message);
+      }
     }
 
     return c.json(visit, 201);

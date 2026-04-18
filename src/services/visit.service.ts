@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 // Validation schemas
 export const createVisitSchema = z.object({
+  id: z.string().uuid('Invalid visit ID format').optional(),
   client_id: z.string().uuid('Invalid client ID format'),
   user_id: z.preprocess(v => (v === '' ? null : v), z.string().uuid('Invalid user ID format').nullish()),
   type: z.enum(['regular_visit', 'release_loan']).default('regular_visit'),
@@ -108,17 +109,19 @@ export const visitService = {
     return result.rows[0] || null;
   },
 
-  async create(data: Omit<Visit, 'id' | 'created_at' | 'updated_at'>): Promise<Visit> {
+  async create(data: Omit<Visit, 'created_at' | 'updated_at'>): Promise<Visit> {
     // Validate input data
     const validated = createVisitSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO visits (client_id, user_id, type, time_in, time_out,
+      `INSERT INTO visits (id, client_id, user_id, type, time_in, time_out,
         odometer_arrival, odometer_departure, photo_url, notes, reason, status,
         address, latitude, longitude, source)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       ON CONFLICT (id) DO UPDATE SET updated_at = visits.updated_at
        RETURNING *`,
       [
+        validated.id ?? null,
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
         validated.odometer_arrival, validated.odometer_departure, validated.photo_url,
         validated.notes, validated.reason, validated.status, validated.address,
