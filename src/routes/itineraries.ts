@@ -274,16 +274,35 @@ itineraries.post('/bulk', authMiddleware, requirePermission('itineraries', 'crea
 
     const { caravan_ids, client_ids, scheduled_date, priority } = validated;
 
+    // Fetch all existing combinations for this date in one query
+    const existingResult = await pool.query(
+      `SELECT user_id, client_id FROM itineraries
+       WHERE user_id = ANY($1) AND client_id = ANY($2) AND scheduled_date = $3`,
+      [caravan_ids, client_ids, scheduled_date]
+    );
+    const existingSet = new Set(
+      existingResult.rows.map((r: any) => `${r.user_id}:${r.client_id}`)
+    );
+
     const values: string[] = [];
     const params: any[] = [];
     let idx = 1;
+    let skipped = 0;
 
     for (const caravanId of caravan_ids) {
       for (const clientId of client_ids) {
+        if (existingSet.has(`${caravanId}:${clientId}`)) {
+          skipped++;
+          continue;
+        }
         values.push(`($${idx}, $${idx + 1}, $${idx + 2}, $${idx + 3}, $${idx + 4})`);
         params.push(caravanId, clientId, scheduled_date, priority, user.sub);
         idx += 5;
       }
+    }
+
+    if (values.length === 0) {
+      return c.json({ created: 0, skipped }, 200);
     }
 
     await pool.query(
@@ -292,8 +311,8 @@ itineraries.post('/bulk', authMiddleware, requirePermission('itineraries', 'crea
       params
     );
 
-    const created = caravan_ids.length * client_ids.length;
-    return c.json({ created }, 201);
+    const created = values.length;
+    return c.json({ created, skipped }, 201);
   } catch (error) {
     if (error instanceof z.ZodError) {
       return c.json({ error: 'Validation failed', details: error.errors }, 400);
