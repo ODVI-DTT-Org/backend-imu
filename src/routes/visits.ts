@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
-import { visitService, createVisitSchema, updateVisitSchema } from '../services/visit.service.js';
+import { visitService, createVisitSchema, updateVisitSchema, type Visit } from '../services/visit.service.js';
 import { ValidationError } from '../errors/index.js';
 import { storageService } from '../services/storage.js';
 import { pool } from '../db/index.js';
@@ -9,10 +9,16 @@ import { pool } from '../db/index.js';
 const visits = new Hono();
 
 // Get all visits (with filters)
+// If client_id is provided, returns all visits for that client (any user) so CMS history panel works
 visits.get('/', authMiddleware, async (c) => {
   const user = c.get('user');
   const filters = c.req.query();
-  const visits = await visitService.findAll(user.sub, filters);
+  let visits: Visit[];
+  if (filters.client_id) {
+    visits = await visitService.findByClientId(filters.client_id, filters);
+  } else {
+    visits = await visitService.findAll(user.sub, filters);
+  }
   return c.json(visits);
 });
 

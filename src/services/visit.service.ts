@@ -61,22 +61,42 @@ const UPDATEABLE_VISIT_FIELDS = [
 
 export const visitService = {
   async findAll(userId: string, filters: any = {}): Promise<Visit[]> {
-    const { client_id, type, limit = 50, offset = 0 } = filters;
+    const { type, limit = 50, offset = 0 } = filters;
 
     let query = 'SELECT * FROM visits WHERE user_id = $1';
     const params: any[] = [userId];
     let paramIndex = 2;
 
-    if (client_id) {
-      query += ` AND client_id = $${paramIndex++}`;
-      params.push(client_id);
-    }
     if (type) {
       query += ` AND type = $${paramIndex++}`;
       params.push(type);
     }
 
     query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+    params.push(limit, offset);
+
+    const result = await pool.query(query, params);
+    return result.rows;
+  },
+
+  async findByClientId(clientId: string, filters: any = {}): Promise<Visit[]> {
+    const { source, limit = 100, offset = 0 } = filters;
+
+    let query = `
+      SELECT v.*, u.first_name AS agent_first_name, u.last_name AS agent_last_name
+      FROM visits v
+      LEFT JOIN users u ON u.id = v.user_id
+      WHERE v.client_id = $1
+    `;
+    const params: any[] = [clientId];
+    let paramIndex = 2;
+
+    if (source) {
+      query += ` AND v.source = $${paramIndex++}`;
+      params.push(source);
+    }
+
+    query += ` ORDER BY v.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);
@@ -102,7 +122,7 @@ export const visitService = {
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
         validated.odometer_arrival, validated.odometer_departure, validated.photo_url ?? null,
         validated.notes, validated.reason, validated.status, validated.address,
-        validated.latitude, validated.longitude, validated.source ?? null
+        validated.latitude, validated.longitude, 'IMU'
       ]
     );
     return result.rows[0];
