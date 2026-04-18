@@ -166,7 +166,7 @@ export interface BulkUploadClientRow {
   last_name: string
   first_name: string
   middle_name?: string
-  suffix?: string
+  ext_name?: string
   pension_type: string
   client_type?: string
   product_type?: string
@@ -180,6 +180,10 @@ export interface BulkUploadClientRow {
   pan?: string
   facebook_link?: string
   remarks?: string
+  rank?: string
+  account_number?: string
+  atm_number?: string
+  unit_code?: string
   _originalRow: Record<string, string>
   _rowNumber: number
 }

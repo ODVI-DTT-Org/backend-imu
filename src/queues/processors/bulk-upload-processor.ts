@@ -42,20 +42,23 @@ export class BulkUploadProcessor extends BaseProcessor<BulkUploadJobData, BulkUp
           } else {
             const result = await client.query(
               `INSERT INTO clients (
-                id, first_name, last_name, middle_name, birth_date, email, phone,
+                id, first_name, last_name, middle_name, ext_name, birth_date, email, phone,
                 client_type, product_type, market_type, pension_type, pan,
                 facebook_link, remarks, province, municipality, barangay,
+                rank, account_number, atm_number, unit_code,
                 is_starred, created_by
               ) VALUES (
-                gen_random_uuid(), $1, $2, $3, $4, $5, $6,
-                $7, $8, $9, $10, $11,
-                $12, $13, $14, $15, $16,
-                false, $17
+                gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12,
+                $13, $14, $15, $16, $17,
+                $18, $19, $20, $21,
+                false, $22
               ) RETURNING id`,
               [
                 row.first_name,
                 row.last_name,
                 row.middle_name || null,
+                row.ext_name || null,
                 row.birth_date || null,
                 row.email || null,
                 row.phone || null,
@@ -69,6 +72,10 @@ export class BulkUploadProcessor extends BaseProcessor<BulkUploadJobData, BulkUp
                 row.province || null,
                 row.municipality || null,
                 row.barangay || null,
+                row.rank || null,
+                row.account_number || null,
+                row.atm_number || null,
+                row.unit_code || null,
                 userId,
               ]
             )
