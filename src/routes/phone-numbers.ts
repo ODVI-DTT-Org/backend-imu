@@ -332,6 +332,18 @@ phoneNumbers.put('/clients/:id/phone-numbers/:phoneId', authMiddleware, auditMid
     throw new NotFoundError('Phone number not found');
   }
 
+  // Tele/Caravan: submit edit for approval
+  const userForEdit = c.get('user');
+  if (userForEdit.role === 'tele' || userForEdit.role === 'caravan') {
+    const approval = await pool.query(
+      `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+       VALUES (gen_random_uuid(), 'phone_edit', $1, $2, $3, 'Edit Phone Number Request', $4, 'pending')
+       RETURNING *`,
+      [clientId, userForEdit.sub, userForEdit.role, JSON.stringify({ phone_id: phoneId, ...data })]
+    );
+    return c.json({ message: 'Phone number edit submitted for approval', approval: approval.rows[0], requires_approval: true }, 202);
+  }
+
   // Check for duplicate number (if updating number)
   if (data.number) {
     const duplicateCheck = await pool.query(
@@ -396,6 +408,18 @@ phoneNumbers.delete('/clients/:id/phone-numbers/:phoneId', authMiddleware, audit
 
   if (!clientId || !phoneId) {
     throw new ValidationError('Client ID and Phone ID are required');
+  }
+
+  // Tele/Caravan: submit delete for approval
+  const userForDelete = c.get('user');
+  if (userForDelete.role === 'tele' || userForDelete.role === 'caravan') {
+    const approval = await pool.query(
+      `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+       VALUES (gen_random_uuid(), 'phone_delete', $1, $2, $3, 'Delete Phone Number Request', $4, 'pending')
+       RETURNING *`,
+      [clientId, userForDelete.sub, userForDelete.role, JSON.stringify({ phone_id: phoneId })]
+    );
+    return c.json({ message: 'Phone number deletion submitted for approval', approval: approval.rows[0], requires_approval: true }, 202);
   }
 
   const result = await pool.query(

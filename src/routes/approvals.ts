@@ -21,7 +21,7 @@ const APPROVAL_ROLES = [...MANAGER_ROLES, 'staff'] as const;
 
 // Validation schemas
 const createApprovalSchema = z.object({
-  type: z.enum(['client', 'udi']),
+  type: z.enum(['client', 'udi', 'address_add', 'address_edit', 'address_delete', 'phone_add', 'phone_edit', 'phone_delete', 'client_delete', 'loan_release', 'loan_release_v2']),
   client_id: z.string().uuid(),
   user_id: z.string().uuid().optional(),
   touchpoint_number: z.number().int().min(1).max(7).optional(),
@@ -630,6 +630,82 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         }
       } catch (parseError) {
         console.error('Failed to parse client edit changes:', parseError);
+      }
+    }
+
+    // For address_edit approvals, apply changes to address
+    if (approval.type === 'address_edit') {
+      try {
+        const notes = JSON.parse(approval.notes);
+        const { address_id, ...fields } = notes;
+        const allowed = ['type', 'street', 'barangay', 'city', 'province', 'postal_code', 'latitude', 'longitude', 'is_primary'];
+        const updates: string[] = [];
+        const vals: any[] = [];
+        let idx = 1;
+        for (const [k, v] of Object.entries(fields)) {
+          if (allowed.includes(k) && v !== undefined) {
+            updates.push(`${k} = $${idx++}`);
+            vals.push(v);
+          }
+        }
+        if (updates.length > 0) {
+          vals.push(address_id);
+          await client.query(`UPDATE addresses SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx} AND deleted_at IS NULL`, vals);
+        }
+      } catch (e) {
+        console.error('Failed to process address_edit approval:', e);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process address_edit approval');
+      }
+    }
+
+    // For address_delete approvals, soft-delete the address
+    if (approval.type === 'address_delete') {
+      try {
+        const notes = JSON.parse(approval.notes);
+        await client.query('UPDATE addresses SET deleted_at = NOW() WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL', [notes.address_id, approval.client_id]);
+      } catch (e) {
+        console.error('Failed to process address_delete approval:', e);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process address_delete approval');
+      }
+    }
+
+    // For phone_edit approvals, apply changes to phone number
+    if (approval.type === 'phone_edit') {
+      try {
+        const notes = JSON.parse(approval.notes);
+        const { phone_id, ...fields } = notes;
+        const allowed = ['label', 'number', 'is_primary'];
+        const updates: string[] = [];
+        const vals: any[] = [];
+        let idx = 1;
+        for (const [k, v] of Object.entries(fields)) {
+          if (allowed.includes(k) && v !== undefined) {
+            updates.push(`${k} = $${idx++}`);
+            vals.push(v);
+          }
+        }
+        if (updates.length > 0) {
+          vals.push(phone_id);
+          await client.query(`UPDATE phone_numbers SET ${updates.join(', ')} WHERE id = $${idx} AND deleted_at IS NULL`, vals);
+        }
+      } catch (e) {
+        console.error('Failed to process phone_edit approval:', e);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process phone_edit approval');
+      }
+    }
+
+    // For phone_delete approvals, soft-delete the phone number
+    if (approval.type === 'phone_delete') {
+      try {
+        const notes = JSON.parse(approval.notes);
+        await client.query('UPDATE phone_numbers SET deleted_at = NOW() WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL', [notes.phone_id, approval.client_id]);
+      } catch (e) {
+        console.error('Failed to process phone_delete approval:', e);
+        await client.query('ROLLBACK');
+        throw new Error('Failed to process phone_delete approval');
       }
     }
 

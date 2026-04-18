@@ -362,6 +362,19 @@ addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddlewa
     throw new NotFoundError('Address not found');
   }
 
+  // Tele/Caravan: submit edit for approval
+  const userForEdit = c.get('user');
+  const userIdForEdit = userForEdit?.sub;
+  if (userForEdit.role === 'tele' || userForEdit.role === 'caravan') {
+    const approval = await pool.query(
+      `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+       VALUES (gen_random_uuid(), 'address_edit', $1, $2, $3, 'Edit Address Request', $4, 'pending')
+       RETURNING *`,
+      [clientId, userIdForEdit, userForEdit.role, JSON.stringify({ address_id: addressId, ...data })]
+    );
+    return c.json({ message: 'Address edit submitted for approval', approval: approval.rows[0], requires_approval: true }, 202);
+  }
+
   // Build update query dynamically with whitelist
   const ALLOWED_UPDATE_FIELDS = ['type', 'street', 'barangay', 'city', 'province', 'postal_code', 'latitude', 'longitude', 'is_primary'];
   const updates: string[] = [];
@@ -423,6 +436,19 @@ addresses.delete('/clients/:id/addresses/:addressId', authMiddleware, auditMiddl
 
   if (!clientId || !addressId) {
     throw new ValidationError('Client ID and Address ID are required');
+  }
+
+  // Tele/Caravan: submit delete for approval
+  const userForDelete = c.get('user');
+  const userIdForDelete = userForDelete?.sub;
+  if (userForDelete.role === 'tele' || userForDelete.role === 'caravan') {
+    const approval = await pool.query(
+      `INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+       VALUES (gen_random_uuid(), 'address_delete', $1, $2, $3, 'Delete Address Request', $4, 'pending')
+       RETURNING *`,
+      [clientId, userIdForDelete, userForDelete.role, JSON.stringify({ address_id: addressId })]
+    );
+    return c.json({ message: 'Address deletion submitted for approval', approval: approval.rows[0], requires_approval: true }, 202);
   }
 
   const result = await pool.query(
