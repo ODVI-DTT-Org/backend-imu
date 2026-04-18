@@ -63,6 +63,7 @@ function buildAdminCallsQuery(q: Record<string, string>) {
         ca.status,
         ca.notes,
         ca.reason,
+        ca.source,
         ca.created_at
       FROM calls ca
       JOIN clients cl ON cl.id = ca.client_id
@@ -86,6 +87,7 @@ function buildAdminCallsQuery(q: Record<string, string>) {
         tp.status,
         tp.notes,
         tp.rejection_reason AS reason,
+        NULL AS source,
         tp.created_at
       FROM touchpoints tp
       JOIN clients cl ON cl.id = tp.client_id

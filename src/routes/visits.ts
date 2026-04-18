@@ -333,7 +333,8 @@ visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
         v.latitude,
         v.longitude,
         v.time_in,
-        v.time_out
+        v.time_out,
+        v.source
       ${baseQuery}
       ORDER BY COALESCE(v.time_in, v.created_at) DESC
       LIMIT $${idx} OFFSET $${idx + 1}
