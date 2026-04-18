@@ -99,14 +99,14 @@ visits.post('/', authMiddleware, async (c) => {
             file: buffer,
             filename: file.name,
             mimetype: file.type,
-            folder: 'touchpoint_photo',
+            folder: 'visit_photo',
             maxSize: 10 * 1024 * 1024,
             allowedMimeTypes: allowedTypes,
           });
 
           console.log('[Visits] Upload result:', JSON.stringify(uploadResult, null, 2));
 
-          if (!uploadResult.success) {
+          if (!uploadResult.success || !uploadResult.url) {
             console.error('[Visits] Photo upload failed:', uploadResult.error);
             return c.json({
               success: false,
@@ -116,6 +116,10 @@ visits.post('/', authMiddleware, async (c) => {
 
           photoUrl = uploadResult.url;
           visitData.photo_url = photoUrl;
+          visitData._uploadKey = uploadResult.key;
+          visitData._uploadSize = file.size;
+          visitData._uploadMime = file.type;
+          visitData._uploadOriginalName = file.name;
 
           console.log('[Visits] Photo uploaded successfully:', photoUrl);
         } catch (uploadError: any) {
@@ -136,9 +140,30 @@ visits.post('/', authMiddleware, async (c) => {
       visitData = { ...visitData, ...data };
     }
 
+    // Extract upload metadata before passing to service (these are not DB columns)
+    const uploadKey = visitData._uploadKey;
+    const uploadSize = visitData._uploadSize;
+    const uploadMime = visitData._uploadMime;
+    const uploadOriginalName = visitData._uploadOriginalName;
+    delete visitData._uploadKey;
+    delete visitData._uploadSize;
+    delete visitData._uploadMime;
+    delete visitData._uploadOriginalName;
+
     console.log('[Visits] Creating visit with data:', JSON.stringify(visitData, null, 2));
     const visit = await visitService.create(visitData);
     console.log('[Visits] Visit created successfully:', visit.id);
+
+    // Save file record if photo was uploaded
+    if (uploadKey && visit.id) {
+      await pool.query(
+        `INSERT INTO files (filename, original_filename, mime_type, size, url, storage_key, storage_provider, uploaded_by, entity_type, entity_id)
+         VALUES ($1, $2, $3, $4, $5, $6, 's3', $7, 'visit', $8)`,
+        [uploadKey, uploadOriginalName, uploadMime, uploadSize, visitData.photo_url, uploadKey, user.sub, visit.id]
+      );
+      console.log('[Visits] File record saved for visit:', visit.id);
+    }
+
     return c.json(visit, 201);
   } catch (error: any) {
     console.error('[Visits] Error creating visit:', error);
