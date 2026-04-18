@@ -2201,6 +2201,7 @@ clients.post('/bulk-upload', authMiddleware, requirePermission('clients', 'creat
 // GET /api/clients/bulk-upload/:jobId/status - Poll job status
 clients.get('/bulk-upload/:jobId/status', authMiddleware, async (c) => {
   const jobId = c.req.param('jobId')
+  if (!jobId) return c.json({ error: 'Job ID is required' }, 400)
   const queueManager = getQueueManager()
   const queue = queueManager.getQueue({ name: QUEUE_NAMES.BULK_UPLOAD })
   const job = await queue.getJob(jobId)
