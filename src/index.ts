@@ -603,6 +603,18 @@ app.get('/api/migrate', authMiddleware, requireRole('admin'), async (c) => {
       } catch (e: any) {
         results.push(`⏭️  Migration 047: ${e.message.substring(0, 100)}`);
       }
+
+      // Migration 078: Add theme_color and theme_mode columns to users table
+      try {
+        await client.query(`
+          ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS theme_color VARCHAR(7) NOT NULL DEFAULT '#3B82F6',
+            ADD COLUMN IF NOT EXISTS theme_mode  VARCHAR(5) NOT NULL DEFAULT 'light'
+        `);
+        results.push('✅ Migration 078: Added theme_color and theme_mode to users table');
+      } catch (e: any) {
+        results.push(`⏭️  Migration 078: ${e.message.substring(0, 100)}`);
+      }
     } finally {
       client.release();
     }
