@@ -52,6 +52,18 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const end = endDate || fmt(now);
 
     const isCaravan = user.role === 'caravan';
+    const isManager = ['area_manager', 'assistant_area_manager'].includes(user.role);
+
+    let managerMemberIds: string[] = [];
+    let groupName: string | null = null;
+    if (isManager) {
+      managerMemberIds = await getManagerGroupMemberIds(user.sub);
+      const groupNameResult = await pool.query(
+        `SELECT g.name FROM groups g WHERE g.area_manager_id = $1 OR g.assistant_area_manager_id = $1 LIMIT 1`,
+        [user.sub]
+      );
+      groupName = groupNameResult.rows[0]?.name ?? null;
+    }
 
     if (isCaravan) {
       const [visitResult, callResult] = await Promise.all([
@@ -77,6 +89,13 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       });
     }
 
+    const memberFilter = isManager && managerMemberIds.length > 0
+      ? `AND user_id = ANY($3::uuid[])`
+      : '';
+    const memberParams = isManager && managerMemberIds.length > 0
+      ? [managerMemberIds]
+      : [];
+
     const [summaryResult, caravanResult, teleResult, groupResult] = await Promise.all([
       pool.query(
         `SELECT
@@ -84,11 +103,12 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
            COUNT(*) FILTER (WHERE src = 'visit') as visits,
            COUNT(*) FILTER (WHERE src = 'call') as calls
          FROM (
-           SELECT 'visit' as src FROM visits WHERE created_at::date >= $1 AND created_at::date <= $2
+           SELECT 'visit' as src, user_id FROM visits WHERE created_at::date >= $1 AND created_at::date <= $2
            UNION ALL
-           SELECT 'call' as src FROM calls WHERE created_at::date >= $1 AND created_at::date <= $2
-         ) tp`,
-        [start, end]
+           SELECT 'call' as src, user_id FROM calls WHERE created_at::date >= $1 AND created_at::date <= $2
+         ) tp
+         WHERE true ${memberFilter}`,
+        [start, end, ...memberParams]
       ),
       pool.query(
         `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
@@ -163,6 +183,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         caravan_name: r.caravan_name || null,
         total_touchpoints: parseInt(r.total_touchpoints),
       })),
+      ...(groupName ? { group_name: groupName } : {}),
     });
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
