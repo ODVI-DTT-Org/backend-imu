@@ -38,7 +38,6 @@ function getLocalDateString(date = new Date()): string {
 }
 
 // GET /api/dashboard - Get dashboard summary + leaderboards
-// Data lives in `visits` and `calls` tables (not `touchpoints`), filtered by created_at::date
 dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async (c) => {
   try {
     const user = c.get('user');
@@ -52,12 +51,38 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const end = endDate || fmt(now);
 
     const isCaravan = user.role === 'caravan';
+
+    if (isCaravan) {
+      const [touchpointResult] = await Promise.all([
+        pool.query(
+          `SELECT COUNT(*) as total,
+                  COUNT(*) FILTER (WHERE type = 'Visit') as visits,
+                  COUNT(*) FILTER (WHERE type = 'Call') as calls
+           FROM touchpoints
+           WHERE date::date >= $1 AND date::date <= $2 AND user_id = $3`,
+          [start, end, user.sub]
+        ),
+      ]);
+      const tp = touchpointResult.rows[0];
+      return c.json({
+        period: { start_date: start, end_date: end },
+        summary: {
+          total_touchpoints: parseInt(tp.total),
+          visits: parseInt(tp.visits),
+          calls: parseInt(tp.calls),
+        },
+        top_caravans: [],
+        top_teles: [],
+        top_groups: [],
+      });
+    }
+
+    // For managers and admin — check if this is a manager role and scope if needed
     const isManager = ['area_manager', 'assistant_area_manager'].includes(user.role);
 
-    let managerMemberIds: string[] = [];
+    // If manager, get group name
     let groupName: string | null = null;
     if (isManager) {
-      managerMemberIds = await getManagerGroupMemberIds(user.sub);
       const groupNameResult = await pool.query(
         `SELECT g.name FROM groups g WHERE g.area_manager_id = $1 OR g.assistant_area_manager_id = $1 LIMIT 1`,
         [user.sub]
@@ -65,57 +90,23 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       groupName = groupNameResult.rows[0]?.name ?? null;
     }
 
-    if (isCaravan) {
-      const [visitResult, callResult] = await Promise.all([
-        pool.query(
-          `SELECT COUNT(*) as visits FROM visits
-           WHERE user_id = $1 AND created_at::date >= $2 AND created_at::date <= $3`,
-          [user.sub, start, end]
-        ),
-        pool.query(
-          `SELECT COUNT(*) as calls FROM calls
-           WHERE user_id = $1 AND created_at::date >= $2 AND created_at::date <= $3`,
-          [user.sub, start, end]
-        ),
-      ]);
-      const visits = parseInt(visitResult.rows[0].visits);
-      const calls = parseInt(callResult.rows[0].calls);
-      return c.json({
-        period: { start_date: start, end_date: end },
-        summary: { total_touchpoints: visits + calls, visits, calls },
-        top_caravans: [],
-        top_teles: [],
-        top_groups: [],
-      });
-    }
-
-    const memberFilter = isManager && managerMemberIds.length > 0
-      ? `AND user_id = ANY($3::uuid[])`
-      : '';
-    const memberParams = isManager && managerMemberIds.length > 0
-      ? [managerMemberIds]
-      : [];
-
-    const [summaryResult, caravanResult, teleResult, groupResult] = await Promise.all([
+    const [touchpointResult, caravanResult, teleResult, groupResult] = await Promise.all([
       pool.query(
-        `SELECT
-           COUNT(*) as total,
-           COUNT(*) FILTER (WHERE src = 'visit') as visits,
-           COUNT(*) FILTER (WHERE src = 'call') as calls
-         FROM (
-           SELECT 'visit' as src, user_id FROM visits WHERE created_at::date >= $1 AND created_at::date <= $2
-           UNION ALL
-           SELECT 'call' as src, user_id FROM calls WHERE created_at::date >= $1 AND created_at::date <= $2
-         ) tp
-         WHERE true ${memberFilter}`,
-        [start, end, ...memberParams]
+        `SELECT COUNT(*) as total,
+                COUNT(*) FILTER (WHERE type = 'Visit') as visits,
+                COUNT(*) FILTER (WHERE type = 'Call') as calls
+         FROM touchpoints
+         WHERE date::date >= $1 AND date::date <= $2`,
+        [start, end]
       ),
       pool.query(
         `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
-                COUNT(v.id) as visits
-         FROM visits v
-         JOIN users u ON u.id = v.user_id
-         WHERE v.created_at::date >= $1 AND v.created_at::date <= $2
+                COUNT(*) as visits
+         FROM touchpoints t
+         JOIN users u ON u.id = t.user_id
+         WHERE u.role = 'caravan'
+           AND t.type = 'Visit'
+           AND t.date::date >= $1 AND t.date::date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY visits DESC
          LIMIT 3`,
@@ -123,49 +114,40 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       ),
       pool.query(
         `SELECT u.id as user_id, u.first_name || ' ' || u.last_name as name,
-                COUNT(c.id) as calls
-         FROM calls c
-         JOIN users u ON u.id = c.user_id
-         WHERE c.created_at::date >= $1 AND c.created_at::date <= $2
+                COUNT(*) as calls
+         FROM touchpoints t
+         JOIN users u ON u.id = t.user_id
+         WHERE u.role = 'tele'
+           AND t.type = 'Call'
+           AND t.date::date >= $1 AND t.date::date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY calls DESC
          LIMIT 3`,
         [start, end]
       ),
-      // group_members.client_id references users.id (the agent assigned to the group)
       pool.query(
         `SELECT g.id as group_id, g.name,
-                uc.first_name || ' ' || uc.last_name as caravan_name,
-                COALESCE(v_agg.visits, 0) + COALESCE(c_agg.calls, 0) as total_touchpoints
+                u.first_name || ' ' || u.last_name as caravan_name,
+                COUNT(t.id) as total_touchpoints
          FROM groups g
-         LEFT JOIN users uc ON uc.id = g.caravan_id
-         LEFT JOIN (
-           SELECT gm.group_id, COUNT(v.id) as visits
-           FROM group_members gm
-           JOIN visits v ON v.user_id = gm.client_id
-           WHERE v.created_at::date >= $1 AND v.created_at::date <= $2
-           GROUP BY gm.group_id
-         ) v_agg ON v_agg.group_id = g.id
-         LEFT JOIN (
-           SELECT gm.group_id, COUNT(c.id) as calls
-           FROM group_members gm
-           JOIN calls c ON c.user_id = gm.client_id
-           WHERE c.created_at::date >= $1 AND c.created_at::date <= $2
-           GROUP BY gm.group_id
-         ) c_agg ON c_agg.group_id = g.id
+         JOIN group_members gm ON gm.group_id = g.id
+         JOIN touchpoints t ON t.client_id = gm.client_id
+         LEFT JOIN users u ON u.id = g.caravan_id
+         WHERE t.date::date >= $1 AND t.date::date <= $2
+         GROUP BY g.id, g.name, u.first_name, u.last_name
          ORDER BY total_touchpoints DESC
          LIMIT 3`,
         [start, end]
       ),
     ]);
 
-    const sr = summaryResult.rows[0];
-    return c.json({
+    const tp = touchpointResult.rows[0];
+    const response: any = {
       period: { start_date: start, end_date: end },
       summary: {
-        total_touchpoints: parseInt(sr.total),
-        visits: parseInt(sr.visits),
-        calls: parseInt(sr.calls),
+        total_touchpoints: parseInt(tp.total),
+        visits: parseInt(tp.visits),
+        calls: parseInt(tp.calls),
       },
       top_caravans: caravanResult.rows.map((r: any) => ({
         user_id: r.user_id,
@@ -183,12 +165,14 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
         caravan_name: r.caravan_name || null,
         total_touchpoints: parseInt(r.total_touchpoints),
       })),
-      ...(groupName ? { group_name: groupName } : {}),
-    });
+    };
+
+    if (groupName) response.group_name = groupName;
+
+    return c.json(response);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
     console.error('Dashboard error:', error);
-    return c.json({ error: msg, message: msg }, 500);
+    throw error;
   }
 });
 
