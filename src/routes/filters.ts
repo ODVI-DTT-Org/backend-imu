@@ -32,23 +32,24 @@ const LABEL_MAP: Record<string, string> = {
   'POTENTIAL': 'Potential',
   'EXISTING': 'Existing',
 
-  // Product types (SSS Pensioner, GSIS Pensioner, Private)
-  'SSS_PENSIONER': 'SSS Pensioner',
-  'GSIS_PENSIONER': 'GSIS Pensioner',
-  'PRIVATE': 'Private',
+  // Product types
+  'BFP ACTIVE': 'BFP ACTIVE',
+  'BFP PENSION': 'BFP PENSION',
+  'PNP PENSION': 'PNP PENSION',
+  'NAPOLCOM': 'NAPOLCOM',
+  'BFP STP': 'BFP STP',
 
   // Loan types
-  'PRETERM': 'Preterm',
-  'NEW': 'New',
-  'ADDITIONAL': 'Additional',
-  'RENEWAL': 'Renewal',
+  'PRETERM': 'PRETERM',
+  'NEW': 'NEW',
+  'ADDITIONAL': 'ADDITIONAL',
+  'RENEWAL': 'RENEWAL',
 
   // Pension types
-  'OLD_AGE': 'Old Age',
-  'DISABILITY': 'Disability',
-  'RETIREMENT': 'Retirement',
-  'SURVIVOR': 'Survivor',
-  'CARER': 'Carer',
+  'PRIVATE': 'Private',
+  'SSS': 'SSS',
+  'GSIS': 'GSIS',
+  'NONE': 'None',
 
   // Market types
   'RESIDENTIAL': 'Residential',
