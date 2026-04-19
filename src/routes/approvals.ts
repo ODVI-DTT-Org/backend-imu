@@ -1319,7 +1319,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
             validated.latitude, validated.longitude, validated.address,
-            validated.photo_url, validated.notes]);
+            validated.photo_url || '', validated.notes]);
 
         activityId = visitResult.rows[0].id;
 

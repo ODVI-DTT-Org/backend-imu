@@ -705,7 +705,7 @@ myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints'
         ) RETURNING id
       `, [clientId, user.sub, validated.time_in, validated.time_out,
           validated.latitude, validated.longitude, validated.address,
-          validated.photo_url, validated.notes]);
+          validated.photo_url || '', validated.notes]);
 
       // UPDATE itineraries (with error handling)
       const itineraryResult = await dbClient.query(`
