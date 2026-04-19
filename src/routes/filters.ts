@@ -152,17 +152,18 @@ filtersRouter.get('/values', async (c) => {
 
   try {
     // Build query with null handling and count ordering
+    // GROUP BY the normalized value to deduplicate case/whitespace variants
     const nullFilter = includeNull ? '' : `AND ${column} IS NOT NULL`;
     const countSelect = withCounts ? `, COUNT(*) as count` : '';
-    const groupBy = withCounts ? `GROUP BY ${column}` : `GROUP BY 1`;
+    const groupBy = `GROUP BY UPPER(TRIM(${column}))`;
     const orderBy = withCounts
-      ? `ORDER BY count DESC, 2 ASC`  // Order by count DESC, then label ASC
-      : `ORDER BY 2 ASC`;  // Order by label ASC
+      ? `ORDER BY count DESC, value ASC`
+      : `ORDER BY value ASC`;
 
     const query = `
       SELECT
-        COALESCE(${column}, 'Unspecified') as value,
-        ${column} as raw_value
+        UPPER(TRIM(COALESCE(${column}, 'Unspecified'))) as value,
+        UPPER(TRIM(${column})) as raw_value
         ${countSelect}
       FROM ${table}
       WHERE 1=1
@@ -286,15 +287,15 @@ filtersRouter.get('/batch', async (c) => {
       filters.map(async (filter) => {
         const nullFilter = includeNull ? '' : `AND ${filter.column} IS NOT NULL`;
         const countSelect = withCounts ? `, COUNT(*) as count` : '';
-        const groupBy = withCounts ? `GROUP BY ${filter.column}` : `GROUP BY 1`;
+        const groupBy = `GROUP BY UPPER(TRIM(${filter.column}))`;
         const orderBy = withCounts
-          ? `ORDER BY count DESC, 2 ASC`
-          : `ORDER BY 2 ASC`;
+          ? `ORDER BY count DESC, value ASC`
+          : `ORDER BY value ASC`;
 
         const query = `
           SELECT
-            COALESCE(${filter.column}, 'Unspecified') as value,
-            ${filter.column} as raw_value
+            UPPER(TRIM(COALESCE(${filter.column}, 'Unspecified'))) as value,
+            UPPER(TRIM(${filter.column})) as raw_value
             ${countSelect}
           FROM ${filter.table}
           WHERE 1=1
