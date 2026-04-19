@@ -38,7 +38,7 @@ const createReportJobSchema = z.object({
 
 const createUserLocationAssignmentSchema = z.object({
   municipality_ids: z.array(z.string()).min(1),
-  user_id: z.string().optional(),
+  user_id: z.string(),
 });
 
 /**
@@ -127,8 +127,8 @@ jobs.post('/user-locations/assign', requirePermission('users', 'update'), async 
     const job = await addLocationJob(
       LocationJobType.BULK_ASSIGN_USER_MUNICIPALITIES,
       user.sub,
-      validated.municipality_ids,
-      { userId: validated.user_id }
+      [validated.user_id],
+      { municipalityIds: validated.municipality_ids }
     );
 
     return c.json({
