@@ -677,6 +677,7 @@ myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints'
       address: z.string().optional(),
       photo_url: z.string().min(1, 'Photo is required'),
       notes: z.string().optional(),
+      remarks: z.string().optional(),
     });
 
     const validated = visitSchema.parse(await c.req.json());
@@ -699,13 +700,13 @@ myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints'
       const visitResult = await dbClient.query(`
         INSERT INTO visits (
           id, client_id, user_id, type, time_in, time_out,
-          latitude, longitude, address, photo_url, notes
+          latitude, longitude, address, photo_url, remarks
         ) VALUES (
           gen_random_uuid(), $1, $2, 'regular_visit', $3, $4, $5, $6, $7, $8, $9
         ) RETURNING id
       `, [clientId, user.sub, validated.time_in, validated.time_out,
           validated.latitude, validated.longitude, validated.address,
-          validated.photo_url, validated.notes]);
+          validated.photo_url, validated.remarks ?? validated.notes ?? null]);
 
       // UPDATE itineraries (with error handling)
       const itineraryResult = await dbClient.query(`
@@ -832,7 +833,7 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     const odometerArrival = body['odometer_arrival'] as string | undefined;
     const odometerDeparture = body['odometer_departure'] as string | undefined;
     const nextVisitDate = body['next_visit_date'] as string | undefined;
-    const notes = body['notes'] as string | undefined;
+    const remarks = (body['remarks'] || body['notes']) as string | undefined;
     const latitudeStr = body['latitude'] as string | undefined;
     const longitudeStr = body['longitude'] as string | undefined;
 
@@ -1055,14 +1056,14 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         // Create a visit record from the touchpoint data
         const visitResult = await pool.query(
           `INSERT INTO visits (
-            client_id, user_id, type, reason, status, notes,
+            client_id, user_id, type, reason, status, remarks,
             address, latitude, longitude, photo_url, time_in, time_out
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
           ) RETURNING *`,
           [
             clientId, user.sub, 'regular_visit',
-            reason, status || 'Interested', notes,
+            reason, status || 'Interested', remarks,
             address, latitude, longitude,
             uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
             timeArrival || null, timeDeparture || null
@@ -1365,7 +1366,7 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     const odometerArrival = body['odometer_arrival'] as string | undefined;
     const odometerDeparture = body['odometer_departure'] as string | undefined;
     const nextVisitDate = body['next_visit_date'] as string | undefined;
-    const notes = body['notes'] as string | undefined;
+    const remarks = (body['remarks'] || body['notes']) as string | undefined;
     const latitudeStr = body['latitude'] as string | undefined;
     const longitudeStr = body['longitude'] as string | undefined;
     const scheduledTime = body['scheduled_time'] as string | undefined;
@@ -1584,14 +1585,14 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
         // Create a visit record from the touchpoint data
         const visitResult = await pool.query(
           `INSERT INTO visits (
-            client_id, user_id, type, reason, status, notes,
+            client_id, user_id, type, reason, status, remarks,
             address, latitude, longitude, photo_url, time_in, time_out
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
           ) RETURNING *`,
           [
             clientId, user.sub, 'regular_visit',
-            reason, status || 'Interested', notes,
+            reason, status || 'Interested', remarks,
             address, latitude, longitude,
             uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
             timeArrival || null, timeDeparture || null

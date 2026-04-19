@@ -104,7 +104,7 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     visit_id: row.visit_id,
     call_id: row.call_id,
     status: row.status ?? null,
-    notes: row.notes ?? null,
+    remarks: row.remarks ?? null,
     date: row.date ?? null,
     is_legacy: row.is_legacy ?? false,
     next_visit_date: row.next_visit_date ?? null,

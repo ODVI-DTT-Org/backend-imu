@@ -960,7 +960,7 @@ reports.get('/visits', authMiddleware, requirePermission('reports', 'read'), asy
         v.odometer_arrival,
         v.odometer_departure,
         v.photo_url,
-        v.notes,
+        v.remarks,
         v.reason,
         v.status,
         v.address,
