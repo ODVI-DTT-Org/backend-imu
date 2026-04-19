@@ -13,6 +13,29 @@ import {
 } from '../errors/index.js';
 import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
+import { storageService } from '../services/storage.js';
+
+const SIGNED_URL_EXPIRY = 3600; // 1 hour
+
+function extractS3Key(url: string): string | null {
+  if (!url) return null;
+  const bucket = process.env.STORAGE_BUCKET || 'imu-uploads';
+  const region = process.env.AWS_REGION || 'ap-southeast-1';
+  const prefix = `https://${bucket}.s3.${region}.amazonaws.com/`;
+  if (url.startsWith(prefix)) return url.slice(prefix.length);
+  return null;
+}
+
+async function signPhotoUrl(photoUrl: string | null | undefined): Promise<string | null> {
+  if (!photoUrl || !storageService.isS3Ready()) return photoUrl ?? null;
+  const key = extractS3Key(photoUrl);
+  if (!key) return photoUrl;
+  try {
+    return await storageService.getSignedUrl(key, SIGNED_URL_EXPIRY);
+  } catch {
+    return photoUrl;
+  }
+}
 import {
   validateTouchpointSequence,
   validateRoleBasedTouchpoint,
@@ -206,11 +229,14 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       [...params, perPage, offset]
     );
 
-    const items = result.rows.map(row => {
+    const items = await Promise.all(result.rows.map(async row => {
       // Calculate display_name for client: "Surname, First Name MiddleName"
       const middleName = row.client_middle_name || '';
       const nameParts = [row.client_first_name, middleName].filter((p: string) => p && p.trim().length > 0);
       const clientDisplayName = `${row.client_last_name}, ${nameParts.join(' ')}`;
+
+      // Sign photo URL if stored in S3
+      row.photo_url = await signPhotoUrl(row.photo_url);
 
       return {
         ...mapRowToTouchpoint(row),
@@ -229,7 +255,7 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
           } : null,
         },
       };
-    });
+    }));
 
     return c.json({
       items,
@@ -398,6 +424,9 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
     if (user.role === 'caravan' && touchpoint.user_id !== user.sub) {
       return c.json({ message: 'Forbidden' }, 403);
     }
+
+    // Sign photo URL if stored in S3
+    touchpoint.photo_url = await signPhotoUrl(touchpoint.photo_url);
 
     const clientFirstName = touchpoint.client_first_name || '';
     const clientMiddleName = touchpoint.client_middle_name || '';
