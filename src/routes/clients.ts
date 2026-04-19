@@ -814,6 +814,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
       return {
         ...mapRowToClient(row),
+        // Override touchpoint fields: SQL aliases touchpoint_number as completed_touchpoints,
+        // so mapRowToClient gets undefined for these — set them explicitly here.
+        touchpoint_number: completedCount,
+        next_touchpoint_number: nextTouchpointNumber,
         expand: {
           addresses: row.addresses,
           phone_numbers: row.phone_numbers,
