@@ -16,8 +16,8 @@ export const createVisitSchema = z.object({
   reason: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
   status: z.preprocess(v => (v === '' ? null : v), z.string().max(100).nullish()),
   address: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
-  latitude: z.preprocess(v => (v === '' ? null : v), z.number().min(-90).max(90).nullish()),
-  longitude: z.preprocess(v => (v === '' ? null : v), z.number().min(-180).max(180).nullish()),
+  latitude: z.preprocess(v => (v === '' ? null : (typeof v === 'string' ? parseFloat(v as string) : v)), z.number().min(-90).max(90).nullish()),
+  longitude: z.preprocess(v => (v === '' ? null : (typeof v === 'string' ? parseFloat(v as string) : v)), z.number().min(-180).max(180).nullish()),
   source: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
 });
 

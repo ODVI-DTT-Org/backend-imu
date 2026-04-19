@@ -80,6 +80,7 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     rejection_reason: row.rejection_reason,
     visit_id: row.visit_id,
     call_id: row.call_id,
+    photo_url: row.photo_url ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     expand: row.expand,
@@ -185,10 +186,12 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       `SELECT t.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
               c.middle_name as client_middle_name,
-              u.first_name as user_first_name, u.last_name as user_last_name
+              u.first_name as user_first_name, u.last_name as user_last_name,
+              v.photo_url
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
+       LEFT JOIN visits v ON v.id = t.visit_id
        ${whereClause}
        ORDER BY t.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -362,10 +365,12 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
     const result = await pool.query(
       `SELECT t.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
-              u.first_name as user_first_name, u.last_name as user_last_name
+              u.first_name as user_first_name, u.last_name as user_last_name,
+              v.photo_url
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
+       LEFT JOIN visits v ON v.id = t.visit_id
        WHERE t.id = $1`,
       [id]
     );
