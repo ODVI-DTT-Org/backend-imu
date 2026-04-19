@@ -208,7 +208,8 @@ CREATE TABLE IF NOT EXISTS visits (
     odometer_arrival TEXT,
     odometer_departure TEXT,
     photo_url TEXT,
-    notes TEXT,
+    notes TEXT,       -- legacy; use remarks for new records
+    remarks TEXT,
     reason TEXT,
     status TEXT,
     address TEXT,
@@ -231,7 +232,8 @@ CREATE TABLE IF NOT EXISTS calls (
     type TEXT NOT NULL DEFAULT 'regular_call',
     dial_time TIMESTAMPTZ,
     duration INTEGER,
-    notes TEXT,
+    notes TEXT,       -- legacy; use remarks for new records
+    remarks TEXT,
     reason TEXT,
     status TEXT,
     photo_url TEXT,
@@ -256,7 +258,8 @@ CREATE TABLE IF NOT EXISTS touchpoints (
     date DATE,
     status TEXT,
     next_visit_date DATE,
-    notes TEXT,
+    notes TEXT,       -- legacy; use remarks for new records
+    remarks TEXT,
     is_legacy BOOLEAN DEFAULT FALSE,
     CONSTRAINT touchpoint_has_record CHECK (visit_id IS NOT NULL OR call_id IS NOT NULL),
     CONSTRAINT touchpoints_client_id_touchpoint_number_key UNIQUE (client_id, touchpoint_number)
@@ -271,9 +274,9 @@ CREATE TABLE IF NOT EXISTS releases (
     call_id UUID REFERENCES calls(id),
     product_type TEXT NOT NULL,
     loan_type TEXT NOT NULL,
-    amount NUMERIC NOT NULL,
-    approval_notes TEXT,
     udi_number TEXT,
+    approval_notes TEXT,
+    remarks TEXT,
     status TEXT NOT NULL DEFAULT 'pending',
     approved_by UUID REFERENCES users(id) ON DELETE SET NULL,
     approved_at TIMESTAMPTZ,
