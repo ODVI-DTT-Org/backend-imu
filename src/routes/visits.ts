@@ -195,6 +195,15 @@ visits.post('/', authMiddleware, async (c) => {
       }
     }
 
+    // Mark pending itineraries for this client as completed (non-blocking)
+    if (visit.client_id) {
+      pool.query(
+        `UPDATE itineraries SET status = 'completed', updated_at = NOW()
+         WHERE client_id = $1 AND status = 'pending'`,
+        [visit.client_id]
+      ).catch((err: any) => console.error('[Visits] Failed to update itineraries:', err.message));
+    }
+
     return c.json(visit, 201);
   } catch (error: any) {
     console.error('[Visits] Error creating visit:', error);

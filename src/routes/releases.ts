@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { releaseService, createReleaseSchema, updateReleaseSchema } from '../services/release.service.js';
 import { ValidationError } from '../errors/index.js';
+import { pool } from '../db/index.js';
 
 const releases = new Hono();
 
@@ -29,6 +30,16 @@ releases.post('/', authMiddleware, async (c) => {
     const user = c.get('user');
     const data = await c.req.json();
     const release = await releaseService.create({ ...data, user_id: user.sub });
+
+    // Mark pending itineraries for this client as completed (non-blocking)
+    if (release.client_id) {
+      pool.query(
+        `UPDATE itineraries SET status = 'completed', updated_at = NOW()
+         WHERE client_id = $1 AND status = 'pending'`,
+        [release.client_id]
+      ).catch((err: any) => console.error('[Releases] Failed to update itineraries:', err.message));
+    }
+
     return c.json(release, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
