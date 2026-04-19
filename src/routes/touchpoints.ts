@@ -80,6 +80,12 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     rejection_reason: row.rejection_reason,
     visit_id: row.visit_id,
     call_id: row.call_id,
+    status: row.status ?? null,
+    notes: row.notes ?? null,
+    date: row.date ?? null,
+    is_legacy: row.is_legacy ?? false,
+    next_visit_date: row.next_visit_date ?? null,
+    reason: row.reason ?? null,
     photo_url: row.photo_url ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -187,11 +193,13 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
               c.first_name as client_first_name, c.last_name as client_last_name,
               c.middle_name as client_middle_name,
               u.first_name as user_first_name, u.last_name as user_last_name,
-              v.photo_url
+              COALESCE(v.photo_url, ca.photo_url) AS photo_url,
+              COALESCE(v.reason, ca.reason) AS reason
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
        LEFT JOIN visits v ON v.id = t.visit_id
+       LEFT JOIN calls ca ON ca.id = t.call_id
        ${whereClause}
        ORDER BY t.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -369,11 +377,13 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               c.email as client_email, c.phone as client_phone,
               c.client_type as client_client_type,
               u.first_name as user_first_name, u.last_name as user_last_name,
-              v.photo_url
+              COALESCE(v.photo_url, ca.photo_url) AS photo_url,
+              COALESCE(v.reason, ca.reason) AS reason
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
        LEFT JOIN visits v ON v.id = t.visit_id
+       LEFT JOIN calls ca ON ca.id = t.call_id
        WHERE t.id = $1`,
       [id]
     );
