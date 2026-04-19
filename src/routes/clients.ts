@@ -724,6 +724,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
         ) as phone_numbers,
         -- touchpoint_number already stores the actual count (0-7), not next number
         COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
+        -- Calculate next touchpoint number (1-7 or null if complete) — mirrors /clients endpoint
+        CASE
+          WHEN COALESCE(c.touchpoint_number, 0) >= 7 THEN NULL
+          ELSE COALESCE(c.touchpoint_number, 0) + 1
+        END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
         (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
@@ -785,7 +790,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
-      const nextTouchpointNumber = completedCount >= 7 ? null : completedCount + 1;
+      const nextTouchpointNumber = row.next_touchpoint_number ?? null;
       const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
       const loanReleased = row.loan_released || false;
 
@@ -814,10 +819,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
       return {
         ...mapRowToClient(row),
-        // Override touchpoint fields: SQL aliases touchpoint_number as completed_touchpoints,
-        // so mapRowToClient gets undefined for these — set them explicitly here.
-        touchpoint_number: completedCount,
-        next_touchpoint_number: nextTouchpointNumber,
         expand: {
           addresses: row.addresses,
           phone_numbers: row.phone_numbers,
