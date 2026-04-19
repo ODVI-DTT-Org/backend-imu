@@ -127,40 +127,70 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
   }
 
   /**
-   * Process PSGC matching for a client
+   * Process PSGC matching for a single client using 3-strategy cascade:
+   * 1. Exact case-insensitive match
+   * 2. Normalized match (strips CITY OF / CITY prefix/suffix)
+   * 3. Trigram similarity fallback (requires pg_trgm extension)
    */
   private async processPsgcMatching(client: any, clientId: string): Promise<void> {
-    // Get client information
     const clientResult = await client.query(
       'SELECT municipality, province FROM clients WHERE id = $1 AND deleted_at IS NULL',
       [clientId]
     );
 
-    if (clientResult.rows.length === 0) {
-      throw new Error('Client not found');
-    }
+    if (clientResult.rows.length === 0) throw new Error('Client not found');
 
-    const clientData = clientResult.rows[0];
+    const { municipality, province } = clientResult.rows[0];
+    if (!municipality || !province) throw new Error('Client missing municipality or province data');
 
-    // Find matching PSGC record
-    const psgcResult = await client.query(
-      `SELECT code, municipality, province FROM psgc
-       WHERE LOWER(municipality) = LOWER($1)
-       AND LOWER(province) = LOWER($2)
+    const cols = 'id, region, province, mun_city, barangay';
+
+    // Strategy 1: exact case-insensitive match
+    let psgcResult = await client.query(
+      `SELECT ${cols} FROM psgc
+       WHERE lower(mun_city) = lower($1) AND lower(province) = lower($2)
        LIMIT 1`,
-      [clientData.municipality, clientData.province]
+      [municipality, province]
     );
 
+    // Strategy 2: normalized match — strip leading/trailing CITY variants
     if (psgcResult.rows.length === 0) {
-      throw new Error('No matching PSGC record found');
+      const norm = (s: string) => s.replace(/ CITY$/i, '').replace(/^(CITY OF|CITY)\s*/i, '').trim();
+      psgcResult = await client.query(
+        `SELECT ${cols} FROM psgc
+         WHERE lower(regexp_replace(mun_city, '(^city of\\s+|^city\\s+|\\s+city$)', '', 'gi')) = lower($1)
+           AND lower(province) = lower($2)
+         LIMIT 1`,
+        [norm(municipality), province]
+      );
     }
 
-    const psgcData = psgcResult.rows[0];
+    // Strategy 3: trigram similarity
+    if (psgcResult.rows.length === 0) {
+      psgcResult = await client.query(
+        `SELECT ${cols} FROM psgc
+         WHERE similarity(lower(mun_city), lower($1)) >= 0.35
+           AND similarity(lower(province), lower($2)) >= 0.5
+         ORDER BY (similarity(lower(mun_city), lower($1)) + similarity(lower(province), lower($2))) DESC
+         LIMIT 1`,
+        [municipality, province]
+      );
+    }
 
-    // Update client with PSGC code
+    if (psgcResult.rows.length === 0) throw new Error('No matching PSGC record found');
+
+    const psgc = psgcResult.rows[0];
+
     await client.query(
-      'UPDATE clients SET psgc_code = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
-      [psgcData.code, clientId]
+      `UPDATE clients SET
+         psgc_id = $1,
+         region = COALESCE($2, region),
+         province = COALESCE($3, province),
+         municipality = COALESCE($4, municipality),
+         barangay = COALESCE($5, barangay),
+         updated_at = NOW()
+       WHERE id = $6 AND deleted_at IS NULL`,
+      [psgc.id, psgc.region, psgc.province, psgc.mun_city, psgc.barangay, clientId]
     );
   }
 
