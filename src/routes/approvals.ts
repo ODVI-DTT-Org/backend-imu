@@ -456,8 +456,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
               udiNumber, 'Approved by admin']);
 
           await client.query(
-            'UPDATE clients SET loan_released = TRUE, loan_released_at = NOW() WHERE id = $1',
-            [approval.client_id]
+            `UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(),
+              product_type = COALESCE($2, product_type),
+              loan_type = COALESCE($3, loan_type)
+            WHERE id = $1`,
+            [approval.client_id, parsedNotes.product_type ?? null, parsedNotes.loan_type ?? null]
           );
 
           if (parsedNotes.visit_id) {
@@ -541,9 +544,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         // UPDATE clients
         await client.query(`
           UPDATE clients
-          SET loan_released = TRUE, loan_released_at = NOW()
+          SET loan_released = TRUE, loan_released_at = NOW(),
+            product_type = COALESCE($2, product_type),
+            loan_type = COALESCE($3, loan_type)
           WHERE id = $1
-        `, [approval.client_id]);
+        `, [approval.client_id, notes.product_type ?? null, notes.loan_type ?? null]);
 
         // UPDATE itineraries (now completed) - only for Caravan (visit-based)
         if (visitId) {
@@ -1281,9 +1286,11 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       // UPDATE clients
       await client.query(`
         UPDATE clients
-        SET loan_released = TRUE, loan_released_at = NOW()
+        SET loan_released = TRUE, loan_released_at = NOW(),
+          product_type = COALESCE($2, product_type),
+          loan_type = COALESCE($3, loan_type)
         WHERE id = $1
-      `, [validated.client_id]);
+      `, [validated.client_id, validated.product_type ?? null, validated.loan_type ?? null]);
 
       await client.query('COMMIT');
 
