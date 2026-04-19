@@ -12,6 +12,8 @@
  */
 
 import { Job } from 'bullmq';
+import { S3Client, PutObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { pool } from '../../db/index.js';
 import { BaseProcessor } from '../base-processor.js';
 import type { ReportJobData, JobResult } from '../jobs/job-types.js';
@@ -21,8 +23,47 @@ import { logger } from '../../utils/logger.js';
  * Reports Processor
  */
 export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
+  private s3Client: S3Client;
+  private s3Bucket: string;
+
   constructor() {
     super('reports');
+    this.s3Bucket = process.env.AWS_S3_BUCKET || 'imu-reports';
+    this.s3Client = new S3Client({
+      region: process.env.AWS_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
+        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
+      },
+    });
+  }
+
+  private rowsToCsv(rows: Record<string, any>[]): string {
+    if (rows.length === 0) return '';
+    const headers = Object.keys(rows[0]);
+    const escape = (v: any) => {
+      const s = String(v ?? '');
+      return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    return [
+      headers.join(','),
+      ...rows.map(r => headers.map(h => escape(r[h])).join(',')),
+    ].join('\n');
+  }
+
+  private async uploadCsvToS3(fileName: string, csv: string): Promise<string> {
+    const key = `reports/${fileName}`;
+    await this.s3Client.send(new PutObjectCommand({
+      Bucket: this.s3Bucket,
+      Key: key,
+      Body: Buffer.from(csv, 'utf-8'),
+      ContentType: 'text/csv',
+    }));
+    return getSignedUrl(
+      this.s3Client,
+      new GetObjectCommand({ Bucket: this.s3Bucket, Key: key }),
+      { expiresIn: 3600 }
+    );
   }
 
   /**
@@ -70,6 +111,22 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       }
 
       await this.updateProgress(job, {
+        progress: 80,
+        total: 100,
+        current: 80,
+        message: 'Uploading CSV...',
+      });
+
+      let downloadUrl: string | undefined;
+      try {
+        const csv = this.rowsToCsv(result.data || []);
+        const fileName = `${type}-${Date.now()}.csv`;
+        downloadUrl = await this.uploadCsvToS3(fileName, csv);
+      } catch (uploadError: any) {
+        logger.error('ReportsProcessor', 'CSV upload failed (continuing without download URL)', uploadError);
+      }
+
+      await this.updateProgress(job, {
         progress: 100,
         total: 100,
         current: 100,
@@ -84,7 +141,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         startedAt,
         completedAt: new Date(),
         duration: Date.now() - startedAt.getTime(),
-        result,
+        result: { ...result, downloadUrl },
       };
     } catch (error: any) {
       logger.error('ReportsProcessor', 'Report generation failed', error);
