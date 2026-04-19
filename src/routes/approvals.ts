@@ -114,16 +114,20 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
     }
 
     if (type && type !== 'all') {
-      const types = type.split(',').map(t => t.trim()).filter(Boolean);
-      if (types.length === 1) {
-        conditions.push(`a.type = $${paramIndex}`);
-        params.push(types[0]);
+      if (type === 'client_group') {
+        conditions.push(`a.type = ANY($${paramIndex}::text[])`);
+        params.push(['client', 'address_add', 'address_edit', 'address_delete', 'phone_add', 'phone_edit', 'phone_delete', 'client_delete', 'loan_release_v2']);
         paramIndex++;
-      } else if (types.length > 1) {
+      } else if (type.includes(',')) {
+        const types = type.split(',').map(t => t.trim()).filter(Boolean);
         const placeholders = types.map((_, i) => `$${paramIndex + i}`).join(', ');
         conditions.push(`a.type IN (${placeholders})`);
         params.push(...types);
         paramIndex += types.length;
+      } else {
+        conditions.push(`a.type = $${paramIndex}`);
+        params.push(type);
+        paramIndex++;
       }
     }
 
