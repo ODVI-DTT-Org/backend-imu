@@ -71,6 +71,7 @@ function mapRowToApproval(row: Record<string, any>) {
     reason: row.reason,
     notes: row.notes,
     visit_remarks: row.visit_remarks ?? null,
+    photo_url: row.visit_photo_url ?? null,
     updated_client_information: row.updated_client_information,
     updated_udi: row.updated_udi,
     udi_number: row.udi_number,
@@ -170,14 +171,15 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
               car.first_name as caravan_first_name, car.last_name as caravan_last_name,
               car.email as caravan_email, car.phone as caravan_phone,
               u.first_name as approver_first_name, u.last_name as approver_last_name,
-              v.remarks as visit_remarks
+              v.remarks as visit_remarks,
+              v.photo_url as visit_photo_url
        FROM approvals a
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN users car ON car.id = a.user_id
        LEFT JOIN users u ON u.id = a.approved_by
        LEFT JOIN LATERAL (
-         SELECT remarks FROM visits
-         WHERE a.type = 'udi'
+         SELECT remarks, photo_url FROM visits
+         WHERE a.type IN ('udi', 'loan_release_v2')
            AND left(a.notes, 1) = '{'
            AND id = (a.notes::jsonb->>'visit_id')::uuid
          LIMIT 1
