@@ -22,7 +22,7 @@ const APPROVAL_ROLES = [...MANAGER_ROLES, 'staff'] as const;
 // Validation schemas
 const createApprovalSchema = z.object({
   type: z.enum(['client', 'udi', 'address_add', 'address_edit', 'address_delete', 'phone_add', 'phone_edit', 'phone_delete', 'client_delete', 'loan_release', 'loan_release_v2']),
-  client_id: z.string().uuid(),
+  client_id: z.string().uuid().optional(),
   user_id: z.string().uuid().optional(),
   touchpoint_number: z.number().int().min(1).max(7).optional(),
   role: z.string().optional(),
@@ -270,17 +270,18 @@ approvals.post('/', authMiddleware, requirePermission('approvals', 'create'), au
     const validated = createApprovalSchema.parse(body);
 
     const result = await pool.query(
-      `INSERT INTO approvals (id, type, client_id, user_id, touchpoint_number, role, reason, notes, status)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, 'pending')
+      `INSERT INTO approvals (id, type, client_id, user_id, touchpoint_number, role, reason, notes, updated_client_information, status)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'pending')
        RETURNING *`,
       [
         validated.type,
-        validated.client_id,
+        validated.client_id ?? null,
         validated.user_id || user.sub,
         validated.touchpoint_number,
         validated.role,
         validated.reason,
         validated.notes,
+        validated.updated_client_information ? JSON.stringify(validated.updated_client_information) : null,
       ]
     );
 
