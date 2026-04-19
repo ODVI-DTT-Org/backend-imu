@@ -1310,6 +1310,11 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
 
       // Caravan: CREATE visits record
       if (user.role === 'caravan') {
+        if (!validated.photo_url) {
+          await dbClient.query('ROLLBACK');
+          return c.json({ error: 'Photo is required', errorCode: 'PHOTO_REQUIRED' }, 400);
+        }
+
         const visitResult = await dbClient.query(`
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
@@ -1319,7 +1324,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
             validated.latitude, validated.longitude, validated.address,
-            validated.photo_url || '', validated.notes]);
+            validated.photo_url, validated.notes]);
 
         activityId = visitResult.rows[0].id;
 

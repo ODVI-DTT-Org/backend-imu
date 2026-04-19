@@ -605,13 +605,17 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     if (!visitId && !callId) {
       console.log('[Touchpoints] No visit_id or call_id provided, auto-creating visit record');
 
+      if (!body.photo_url) {
+        return c.json({ error: 'Photo is required', errorCode: 'PHOTO_REQUIRED' }, 400);
+      }
+
       // Access raw request body for visit data fields (not in touchpoint schema)
       const visitData = {
         time_in: body.time_in || null,
         time_out: body.time_out || null,
         odometer_arrival: body.odometer_arrival || null,
         odometer_departure: body.odometer_departure || null,
-        photo_url: body.photo_url || '',
+        photo_url: body.photo_url,
         notes: body.notes || body.remarks || null,
         reason: body.reason || null,
         status: body.status || null,
