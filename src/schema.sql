@@ -223,9 +223,6 @@ CREATE TABLE IF NOT EXISTS touchpoints (
     next_visit_date DATE,
     notes TEXT,
     is_legacy BOOLEAN DEFAULT FALSE,
-    latitude REAL,
-    longitude REAL,
-    address TEXT,
     CONSTRAINT touchpoint_has_record CHECK (visit_id IS NOT NULL OR call_id IS NOT NULL),
     UNIQUE (client_id, touchpoint_number)
 );
