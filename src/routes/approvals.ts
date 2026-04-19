@@ -1292,7 +1292,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       latitude: z.number().optional(),
       longitude: z.number().optional(),
       address: z.string().optional(),
-      photo_url: z.preprocess(v => (v == null || v === '' ? '' : v), z.string()),
+      photo_url: z.string().url('photo_url must be a valid URL'),
       // Tele-specific fields
       phone_number: z.string().regex(/^09\d{9}$/).optional(),
       duration: z.number().int().positive().optional(),
@@ -1326,6 +1326,11 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
 
       // Caravan: CREATE visits record
       if (user.role === 'caravan') {
+        if (!validated.photo_url) {
+          await dbClient.query('ROLLBACK');
+          return c.json({ error: 'Photo is required for loan release', errorCode: 'PHOTO_REQUIRED' }, 400);
+        }
+
         const visitResult = await dbClient.query(`
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
@@ -1339,7 +1344,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
             validated.odometer_in ?? null, validated.odometer_out ?? null,
             validated.latitude, validated.longitude, validated.address,
-            validated.photo_url ?? '', validated.notes]);
+            validated.photo_url, validated.notes]);
 
         activityId = visitResult.rows[0].id;
 
