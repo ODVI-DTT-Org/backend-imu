@@ -1268,16 +1268,31 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
     const schema = z.object({
       client_id: z.string().uuid(),
       udi_number: z.string().min(1).max(50),
-      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
-      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
-      amount: z.number().positive(),
+      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']).optional(),
+      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']).optional(),
+      amount: z.number().positive().optional(),
       // Caravan-specific fields
-      time_in: z.string().datetime().optional(),
-      time_out: z.string().datetime().optional(),
+      time_in: z.preprocess(v => {
+        if (!v) return undefined;
+        // Accept HH:MM format and convert to full ISO timestamp (today's date)
+        if (typeof v === 'string' && /^\d{2}:\d{2}$/.test(v)) {
+          return new Date().toISOString().slice(0, 10) + 'T' + v + ':00.000Z';
+        }
+        return v;
+      }, z.string().datetime().optional()),
+      time_out: z.preprocess(v => {
+        if (!v) return undefined;
+        if (typeof v === 'string' && /^\d{2}:\d{2}$/.test(v)) {
+          return new Date().toISOString().slice(0, 10) + 'T' + v + ':00.000Z';
+        }
+        return v;
+      }, z.string().datetime().optional()),
+      odometer_in: z.string().max(50).optional(),
+      odometer_out: z.string().max(50).optional(),
       latitude: z.number().optional(),
       longitude: z.number().optional(),
       address: z.string().optional(),
-      photo_url: z.string().optional(),
+      photo_url: z.preprocess(v => (v == null || v === '' ? '' : v), z.string()),
       // Tele-specific fields
       phone_number: z.string().regex(/^09\d{9}$/).optional(),
       duration: z.number().int().positive().optional(),
@@ -1311,21 +1326,20 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
 
       // Caravan: CREATE visits record
       if (user.role === 'caravan') {
-        if (!validated.photo_url) {
-          await dbClient.query('ROLLBACK');
-          return c.json({ error: 'Photo is required', errorCode: 'PHOTO_REQUIRED' }, 400);
-        }
-
         const visitResult = await dbClient.query(`
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
-            latitude, longitude, address, photo_url, notes
+            odometer_arrival, odometer_departure,
+            latitude, longitude, address, photo_url, notes,
+            reason, status, source
           ) VALUES (
-            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9
+            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11,
+            'Loan Release', 'Completed', 'IMU'
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
+            validated.odometer_in ?? null, validated.odometer_out ?? null,
             validated.latitude, validated.longitude, validated.address,
-            validated.photo_url, validated.notes]);
+            validated.photo_url ?? '', validated.notes]);
 
         activityId = visitResult.rows[0].id;
 
