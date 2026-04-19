@@ -70,6 +70,7 @@ function mapRowToApproval(row: Record<string, any>) {
     role: row.role,
     reason: row.reason,
     notes: row.notes,
+    visit_remarks: row.visit_remarks ?? null,
     updated_client_information: row.updated_client_information,
     updated_udi: row.updated_udi,
     udi_number: row.udi_number,
@@ -168,11 +169,13 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
               c.phone as client_phone, c.client_type,
               car.first_name as caravan_first_name, car.last_name as caravan_last_name,
               car.email as caravan_email, car.phone as caravan_phone,
-              u.first_name as approver_first_name, u.last_name as approver_last_name
+              u.first_name as approver_first_name, u.last_name as approver_last_name,
+              v.remarks as visit_remarks
        FROM approvals a
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN users car ON car.id = a.user_id
        LEFT JOIN users u ON u.id = a.approved_by
+       LEFT JOIN visits v ON a.type = 'udi' AND v.id = CASE WHEN a.notes ~ '^\\{' THEN (a.notes::jsonb->>'visit_id')::uuid END
        ${whereClause}
        ORDER BY a.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
