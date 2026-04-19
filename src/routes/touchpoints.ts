@@ -365,6 +365,9 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
     const result = await pool.query(
       `SELECT t.*,
               c.first_name as client_first_name, c.last_name as client_last_name,
+              c.middle_name as client_middle_name,
+              c.email as client_email, c.phone as client_phone,
+              c.client_type as client_client_type,
               u.first_name as user_first_name, u.last_name as user_last_name,
               v.photo_url
        FROM touchpoints t
@@ -386,13 +389,23 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
       return c.json({ message: 'Forbidden' }, 403);
     }
 
+    const clientFirstName = touchpoint.client_first_name || '';
+    const clientMiddleName = touchpoint.client_middle_name || '';
+    const clientLastName = touchpoint.client_last_name || '';
+    const displayName = [clientFirstName, clientMiddleName, clientLastName].filter(Boolean).join(' ');
+
     return c.json({
       ...mapRowToTouchpoint(touchpoint),
       expand: {
         client_id: {
           id: touchpoint.client_id,
-          first_name: touchpoint.client_first_name,
-          last_name: touchpoint.client_last_name,
+          first_name: clientFirstName,
+          middle_name: clientMiddleName,
+          last_name: clientLastName,
+          display_name: displayName,
+          email: touchpoint.client_email || null,
+          phone: touchpoint.client_phone || null,
+          client_type: touchpoint.client_client_type || null,
         },
         user_id: touchpoint.user_id ? {
           id: touchpoint.user_id,
