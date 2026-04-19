@@ -114,9 +114,17 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
     }
 
     if (type && type !== 'all') {
-      conditions.push(`a.type = $${paramIndex}`);
-      params.push(type);
-      paramIndex++;
+      const types = type.split(',').map(t => t.trim()).filter(Boolean);
+      if (types.length === 1) {
+        conditions.push(`a.type = $${paramIndex}`);
+        params.push(types[0]);
+        paramIndex++;
+      } else if (types.length > 1) {
+        const placeholders = types.map((_, i) => `$${paramIndex + i}`).join(', ');
+        conditions.push(`a.type IN (${placeholders})`);
+        params.push(...types);
+        paramIndex += types.length;
+      }
     }
 
     if (touchpoint && touchpoint !== 'all') {
