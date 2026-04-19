@@ -175,7 +175,13 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN users car ON car.id = a.user_id
        LEFT JOIN users u ON u.id = a.approved_by
-       LEFT JOIN visits v ON a.type = 'udi' AND v.id = CASE WHEN a.notes ~ '^\\{' THEN (a.notes::jsonb->>'visit_id')::uuid END
+       LEFT JOIN LATERAL (
+         SELECT remarks FROM visits
+         WHERE a.type = 'udi'
+           AND left(a.notes, 1) = '{'
+           AND id = (a.notes::jsonb->>'visit_id')::uuid
+         LIMIT 1
+       ) v ON true
        ${whereClause}
        ORDER BY a.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
