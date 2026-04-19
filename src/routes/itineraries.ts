@@ -335,6 +335,11 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     console.log('[Itineraries POST] user_id value:', body.user_id, 'type:', typeof body.user_id);
     console.log('[Itineraries POST] client_ids value:', body.client_ids, 'type:', typeof body.client_ids);
 
+    // PowerSync sends client_id (string); REST callers send client_ids (array) — normalise
+    if (!body.client_ids && body.client_id) {
+      body.client_ids = [body.client_id];
+    }
+
     const validated = createItinerarySchema.parse(body);
     const { user_id, client_ids, scheduled_date, scheduled_time, status, priority, notes } = validated;
 
