@@ -704,6 +704,29 @@ clients.get('/assigned', authMiddleware, async (c) => {
       }
     }
 
+    // Apply touchpoint_status filter to WHERE clause
+    if (touchpointStatus && touchpointStatus.length > 0) {
+      const tsConds: string[] = [];
+      if (includeCallable) {
+        tsConds.push(`(c.next_touchpoint = 'Call' AND COALESCE(c.touchpoint_number, 0) < 7 AND c.loan_released = false)`);
+      }
+      if (includeWaitingForCaravan) {
+        tsConds.push(`(c.next_touchpoint = 'Visit' AND COALESCE(c.touchpoint_number, 0) < 7 AND c.loan_released = false)`);
+      }
+      if (includeNoProgress) {
+        tsConds.push(`(COALESCE(c.touchpoint_number, 0) = 0 AND c.loan_released = false)`);
+      }
+      if (includeCompleted) {
+        tsConds.push(`(COALESCE(c.touchpoint_number, 0) >= 7 AND c.loan_released = false)`);
+      }
+      if (includeLoanReleased) {
+        tsConds.push(`c.loan_released = true`);
+      }
+      if (tsConds.length > 0) {
+        baseWhereConditions.push(`(${tsConds.join(' OR ')})`);
+      }
+    }
+
     // Build WHERE clause for main query
     // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
     // This will be handled differently in each endpoint
