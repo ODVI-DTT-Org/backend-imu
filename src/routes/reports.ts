@@ -882,7 +882,7 @@ reports.get('/releases', authMiddleware, requirePermission('reports', 'read'), a
         r.visit_id,
         r.product_type,
         r.loan_type,
-        r.amount,
+        r.udi_number,
         r.status,
         r.approval_notes,
         r.approved_by,

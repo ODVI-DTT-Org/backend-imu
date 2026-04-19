@@ -13,8 +13,7 @@ export const createReleaseSchema = z.object({
   loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM'], {
     errorMap: () => ({ message: 'Loan type must be one of: NEW, ADDITIONAL, RENEWAL, PRETERM' })
   }),
-  amount: z.number().min(0, 'Amount must be non-negative').max(999999999.99, 'Amount exceeds maximum').default(0),
-  udi_number: z.number().int().positive().optional(),
+  udi_number: z.union([z.number().int().positive(), z.string().min(1)]).optional(),
   approval_notes: z.string().max(2000).optional(),
   status: z.enum(['pending', 'approved', 'rejected', 'disbursed']).default('pending'),
 });
@@ -31,8 +30,7 @@ export interface Release {
   visit_id: string;
   product_type: 'BFP_ACTIVE' | 'BFP_PENSION' | 'PNP_PENSION' | 'NAPOLCOM' | 'BFP_STP';
   loan_type: 'NEW' | 'ADDITIONAL' | 'RENEWAL' | 'PRETERM';
-  amount: number;
-  udi_number?: number;
+  udi_number?: number | string;
   approval_notes?: string;
   status: 'pending' | 'approved' | 'rejected' | 'disbursed';
   approved_by?: string;  // User ID of approver
@@ -45,7 +43,6 @@ export interface Release {
 const UPDATEABLE_RELEASE_FIELDS = [
   'product_type',
   'loan_type',
-  'amount',
   'udi_number',
   'approval_notes',
   'status',
@@ -95,12 +92,12 @@ export const releaseService = {
     const validated = createReleaseSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO releases (id, client_id, user_id, visit_id, product_type, loan_type, amount, udi_number, approval_notes, status)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
+      `INSERT INTO releases (id, client_id, user_id, visit_id, product_type, loan_type, udi_number, approval_notes, status)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (id) DO UPDATE SET updated_at = releases.updated_at
        RETURNING *`,
       [validated.id ?? null, validated.client_id, validated.user_id, validated.visit_id, validated.product_type,
-       validated.loan_type, validated.amount, validated.udi_number ?? null, validated.approval_notes, validated.status]
+       validated.loan_type, validated.udi_number ?? validated.amount ?? null, validated.approval_notes, validated.status]
     );
     return result.rows[0];
   },

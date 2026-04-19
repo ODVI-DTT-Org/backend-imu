@@ -335,7 +335,7 @@ visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
         r.id AS release_id,
         r.product_type,
         r.loan_type,
-        r.amount AS udi_amount,
+        r.udi_number AS udi_amount,
         v.user_id AS agent_id,
         (u.first_name || ' ' || u.last_name) AS agent_name,
         v.status,
@@ -426,7 +426,7 @@ visits.get('/admin/export', authMiddleware, requireRole('admin'), async (c) => {
         COALESCE(tp.touchpoint_number::text, '') AS "Touchpoint #",
         COALESCE(r.product_type, '') AS "Product Type",
         COALESCE(r.loan_type, '') AS "Loan Type",
-        COALESCE(r.amount::text, '') AS "UDI Amount",
+        COALESCE(r.udi_number::text, '') AS "UDI Amount",
         (u.first_name || ' ' || u.last_name) AS "Agent",
         COALESCE(v.status, '') AS "Status",
         COALESCE(v.reason, '') AS "Reason"
