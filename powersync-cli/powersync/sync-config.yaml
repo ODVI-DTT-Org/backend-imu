@@ -72,43 +72,4 @@ bucket_definitions:
         FROM approvals
         WHERE user_id = bucket.user_id
 
-  # ============================================================
-  # TERRITORY DATA — one bucket per (province, municipality)
-  # Clients only — territory-filtered
-  # ============================================================
-  clients_by_territory:
-    parameters: |
-      SELECT province, municipality
-      FROM user_locations
-      WHERE user_id = token_parameters.user_id AND deleted_at IS NULL
-    data:
-      - |
-        SELECT id, first_name, last_name, middle_name, birth_date,
-          email, phone, agency_name, department, position,
-          employment_status, payroll_date, tenure, client_type,
-          product_type, market_type, pension_type, loan_type, pan,
-          facebook_link, remarks, agency_id, is_starred, psgc_id,
-          region, province, municipality, barangay, udi,
-          loan_released, loan_released_at, created_at, updated_at,
-          deleted_at, created_by, deleted_by,
-          touchpoint_summary, touchpoint_number, next_touchpoint
-        FROM clients
-        WHERE province = bucket.province
-          AND municipality = bucket.municipality
-          AND deleted_at IS NULL
 
-  # ============================================================
-  # GLOBAL DATA — all authenticated users get these (no params)
-  # addresses and phone_numbers: no territory filter needed
-  # ============================================================
-  global_client_data:
-    data:
-      - |
-        SELECT id, client_id, type, street, barangay, city,
-          province, postal_code, latitude, longitude, is_primary, created_at
-        FROM addresses
-        WHERE deleted_at IS NULL
-      - |
-        SELECT id, client_id, number, label, is_primary, created_at
-        FROM phone_numbers
-        WHERE deleted_at IS NULL
