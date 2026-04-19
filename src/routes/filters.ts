@@ -155,20 +155,18 @@ filtersRouter.get('/values', async (c) => {
     // GROUP BY the normalized value to deduplicate case/whitespace variants
     const nullFilter = includeNull ? '' : `AND ${column} IS NOT NULL`;
     const countSelect = withCounts ? `, COUNT(*) as count` : '';
-    const groupBy = `GROUP BY UPPER(TRIM(${column}))`;
     const orderBy = withCounts
       ? `ORDER BY count DESC, value ASC`
       : `ORDER BY value ASC`;
 
     const query = `
       SELECT
-        UPPER(TRIM(COALESCE(${column}, 'Unspecified'))) as value,
-        UPPER(TRIM(${column})) as raw_value
+        UPPER(TRIM(COALESCE(${column}, 'Unspecified'))) as value
         ${countSelect}
       FROM ${table}
       WHERE 1=1
         ${nullFilter}
-      ${groupBy}
+      GROUP BY UPPER(TRIM(COALESCE(${column}, 'Unspecified')))
       ${orderBy}
     `;
 
@@ -177,7 +175,7 @@ filtersRouter.get('/values', async (c) => {
     // Format labels in application code
     const items = result.rows.map((row: any) => ({
       value: row.value,
-      label: formatLabel(row.raw_value),
+      label: formatLabel(row.value),
       ...(withCounts && { count: parseInt(row.count) })
     }));
 
@@ -287,20 +285,18 @@ filtersRouter.get('/batch', async (c) => {
       filters.map(async (filter) => {
         const nullFilter = includeNull ? '' : `AND ${filter.column} IS NOT NULL`;
         const countSelect = withCounts ? `, COUNT(*) as count` : '';
-        const groupBy = `GROUP BY UPPER(TRIM(${filter.column}))`;
         const orderBy = withCounts
           ? `ORDER BY count DESC, value ASC`
           : `ORDER BY value ASC`;
 
         const query = `
           SELECT
-            UPPER(TRIM(COALESCE(${filter.column}, 'Unspecified'))) as value,
-            UPPER(TRIM(${filter.column})) as raw_value
+            UPPER(TRIM(COALESCE(${filter.column}, 'Unspecified'))) as value
             ${countSelect}
           FROM ${filter.table}
           WHERE 1=1
             ${nullFilter}
-          ${groupBy}
+          GROUP BY UPPER(TRIM(COALESCE(${filter.column}, 'Unspecified')))
           ${orderBy}
         `;
 
@@ -308,7 +304,7 @@ filtersRouter.get('/batch', async (c) => {
 
         const items = result.rows.map((row: any) => ({
           value: row.value,
-          label: formatLabel(row.raw_value),
+          label: formatLabel(row.value),
           ...(withCounts && { count: parseInt(row.count) })
         }));
 
