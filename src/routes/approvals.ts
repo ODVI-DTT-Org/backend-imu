@@ -4,6 +4,7 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
+import { storageService } from '../services/storage.js';
 import {
   ValidationError,
   NotFoundError,
@@ -13,6 +14,29 @@ import {
 } from '../errors/index.js';
 
 const approvals = new Hono();
+
+const SIGNED_URL_EXPIRY = 3600; // 1 hour
+
+function extractS3Key(url: string): string | null {
+  if (!url) return null;
+  const bucket = process.env.STORAGE_BUCKET || 'imu-uploads';
+  const region = process.env.AWS_REGION || 'ap-southeast-1';
+  const prefix = `https://${bucket}.s3.${region}.amazonaws.com/`;
+  if (url.startsWith(prefix)) return url.slice(prefix.length);
+  return null;
+}
+
+async function signApprovalPhoto<T extends { photo_url?: string | null }>(item: T): Promise<T> {
+  if (!item.photo_url || !storageService.isS3Ready()) return item;
+  const key = extractS3Key(item.photo_url);
+  if (!key) return item;
+  try {
+    const signed = await storageService.getSignedUrl(key, SIGNED_URL_EXPIRY);
+    return { ...item, photo_url: signed };
+  } catch {
+    return item;
+  }
+}
 
 // Manager roles for authorization
 const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as const;
@@ -215,8 +239,10 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
       },
     }));
 
+    const signedItems = await Promise.all(items.map(signApprovalPhoto));
+
     return c.json({
-      items,
+      items: signedItems,
       page,
       perPage,
       totalItems,
