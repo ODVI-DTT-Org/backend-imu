@@ -1205,7 +1205,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
     const schema = z.object({
       client_id: z.string().uuid(),
       udi_number: z.string().min(1).max(50),
-      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']),
+      product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']),
       loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
       amount: z.number().positive(),
       latitude: z.number().optional(),
@@ -1280,7 +1280,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
     const schema = z.object({
       client_id: z.string().uuid(),
       udi_number: z.string().min(1).max(50),
-      product_type: z.enum(['PUSU', 'LIKA', 'SUB2K']).optional(),
+      product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']).optional(),
       loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']).optional(),
       amount: z.number().positive().optional(),
       // Caravan-specific fields
