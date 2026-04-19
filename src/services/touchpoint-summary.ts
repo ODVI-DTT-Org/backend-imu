@@ -22,27 +22,29 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
     // Fetch all touchpoints for this client
     const touchpointsResult = await pool.query(
       `SELECT
-        id,
-        touchpoint_number as number,
-        type,
-        date,
-        reason,
-        status,
-        user_id,
-        time_in,
-        time_out,
+        t.id,
+        t.touchpoint_number as number,
+        t.type,
+        t.date,
+        COALESCE(v.reason, ca.reason) as reason,
+        t.status,
+        t.user_id,
+        v.time_in,
+        v.time_out,
         CASE
-          WHEN time_in_gps_lat IS NOT NULL THEN
+          WHEN COALESCE(v.latitude, t.latitude) IS NOT NULL THEN
             jsonb_build_object(
-              'latitude', time_in_gps_lat,
-              'longitude', time_in_gps_lng,
-              'address', time_in_gps_address
+              'latitude', COALESCE(v.latitude, t.latitude),
+              'longitude', COALESCE(v.longitude, t.longitude),
+              'address', COALESCE(v.address, t.address)
             )
           ELSE NULL
         END as location
-      FROM touchpoints
-      WHERE client_id = $1
-      ORDER BY date ASC`,
+      FROM touchpoints t
+      LEFT JOIN visits v ON v.id = t.visit_id
+      LEFT JOIN calls ca ON ca.id = t.call_id
+      WHERE t.client_id = $1
+      ORDER BY t.date ASC`,
       [clientId]
     );
 
