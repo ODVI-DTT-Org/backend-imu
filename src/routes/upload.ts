@@ -7,6 +7,7 @@ import {
   ValidationError,
   NotFoundError,
 } from '../errors/index.js';
+import type { ParsedFormData } from '../middleware/formdata.js';
 
 const upload = new Hono();
 
@@ -311,7 +312,7 @@ upload.post('/file', authMiddleware, requirePermission('clients', 'update'), asy
   const user = c.get('user');
 
   try {
-    const body = await c.req.parseBody();
+    const body = (c.get('parsedFormData' as any) || {}) as ParsedFormData;
     const file = body['file'];
     const category = (body['category'] as string) || 'general';
     const entityId = body['entity_id'] as string | undefined; // Optional: link to entity (client, touchpoint, etc.)
@@ -405,7 +406,7 @@ upload.post('/selfie', authMiddleware, requirePermission('clients', 'update'), a
   const user = c.get('user');
 
   try {
-    const body = await c.req.parseBody();
+    const body = (c.get('parsedFormData' as any) || {}) as ParsedFormData;
     const file = body['file'];
 
     if (!file || !(file instanceof File)) {
@@ -451,7 +452,7 @@ upload.post('/document', authMiddleware, requirePermission('clients', 'update'),
   const user = c.get('user');
 
   try {
-    const body = await c.req.parseBody();
+    const body = (c.get('parsedFormData' as any) || {}) as ParsedFormData;
     const file = body['file'];
     const category = body['category'] as string || 'general';
 

@@ -9,6 +9,7 @@ import {
   AuthenticationError,
   AuthorizationError,
 } from '../errors/index.js';
+import type { ParsedFormData } from '../middleware/formdata.js';
 
 const profile = new Hono();
 
@@ -178,7 +179,7 @@ profile.post('/:id/avatar', authMiddleware, requirePermission('users', 'update')
       throw new AuthorizationError('Unauthorized');
     }
 
-    const body = await c.req.parseBody();
+    const body = (c.get('parsedFormData' as any) || {}) as ParsedFormData;
     const file = body['file'];
 
     if (!file || !(file instanceof File)) {
