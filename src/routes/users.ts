@@ -917,16 +917,31 @@ users.post('/:id/municipalities/bulk/create', authMiddleware, requirePermission(
 
       // Only insert if doesn't exist
       if (existing.rows.length === 0) {
-        const result = await pool.query(
-          `INSERT INTO user_locations (user_id, province, municipality, created_at, updated_at)
-           VALUES ($1, $2, $3, NOW(), NOW())
-           ON CONFLICT (user_id, province, municipality) DO UPDATE SET
-             deleted_at = NULL,
-             updated_at = NOW()
-           RETURNING id`,
+        // Check if a soft-deleted record exists to restore
+        const softDeleted = await pool.query(
+          `SELECT id FROM user_locations
+           WHERE user_id = $1 AND province = $2 AND municipality = $3
+             AND deleted_at IS NOT NULL
+           LIMIT 1`,
           [userId, province, municipality]
         );
-        createdCount += result.rowCount || 0;
+
+        if (softDeleted.rows.length > 0) {
+          const result = await pool.query(
+            `UPDATE user_locations SET deleted_at = NULL, updated_at = NOW()
+             WHERE id = $1 RETURNING id`,
+            [softDeleted.rows[0].id]
+          );
+          createdCount += result.rowCount || 0;
+        } else {
+          const result = await pool.query(
+            `INSERT INTO user_locations (user_id, province, municipality, created_at, updated_at)
+             VALUES ($1, $2, $3, NOW(), NOW())
+             RETURNING id`,
+            [userId, province, municipality]
+          );
+          createdCount += result.rowCount || 0;
+        }
       }
     }
 
@@ -1005,16 +1020,25 @@ users.post('/:id/municipalities/bulk/update', authMiddleware, requirePermission(
     for (const assignment of validated.locations) {
       const { province, municipality } = assignment;
 
-      const result = await pool.query(
-        `INSERT INTO user_locations (user_id, province, municipality, created_at, updated_at)
-         VALUES ($1, $2, $3, NOW(), NOW())
-         ON CONFLICT (user_id, province, municipality) DO UPDATE SET
-           deleted_at = NULL,
-           updated_at = NOW()
+      // Try to restore soft-deleted or update existing record first
+      const upsert = await pool.query(
+        `UPDATE user_locations SET deleted_at = NULL, updated_at = NOW()
+         WHERE user_id = $1 AND province = $2 AND municipality = $3
          RETURNING id`,
         [userId, province, municipality]
       );
-      updatedCount += result.rowCount || 0;
+
+      if ((upsert.rowCount || 0) === 0) {
+        const result = await pool.query(
+          `INSERT INTO user_locations (user_id, province, municipality, created_at, updated_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           RETURNING id`,
+          [userId, province, municipality]
+        );
+        updatedCount += result.rowCount || 0;
+      } else {
+        updatedCount += upsert.rowCount || 0;
+      }
     }
 
     return c.json({

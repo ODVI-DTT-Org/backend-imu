@@ -1898,27 +1898,29 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       }
     }
 
-    // Step 5: Batch UPDATE all matched clients in a single query
+    // Step 5: Batch UPDATE all matched clients in chunks
+    // PostgreSQL has a hard limit of 65535 parameters per query (16-bit counter).
+    // With 6 params per row, chunks of 1000 rows = 6000 params — safely within the limit.
     if (!dryRun && updates.length > 0) {
-      // Use PostgreSQL's UPDATE with FROM clause for batch update
-      // Build the VALUES clause: ($1, $2), ($3, $4), ...
-      const valuesClause = updates.map((_, i) => `($${i * 6 + 1}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6})`).join(', ');
+      const CHUNK_SIZE = 1000;
+      for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+        const chunk = updates.slice(i, i + CHUNK_SIZE);
+        const valuesClause = chunk.map((_, j) => `($${j * 6 + 1}, $${j * 6 + 2}, $${j * 6 + 3}, $${j * 6 + 4}, $${j * 6 + 5}, $${j * 6 + 6})`).join(', ');
+        const params = chunk.flatMap(u => [u.clientId, u.psgcId, u.region, u.province, u.municipality, u.barangay]);
 
-      // Flatten the updates array for parameter binding
-      const params = updates.flatMap(u => [u.clientId, u.psgcId, u.region, u.province, u.municipality, u.barangay]);
-
-      await pool.query(`
-        UPDATE clients AS c
-        SET
-          psgc_id = CAST(v.psgc_id AS INTEGER),
-          region = COALESCE(v.region, c.region),
-          province = COALESCE(v.province, c.province),
-          municipality = COALESCE(v.municipality, c.municipality),
-          barangay = COALESCE(v.barangay, c.barangay),
-          updated_at = NOW()
-        FROM (VALUES ${valuesClause}) AS v(client_id, psgc_id, region, province, municipality, barangay)
-        WHERE c.id = CAST(v.client_id AS UUID)
-      `, params);
+        await pool.query(`
+          UPDATE clients AS c
+          SET
+            psgc_id = CAST(v.psgc_id AS INTEGER),
+            region = COALESCE(v.region, c.region),
+            province = COALESCE(v.province, c.province),
+            municipality = COALESCE(v.municipality, c.municipality),
+            barangay = COALESCE(v.barangay, c.barangay),
+            updated_at = NOW()
+          FROM (VALUES ${valuesClause}) AS v(client_id, psgc_id, region, province, municipality, barangay)
+          WHERE c.id = CAST(v.client_id AS UUID)
+        `, params);
+      }
     }
 
     return c.json({
