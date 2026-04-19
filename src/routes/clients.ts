@@ -274,6 +274,7 @@ clients.get('/', authMiddleware, async (c) => {
     const caravanId = c.req.query('caravan_id');
     const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
+    const nextTouchpointNumberQuery = c.req.query('next_touchpoint_number'); // 1-7 or 'archive'
 
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
@@ -389,6 +390,20 @@ clients.get('/', authMiddleware, async (c) => {
 
       // Log search strategy for debugging
       logSearchStrategy(parsedSearch, 'GET /api/clients', searchResult.strategy);
+    }
+
+    // Add next_touchpoint_number filter if specified
+    if (nextTouchpointNumberQuery) {
+      if (nextTouchpointNumberQuery === 'archive') {
+        baseWhereConditions.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
+      } else {
+        const num = parseInt(nextTouchpointNumberQuery);
+        if (!isNaN(num) && num >= 1 && num <= 7) {
+          baseWhereConditions.push(`COALESCE(c.touchpoint_number, 0) = $${baseParamIndex}`);
+          baseParams.push(num - 1);
+          baseParamIndex++;
+        }
+      }
     }
 
     // Build WHERE clause for main query
@@ -547,6 +562,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const caravanId = c.req.query('caravan_id');
     const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
+    const nextTouchpointNumberQuery = c.req.query('next_touchpoint_number'); // 1-7 or 'archive'
 
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
@@ -654,6 +670,20 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseWhereConditions.push(`c.user_id = ANY($${baseParamIndex}::uuid[])`);
       baseParams.push(teleMemberIds);
       baseParamIndex += 1;
+    }
+
+    // Add next_touchpoint_number filter if specified
+    if (nextTouchpointNumberQuery) {
+      if (nextTouchpointNumberQuery === 'archive') {
+        baseWhereConditions.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
+      } else {
+        const num = parseInt(nextTouchpointNumberQuery);
+        if (!isNaN(num) && num >= 1 && num <= 7) {
+          baseWhereConditions.push(`COALESCE(c.touchpoint_number, 0) = $${baseParamIndex}`);
+          baseParams.push(num - 1);
+          baseParamIndex++;
+        }
+      }
     }
 
     // Build WHERE clause for main query
