@@ -99,6 +99,7 @@ async function checkRolePermission(
     if (resource === 'itineraries' && ['create', 'read', 'update', 'delete'].includes(action)) return true;
     if (resource === 'targets' && action === 'read') return true;
     if (resource === 'attendance' && action === 'create') return true;
+    if (resource === 'approvals' && action === 'create') return true;
     return false;
   }
 
@@ -108,6 +109,7 @@ async function checkRolePermission(
     if (resource === 'touchpoints' && action === 'create' && constraint === 'call') return true;
     if (resource === 'touchpoints' && ['read', 'update'].includes(action)) return true;
     if (['itineraries', 'targets'].includes(resource) && action === 'read') return true;
+    if (resource === 'approvals' && action === 'create') return true;
     return false;
   }
 
