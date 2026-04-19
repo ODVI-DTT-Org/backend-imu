@@ -274,7 +274,7 @@ clients.get('/', authMiddleware, async (c) => {
     const caravanId = c.req.query('caravan_id');
     const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
-    const nextTouchpointNumberQuery = c.req.query('next_touchpoint_number'); // 1-7 or 'archive'
+    const nextTouchpointNumberQuery = c.req.queries('next_touchpoint_number'); // array of 1-7 and/or 'archive'
 
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
@@ -392,17 +392,26 @@ clients.get('/', authMiddleware, async (c) => {
       logSearchStrategy(parsedSearch, 'GET /api/clients', searchResult.strategy);
     }
 
-    // Add next_touchpoint_number filter if specified
-    if (nextTouchpointNumberQuery) {
-      if (nextTouchpointNumberQuery === 'archive') {
-        baseWhereConditions.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
-      } else {
-        const num = parseInt(nextTouchpointNumberQuery);
-        if (!isNaN(num) && num >= 1 && num <= 7) {
-          baseWhereConditions.push(`COALESCE(c.touchpoint_number, 0) = $${baseParamIndex}`);
-          baseParams.push(num - 1);
-          baseParamIndex++;
-        }
+    // Add next_touchpoint_number filter if specified (supports multi-select array)
+    if (nextTouchpointNumberQuery && nextTouchpointNumberQuery.length > 0) {
+      const hasArchive = nextTouchpointNumberQuery.includes('archive');
+      const numericValues = nextTouchpointNumberQuery
+        .filter(v => v !== 'archive')
+        .map(v => parseInt(v))
+        .filter(n => !isNaN(n) && n >= 1 && n <= 7)
+        .map(n => n - 1); // convert to completed count (touchpoint_number stores completed count)
+
+      const parts: string[] = [];
+      if (numericValues.length > 0) {
+        parts.push(`COALESCE(c.touchpoint_number, 0) = ANY($${baseParamIndex}::int[])`);
+        baseParams.push(numericValues);
+        baseParamIndex++;
+      }
+      if (hasArchive) {
+        parts.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
+      }
+      if (parts.length > 0) {
+        baseWhereConditions.push(`(${parts.join(' OR ')})`);
       }
     }
 
@@ -562,7 +571,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const caravanId = c.req.query('caravan_id');
     const touchpointStatusQuery = c.req.queries('touchpoint_status'); // callable, completed, has_progress, no_progress
     const sortBy = c.req.query('sort_by'); // touchpoint_status, created_at, etc.
-    const nextTouchpointNumberQuery = c.req.query('next_touchpoint_number'); // 1-7 or 'archive'
+    const nextTouchpointNumberQuery = c.req.queries('next_touchpoint_number'); // array of 1-7 and/or 'archive'
 
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
@@ -672,17 +681,26 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseParamIndex += 1;
     }
 
-    // Add next_touchpoint_number filter if specified
-    if (nextTouchpointNumberQuery) {
-      if (nextTouchpointNumberQuery === 'archive') {
-        baseWhereConditions.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
-      } else {
-        const num = parseInt(nextTouchpointNumberQuery);
-        if (!isNaN(num) && num >= 1 && num <= 7) {
-          baseWhereConditions.push(`COALESCE(c.touchpoint_number, 0) = $${baseParamIndex}`);
-          baseParams.push(num - 1);
-          baseParamIndex++;
-        }
+    // Add next_touchpoint_number filter if specified (supports multi-select array)
+    if (nextTouchpointNumberQuery && nextTouchpointNumberQuery.length > 0) {
+      const hasArchive = nextTouchpointNumberQuery.includes('archive');
+      const numericValues = nextTouchpointNumberQuery
+        .filter(v => v !== 'archive')
+        .map(v => parseInt(v))
+        .filter(n => !isNaN(n) && n >= 1 && n <= 7)
+        .map(n => n - 1); // convert to completed count (touchpoint_number stores completed count)
+
+      const parts: string[] = [];
+      if (numericValues.length > 0) {
+        parts.push(`COALESCE(c.touchpoint_number, 0) = ANY($${baseParamIndex}::int[])`);
+        baseParams.push(numericValues);
+        baseParamIndex++;
+      }
+      if (hasArchive) {
+        parts.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
+      }
+      if (parts.length > 0) {
+        baseWhereConditions.push(`(${parts.join(' OR ')})`);
       }
     }
 
