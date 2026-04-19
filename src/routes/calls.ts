@@ -63,6 +63,7 @@ function buildAdminCallsQuery(q: Record<string, string>) {
         (u.first_name || ' ' || u.last_name) AS agent_name,
         ca.status,
         ca.notes,
+        ca.remarks,
         ca.reason,
         ca.source,
         ca.created_at
@@ -88,6 +89,7 @@ function buildAdminCallsQuery(q: Record<string, string>) {
         (u.first_name || ' ' || u.last_name) AS agent_name,
         tp.status,
         tp.notes,
+        tp.remarks,
         tp.rejection_reason AS reason,
         NULL AS source,
         tp.created_at

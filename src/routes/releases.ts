@@ -62,6 +62,7 @@ releases.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
          r.product_type,
          r.loan_type,
          r.udi_number,
+         r.remarks,
          r.approval_notes,
          r.status,
          r.created_at

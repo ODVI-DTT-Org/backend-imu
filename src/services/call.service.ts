@@ -10,6 +10,7 @@ export const createCallSchema = z.object({
   dial_time: z.coerce.date().optional(),
   duration: z.number().int().min(0).max(7200).optional(),  // Max 2 hours in seconds
   notes: z.string().max(5000).optional(),
+  remarks: z.string().max(2000).optional(),
   reason: z.string().max(500).optional(),
   status: z.string().max(100).optional(),
   photo_url: z.string().max(2048).optional().nullable(),
@@ -25,6 +26,7 @@ export interface Call {
   dial_time?: Date;
   duration?: number;
   notes?: string;
+  remarks?: string;
   reason?: string;
   status?: string;
   photo_url?: string | null;
@@ -38,6 +40,7 @@ const UPDATEABLE_CALL_FIELDS = [
   'dial_time',
   'duration',
   'notes',
+  'remarks',
   'reason',
   'status',
   'photo_url',
@@ -92,12 +95,12 @@ export const callService = {
     const validated = createCallSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO calls (id, client_id, user_id, phone_number, dial_time, duration, notes, reason, status, photo_url, source)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, 'IMU')
+      `INSERT INTO calls (id, client_id, user_id, phone_number, dial_time, duration, notes, remarks, reason, status, photo_url, source)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'IMU')
        ON CONFLICT (id) DO UPDATE SET updated_at = calls.updated_at
        RETURNING *`,
       [validated.id ?? null, validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
-       validated.duration, validated.notes, validated.reason, validated.status, validated.photo_url ?? null]
+       validated.duration, validated.notes, validated.remarks ?? null, validated.reason, validated.status, validated.photo_url ?? null]
     );
     return result.rows[0];
   },

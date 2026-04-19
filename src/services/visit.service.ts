@@ -13,6 +13,7 @@ export const createVisitSchema = z.object({
   odometer_departure: z.preprocess(v => (v === '' ? null : v), z.string().max(50).nullish()),
   photo_url: z.preprocess(v => (v === '' || v == null ? '' : v), z.string()),
   notes: z.preprocess(v => (v === '' ? null : v), z.string().max(5000).nullish()),
+  remarks: z.preprocess(v => (v === '' ? null : v), z.string().max(2000).nullish()),
   reason: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
   status: z.preprocess(v => (v === '' ? null : v), z.string().max(100).nullish()),
   address: z.preprocess(v => (v === '' ? null : v), z.string().max(500).nullish()),
@@ -34,6 +35,7 @@ export interface Visit {
   odometer_departure?: string;
   photo_url: string;
   notes?: string;
+  remarks?: string;
   reason?: string;
   status?: string;
   address?: string;
@@ -52,6 +54,7 @@ const UPDATEABLE_VISIT_FIELDS = [
   'odometer_departure',
   'photo_url',
   'notes',
+  'remarks',
   'reason',
   'status',
   'address',
@@ -115,16 +118,16 @@ export const visitService = {
 
     const result = await pool.query(
       `INSERT INTO visits (id, client_id, user_id, type, time_in, time_out,
-        odometer_arrival, odometer_departure, photo_url, notes, reason, status,
+        odometer_arrival, odometer_departure, photo_url, notes, remarks, reason, status,
         address, latitude, longitude, source)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        ON CONFLICT (id) DO UPDATE SET updated_at = visits.updated_at
        RETURNING *`,
       [
         validated.id ?? null,
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
         validated.odometer_arrival, validated.odometer_departure, validated.photo_url,
-        validated.notes, validated.reason, validated.status, validated.address,
+        validated.notes, validated.remarks ?? null, validated.reason, validated.status, validated.address,
         validated.latitude, validated.longitude, 'IMU'
       ]
     );

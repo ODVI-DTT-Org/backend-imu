@@ -88,7 +88,7 @@ visits.post('/', authMiddleware, async (c) => {
       console.log('[Visits] FormData parsed, file present:', !!file);
 
       // Extract visit data from form fields
-      const formDataFields = ['id', 'client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'reason', 'status', 'address', 'latitude', 'longitude', 'source'];
+      const formDataFields = ['id', 'client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'remarks', 'reason', 'status', 'address', 'latitude', 'longitude', 'source'];
       formDataFields.forEach(field => {
         if (body[field] !== undefined) {
           visitData[field] = body[field];
@@ -341,6 +341,7 @@ visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
         v.status,
         v.reason,
         v.notes,
+        v.remarks,
         v.photo_url,
         v.address,
         v.latitude,
