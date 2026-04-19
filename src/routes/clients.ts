@@ -1898,7 +1898,72 @@ clients.post('/psgc/assign', authMiddleware, requirePermission('clients', 'updat
       }
     }
 
-    // Step 5: Batch UPDATE all matched clients in chunks
+    // Step 5: Trigram fallback (Strategy 3) for clients unmatched by strategies 1 & 2
+    // Uses pg_trgm similarity() to catch spelling variants like BALIUAG → Baliwag.
+    // Thresholds: municipality >= 0.35, province >= 0.5 (province stricter to prevent cross-province matches).
+    if (unmatched.length > 0) {
+      const TRGM_CHUNK_SIZE = 1000; // 3 params per client = 3000 params per chunk
+      const trigramMatched: string[] = []; // client IDs resolved by this step
+
+      for (let i = 0; i < unmatched.length; i += TRGM_CHUNK_SIZE) {
+        const chunk = unmatched.slice(i, i + TRGM_CHUNK_SIZE).filter(u => u.province && u.municipality);
+        if (chunk.length === 0) continue;
+
+        const valuesClause = chunk.map((_, j) => `($${j * 3 + 1}, $${j * 3 + 2}, $${j * 3 + 3})`).join(', ');
+        const params = chunk.flatMap(u => [u.client_id, u.municipality, u.province]);
+
+        const result = await pool.query<{
+          client_id: string;
+          psgc_id: number;
+          region: string;
+          province: string;
+          mun_city: string;
+          barangay: string;
+        }>(`
+          SELECT DISTINCT ON (v.client_id)
+            v.client_id,
+            p.id AS psgc_id,
+            p.region,
+            p.province,
+            p.mun_city,
+            p.barangay
+          FROM (VALUES ${valuesClause}) AS v(client_id, municipality, province)
+          JOIN psgc p
+            ON similarity(lower(p.mun_city), lower(v.municipality)) >= 0.35
+           AND similarity(lower(p.province), lower(v.province)) >= 0.5
+          ORDER BY v.client_id,
+            (similarity(lower(p.mun_city), lower(v.municipality)) + similarity(lower(p.province), lower(v.province))) DESC
+        `, params);
+
+        for (const row of result.rows) {
+          matched.push({
+            client_id: row.client_id,
+            client_name: chunk.find(u => u.client_id === row.client_id)?.client_name ?? '',
+            psgc_id: row.psgc_id,
+            match_type: 'trigram_match',
+            province: row.province,
+            municipality: row.mun_city,
+          });
+          updates.push({
+            clientId: row.client_id,
+            psgcId: row.psgc_id,
+            region: row.region,
+            province: row.province,
+            municipality: row.mun_city,
+            barangay: row.barangay,
+          });
+          trigramMatched.push(row.client_id);
+        }
+      }
+
+      // Remove trigram-matched clients from unmatched list
+      if (trigramMatched.length > 0) {
+        const resolvedSet = new Set(trigramMatched);
+        unmatched.splice(0, unmatched.length, ...unmatched.filter(u => !resolvedSet.has(u.client_id)));
+      }
+    }
+
+    // Step 6: Batch UPDATE all matched clients in chunks
     // PostgreSQL has a hard limit of 65535 parameters per query (16-bit counter).
     // With 6 params per row, chunks of 1000 rows = 6000 params — safely within the limit.
     if (!dryRun && updates.length > 0) {
