@@ -1044,9 +1044,13 @@ touchpoints.get('/:id/photo-url', authMiddleware, async (c) => {
 
     console.log(`[Touchpoints] ❌ Cache MISS for touchpoint ${touchpointId}, generating...`);
 
-    // Fetch touchpoint photo_url
+    // Fetch photo_url from the linked visit or call (touchpoints table has no photo_url column)
     const touchpointResult = await pool.query(
-      'SELECT photo_url FROM touchpoints WHERE id = $1',
+      `SELECT COALESCE(v.photo_url, ca.photo_url) AS photo_url
+       FROM touchpoints t
+       LEFT JOIN visits v ON v.id = t.visit_id
+       LEFT JOIN calls ca ON ca.id = t.call_id
+       WHERE t.id = $1`,
       [touchpointId]
     );
 
