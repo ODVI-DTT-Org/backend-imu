@@ -88,7 +88,7 @@ visits.post('/', authMiddleware, async (c) => {
       console.log('[Visits] FormData parsed, file present:', !!file);
 
       // Extract visit data from form fields
-      const formDataFields = ['id', 'client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'remarks', 'reason', 'status', 'address', 'latitude', 'longitude', 'source'];
+      const formDataFields = ['id', 'client_id', 'type', 'time_in', 'time_out', 'odometer_arrival', 'odometer_departure', 'notes', 'remarks', 'reason', 'status', 'address', 'latitude', 'longitude', 'source', 'photo_url'];
       formDataFields.forEach(field => {
         if (body[field] !== undefined) {
           visitData[field] = body[field];
@@ -340,7 +340,6 @@ visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
         (u.first_name || ' ' || u.last_name) AS agent_name,
         v.status,
         v.reason,
-        v.notes,
         v.remarks,
         v.photo_url,
         v.address,
@@ -348,6 +347,8 @@ visits.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
         v.longitude,
         v.time_in,
         v.time_out,
+        v.odometer_arrival,
+        v.odometer_departure,
         v.source
       ${baseQuery}
       ORDER BY COALESCE(v.time_in, v.created_at) DESC

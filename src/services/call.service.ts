@@ -95,12 +95,12 @@ export const callService = {
     const validated = createCallSchema.parse(data);
 
     const result = await pool.query(
-      `INSERT INTO calls (id, client_id, user_id, phone_number, dial_time, duration, notes, remarks, reason, status, photo_url, source)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'IMU')
+      `INSERT INTO calls (id, client_id, user_id, phone_number, dial_time, duration, remarks, reason, status, photo_url, source)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, 'IMU')
        ON CONFLICT (id) DO UPDATE SET updated_at = calls.updated_at
        RETURNING *`,
       [validated.id ?? null, validated.client_id, validated.user_id, validated.phone_number, validated.dial_time,
-       validated.duration, validated.notes, validated.remarks ?? null, validated.reason, validated.status, validated.photo_url ?? null]
+       validated.duration, validated.remarks ?? validated.notes ?? null, validated.reason, validated.status, validated.photo_url ?? null]
     );
     return result.rows[0];
   },

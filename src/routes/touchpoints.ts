@@ -641,8 +641,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         odometer_arrival: body.odometer_arrival || null,
         odometer_departure: body.odometer_departure || null,
         photo_url: body.photo_url || '',
-        notes: body.notes || null,
-        remarks: body.remarks || null,
+        remarks: body.remarks || body.notes || null,
         reason: body.reason || null,
         status: body.status || null,
         address: body.address || null,
@@ -654,10 +653,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       const visitResult = await pool.query(
         `INSERT INTO visits (
           client_id, user_id, type, time_in, time_out,
-          odometer_arrival, odometer_departure, photo_url, notes, remarks,
+          odometer_arrival, odometer_departure, photo_url, remarks,
           reason, status, address, latitude, longitude, source
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
         ) RETURNING *`,
         [
           validated.client_id,
@@ -668,7 +667,6 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
           visitData.odometer_arrival,
           visitData.odometer_departure,
           visitData.photo_url,
-          visitData.notes,
           visitData.remarks ?? null,
           visitData.reason,
           visitData.status,
