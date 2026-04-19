@@ -423,23 +423,55 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
     const approval = existing.rows[0];
 
-    // For UDI approvals, parse and store UDI number
+    // For UDI approvals, handle both loan release and legacy UDI update
     let udiNumber: string | null = null;
     if (approval.type === 'udi') {
       try {
-        // Parse UDI from notes (format: "UDI Number: 12345")
-        const udiMatch = approval.notes?.match(/UDI Number:\s*(\d+)/);
-        if (udiMatch) {
-          udiNumber = udiMatch[1];
+        let parsedNotes: any = null;
+        try { parsedNotes = JSON.parse(approval.notes); } catch (_) {}
 
-          // Update client's UDI
+        if (parsedNotes && (parsedNotes.visit_id || parsedNotes.call_id)) {
+          // Loan release approval: create release record and mark client released
+          udiNumber = approval.udi_number || parsedNotes.udi_number || null;
+
+          await client.query(`
+            INSERT INTO releases (
+              id, client_id, user_id, visit_id, call_id, product_type, loan_type,
+              udi_number, approval_notes, status
+            ) VALUES (
+              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
+            )
+          `, [approval.client_id, approval.user_id,
+              parsedNotes.visit_id ?? null, parsedNotes.call_id ?? null,
+              parsedNotes.product_type, parsedNotes.loan_type,
+              udiNumber, 'Approved by admin']);
+
           await client.query(
-            'UPDATE clients SET udi = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
-            [udiNumber, approval.client_id]
+            'UPDATE clients SET loan_released = TRUE, loan_released_at = NOW() WHERE id = $1',
+            [approval.client_id]
           );
+
+          if (parsedNotes.visit_id) {
+            await client.query(`
+              UPDATE itineraries
+              SET status = 'completed', updated_at = NOW()
+              WHERE client_id = $1 AND user_id = $2
+            `, [approval.client_id, approval.user_id]);
+          }
+        } else {
+          // Legacy UDI-only update: parse from notes text or udi_number column
+          udiNumber = approval.udi_number
+            || approval.notes?.match(/UDI Number:\s*(\d+)/)?.[1]
+            || null;
+          if (udiNumber) {
+            await client.query(
+              'UPDATE clients SET udi = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
+              [udiNumber, approval.client_id]
+            );
+          }
         }
       } catch (error) {
-        console.error('Failed to parse UDI number or remove from itinerary:', error);
+        console.error('Failed to process UDI approval:', error);
       }
     }
 
@@ -489,12 +521,12 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         await client.query(`
           INSERT INTO releases (
             id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-            amount, approval_notes, status
+            udi_number, approval_notes, status
           ) VALUES (
             gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
           )
         `, [approval.client_id, approval.user_id, visitId, callId,
-            notes.product_type, notes.loan_type, notes.amount,
+            notes.product_type, notes.loan_type, notes.udi_number ?? notes.amount,
             'Approved by admin']);
 
         // UPDATE clients
@@ -1114,11 +1146,6 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
       throw new NotFoundError('Client');
     }
 
-    if (clientCheck.rows[0].loan_released) {
-      await client.query('ROLLBACK');
-      throw new ConflictError('Loan already released for this client');
-    }
-
     const clientData = clientCheck.rows[0];
 
     // Step 1: Mark client as loan_released
@@ -1207,7 +1234,6 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       udi_number: z.string().min(1).max(50),
       product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']),
       loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
-      amount: z.number().positive(),
       latitude: z.number().optional(),
       longitude: z.number().optional(),
       address: z.string().optional(),
@@ -1232,21 +1258,16 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         return c.json({ message: 'Client not found' }, 404);
       }
 
-      if (clientCheck.rows[0].loan_released) {
-        await client.query('ROLLBACK');
-        return c.json({ message: 'Loan already released for this client' }, 409);
-      }
-
       // CREATE releases record (no visit_id, no call_id)
       await client.query(`
         INSERT INTO releases (
           id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-          amount, approval_notes, status
+          udi_number, approval_notes, status
         ) VALUES (
           gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
         )
       `, [validated.client_id, user.sub, validated.product_type,
-          validated.loan_type, validated.amount, validated.remarks]);
+          validated.loan_type, validated.udi_number, validated.remarks]);
 
       // UPDATE clients
       await client.query(`
@@ -1282,7 +1303,6 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       udi_number: z.string().min(1).max(50),
       product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']).optional(),
       loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']).optional(),
-      amount: z.number().positive().optional(),
       // Caravan-specific fields
       time_in: z.preprocess(v => {
         if (!v) return undefined;
@@ -1327,11 +1347,6 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       if (clientCheck.rows.length === 0) {
         await dbClient.query('ROLLBACK');
         return c.json({ message: 'Client not found' }, 404);
-      }
-
-      if (clientCheck.rows[0].loan_released) {
-        await dbClient.query('ROLLBACK');
-        return c.json({ message: 'Loan already released for this client' }, 409);
       }
 
       let activityId: string | undefined;
@@ -1387,19 +1402,19 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       // CREATE approval request
       const approvalResult = await dbClient.query(`
         INSERT INTO approvals (
-          id, type, client_id, user_id, role, reason, notes, status
+          id, type, client_id, user_id, role, reason, notes, udi_number, status
         ) VALUES (
-          gen_random_uuid(), 'loan_release_v2', $1, $2, $3, $4, $5, 'pending'
+          gen_random_uuid(), 'udi', $1, $2, $3, $4, $5, $6, 'pending'
         ) RETURNING id
       `, [validated.client_id, user.sub, user.role,
           user.role === 'tele' ? 'Loan Release Request (Tele)' : 'Loan Release Request',
-        JSON.stringify({
-          [user.role === 'caravan' ? 'visit_id' : 'call_id']: activityId,
-          udi_number: validated.udi_number,
-          product_type: validated.product_type,
-          loan_type: validated.loan_type,
-          amount: validated.amount,
-        })]);
+          JSON.stringify({
+            [user.role === 'caravan' ? 'visit_id' : 'call_id']: activityId,
+            udi_number: validated.udi_number,
+            product_type: validated.product_type,
+            loan_type: validated.loan_type,
+          }),
+          validated.udi_number]);
 
       await dbClient.query('COMMIT');
 

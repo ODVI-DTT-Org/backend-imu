@@ -61,7 +61,6 @@ releases.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
          (u.first_name || ' ' || u.last_name) AS agent_name,
          r.product_type,
          r.loan_type,
-         r.amount,
          r.udi_number,
          r.approval_notes,
          r.status,
@@ -112,8 +111,7 @@ releases.get('/admin/export', authMiddleware, requireRole('admin'), async (c) =>
          (u.first_name || ' ' || u.last_name) AS "Agent",
          COALESCE(r.product_type, '') AS "Product Type",
          COALESCE(r.loan_type, '') AS "Loan Type",
-         COALESCE(r.amount::text, '') AS "Amount",
-         COALESCE(r.udi_number, '') AS "UDI Number",
+         COALESCE(r.udi_number::text, '') AS "UDI Number",
          COALESCE(r.status, '') AS "Status",
          COALESCE(r.approval_notes, '') AS "Notes",
          TO_CHAR(r.created_at, 'YYYY-MM-DD HH24:MI') AS "Date"
@@ -125,7 +123,7 @@ releases.get('/admin/export', authMiddleware, requireRole('admin'), async (c) =>
       params
     );
 
-    const headers = ['Client Name', 'Agent', 'Product Type', 'Loan Type', 'Amount', 'UDI Number', 'Status', 'Notes', 'Date'];
+    const headers = ['Client Name', 'Agent', 'Product Type', 'Loan Type', 'UDI Number', 'Status', 'Notes', 'Date'];
     const csvRows = [
       headers.join(','),
       ...result.rows.map((row: any) =>
