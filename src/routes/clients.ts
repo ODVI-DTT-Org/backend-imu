@@ -769,9 +769,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
     if (shouldFilterByArea) {
       // For Caravan/Tele: Filter by assigned provinces/municipalities
       // Using the new province and municipality columns directly
+      // NOTE: Using UPPER() for case-insensitive matching due to data inconsistencies
+      // (e.g., "METRO MANILA" vs "Metro Manila" in database)
       areaFilterWhereClause = `AND (
-        c.province IN (SELECT province FROM user_areas)
-        AND c.municipality IN (SELECT municipality FROM user_areas)
+        UPPER(c.province) IN (SELECT UPPER(province) FROM user_areas)
+        AND UPPER(c.municipality) IN (SELECT UPPER(municipality) FROM user_areas)
       )`;
     }
 
