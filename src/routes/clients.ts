@@ -467,7 +467,8 @@ clients.get('/', authMiddleware, async (c) => {
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
         (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
         lt.first_name as last_touchpoint_first_name,
-        lt.last_name as last_touchpoint_last_name
+        lt.last_name as last_touchpoint_last_name,
+        cf.id IS NOT NULL as is_favorited
       FROM clients c
       LEFT JOIN psgc psg ON psg.id = c.psgc_id
       LEFT JOIN LATERAL (
@@ -503,6 +504,7 @@ clients.get('/', authMiddleware, async (c) => {
         WHERE p.client_id = c.id
       ) phones ON true
       LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
+      LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${baseParamIndex + 2}::uuid
       ${whereClause}
       ${searchOrderBy && searchOrderBy.trim().length > 0
         ? `ORDER BY ${searchOrderBy}, ${orderByClause}`
@@ -510,7 +512,7 @@ clients.get('/', authMiddleware, async (c) => {
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
-    const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
+    const result = await pool.query(mainQuery, [...baseParams, perPage, offset, user.sub]);
 
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
@@ -546,6 +548,7 @@ clients.get('/', authMiddleware, async (c) => {
 
       return {
         ...mapRowToClient(row),
+        is_favorited: row.is_favorited || false,
         expand: {
           addresses: row.addresses,
           phone_numbers: row.phone_numbers,
@@ -840,7 +843,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
           ELSE 3
         END as group_score${similaritySelect},
         lt.first_name as last_touchpoint_first_name,
-        lt.last_name as last_touchpoint_last_name
+        lt.last_name as last_touchpoint_last_name,
+        cf.id IS NOT NULL as is_favorited
       FROM clients c
       LEFT JOIN psgc psg ON psg.id = c.psgc_id
       LEFT JOIN LATERAL (
@@ -876,6 +880,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
         WHERE p.client_id = c.id
       ) phones ON true
       LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
+      LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${baseParamIndex + 2}::uuid
       WHERE c.deleted_at IS NULL
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
@@ -889,7 +894,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 
-    const result = await pool.query(mainQuery, [...baseParams, perPage, offset]);
+    const result = await pool.query(mainQuery, [...baseParams, perPage, offset, user.sub]);
 
     // ============================================
     // CACHE POPULATION: Populate cache on miss
@@ -946,6 +951,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
       return {
         ...mapRowToClient(row),
+        is_favorited: row.is_favorited || false,
         expand: {
           addresses: row.addresses,
           phone_numbers: row.phone_numbers,
@@ -2575,6 +2581,93 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
     throw new Error('Failed to bulk create clients');
   } finally {
     client.release();
+  }
+});
+
+// POST /api/clients/:id/favorite - Add client to user's favorites
+clients.post('/:id/favorite', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const { id } = c.req.param();
+
+    // Validate UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      throw new ValidationError('Invalid client ID format');
+    }
+
+    // Check if client exists
+    const clientResult = await pool.query(
+      'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
+      [id]
+    );
+
+    if (clientResult.rows.length === 0) {
+      throw new NotFoundError('Client not found');
+    }
+
+    // Add to favorites (ON CONFLICT do nothing - already favorited)
+    await pool.query(
+      `INSERT INTO client_favorites (user_id, client_id)
+       VALUES ($1, $2)
+       ON CONFLICT (user_id, client_id) DO NOTHING`,
+      [user.sub, id]
+    );
+
+    return c.json({
+      success: true,
+      message: 'Client added to favorites',
+      is_favorited: true
+    });
+  } catch (error) {
+    if (error instanceof NotFoundError || error instanceof ValidationError) {
+      throw error;
+    }
+    console.error('Favorite client error:', error);
+    throw new Error('Failed to favorite client');
+  }
+});
+
+// DELETE /api/clients/:id/favorite - Remove client from user's favorites
+clients.delete('/:id/favorite', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const { id } = c.req.param();
+
+    // Validate UUID
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      throw new ValidationError('Invalid client ID format');
+    }
+
+    // Remove from favorites
+    const result = await pool.query(
+      `DELETE FROM client_favorites
+       WHERE user_id = $1 AND client_id = $2
+       RETURNING *`,
+      [user.sub, id]
+    );
+
+    if (result.rows.length === 0) {
+      // Client wasn't favorited - return success anyway (idempotent)
+      return c.json({
+        success: true,
+        message: 'Client not in favorites',
+        is_favorited: false
+      });
+    }
+
+    return c.json({
+      success: true,
+      message: 'Client removed from favorites',
+      is_favorited: false
+    });
+  } catch (error) {
+    if (error instanceof ValidationError) {
+      throw error;
+    }
+    console.error('Unfavorite client error:', error);
+    throw new Error('Failed to unfavorite client');
   }
 });
 
