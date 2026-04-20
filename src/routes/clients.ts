@@ -451,10 +451,10 @@ clients.get('/', authMiddleware, async (c) => {
         psg.mun_city as psgc_municipality,
         psg.barangay as psgc_barangay,
         COALESCE(
-          json_agg(DISTINCT a) FILTER (WHERE a.id IS NOT NULL), '[]'
+          addr.addresses_json, '[]'
         ) as addresses,
         COALESCE(
-          json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
+          phones.phones_json, '[]'
         ) as phone_numbers,
         -- touchpoint_number already stores the actual count (0-7), not next number
         COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
@@ -470,13 +470,40 @@ clients.get('/', authMiddleware, async (c) => {
         lt.last_name as last_touchpoint_last_name
       FROM clients c
       LEFT JOIN psgc psg ON psg.id = c.psgc_id
-      LEFT JOIN addresses a ON a.client_id = c.id
-      LEFT JOIN phone_numbers p ON p.client_id = c.id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'id', a.id,
+          'client_id', a.client_id,
+          'type', a.type,
+          'street', a.street,
+          'barangay', a.barangay,
+          'city', a.city,
+          'province', a.province,
+          'postal_code', a.postal_code,
+          'latitude', a.latitude,
+          'longitude', a.longitude,
+          'is_primary', a.is_primary,
+          'created_at', a.created_at,
+          'updated_at', a.updated_at
+        )) as addresses_json
+        FROM addresses a
+        WHERE a.client_id = c.id
+      ) addr ON true
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'id', p.id,
+          'client_id', p.client_id,
+          'label', p.label,
+          'number', p.number,
+          'is_primary', p.is_primary,
+          'created_at', p.created_at,
+          'updated_at', p.updated_at
+        )) as phones_json
+        FROM phone_numbers p
+        WHERE p.client_id = c.id
+      ) phones ON true
       LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
       ${whereClause}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay,
-        c.touchpoint_number, c.next_touchpoint, c.touchpoint_summary, c.loan_released,
-        lt.first_name, lt.last_name
       ${searchOrderBy && searchOrderBy.trim().length > 0
         ? `ORDER BY ${searchOrderBy}, ${orderByClause}`
         : `ORDER BY ${orderByClause}`}
@@ -788,10 +815,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
         psg.mun_city as psgc_municipality,
         psg.barangay as psgc_barangay,
         COALESCE(
-          json_agg(DISTINCT a) FILTER (WHERE a.id IS NOT NULL), '[]'
+          addr.addresses_json, '[]'
         ) as addresses,
         COALESCE(
-          json_agg(DISTINCT p) FILTER (WHERE p.id IS NOT NULL), '[]'
+          phones.phones_json, '[]'
         ) as phone_numbers,
         -- touchpoint_number already stores the actual count (0-7), not next number
         COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
@@ -814,15 +841,42 @@ clients.get('/assigned', authMiddleware, async (c) => {
         lt.last_name as last_touchpoint_last_name
       FROM clients c
       LEFT JOIN psgc psg ON psg.id = c.psgc_id
-      LEFT JOIN addresses a ON a.client_id = c.id
-      LEFT JOIN phone_numbers p ON p.client_id = c.id
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'id', a.id,
+          'client_id', a.client_id,
+          'type', a.type,
+          'street', a.street,
+          'barangay', a.barangay,
+          'city', a.city,
+          'province', a.province,
+          'postal_code', a.postal_code,
+          'latitude', a.latitude,
+          'longitude', a.longitude,
+          'is_primary', a.is_primary,
+          'created_at', a.created_at,
+          'updated_at', a.updated_at
+        )) as addresses_json
+        FROM addresses a
+        WHERE a.client_id = c.id
+      ) addr ON true
+      LEFT JOIN LATERAL (
+        SELECT json_agg(json_build_object(
+          'id', p.id,
+          'client_id', p.client_id,
+          'label', p.label,
+          'number', p.number,
+          'is_primary', p.is_primary,
+          'created_at', p.created_at,
+          'updated_at', p.updated_at
+        )) as phones_json
+        FROM phone_numbers p
+        WHERE p.client_id = c.id
+      ) phones ON true
       LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
       WHERE c.deleted_at IS NULL
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
-      GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay,
-        c.touchpoint_number, c.next_touchpoint, c.touchpoint_summary, c.loan_released,
-        lt.first_name, lt.last_name
       ${searchOrderBy && searchOrderBy.trim().length > 0 ? `ORDER BY ${searchOrderBy},` : `ORDER BY`}
         CASE
           WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
