@@ -311,20 +311,28 @@ clients.get('/', authMiddleware, async (c) => {
     // IMPORTANT: This endpoint returns ALL clients (no area filter)
     // Use /api/clients/assigned for area-filtered clients
 
-    // Determine sort order - use direct column references from clients table
-    // DEFAULT: Use group scoring ordering
-    // Group 1 (callable): Next is Call, Group 2 (waiting): Next is Visit, Group 3: Completed, Group 4: Loan released, Group 5: No progress
-    let orderByClause = `
-      CASE
-        WHEN c.loan_released THEN 4
-        WHEN COALESCE(c.touchpoint_number, 1) >= 7 THEN 3
-        WHEN c.next_touchpoint = 'Call' AND COALESCE(c.touchpoint_number, 1) < 7 THEN 1
-        WHEN c.next_touchpoint = 'Visit' AND COALESCE(c.touchpoint_number, 1) < 7 THEN 2
-        ELSE 5
-      END ASC,
-      -- OPTIMIZED: Get last touchpoint date from denormalized touchpoint_summary JSON array
+    // 4-tier ORDER BY: favorites → role-based callable → loan released → default
+    let tier2Case: string;
+    if (user.role === 'tele') {
+      tier2Case = `WHEN c.next_touchpoint = 'Call' THEN
+        CASE COALESCE(c.touchpoint_number, 0) + 1
+          WHEN 6 THEN 1 WHEN 5 THEN 2 WHEN 3 THEN 3 WHEN 2 THEN 4 ELSE 5
+        END`;
+    } else if (user.role === 'caravan') {
+      tier2Case = `WHEN c.next_touchpoint = 'Visit' THEN
+        CASE COALESCE(c.touchpoint_number, 0) + 1
+          WHEN 7 THEN 1 WHEN 4 THEN 2 WHEN 1 THEN 3 ELSE 4
+        END`;
+    } else {
+      tier2Case = ''; // admin/area_manager: skip tier 2
+    }
+
+    const orderByClause = `
+      (cf.client_id IS NOT NULL) DESC,
+      CASE ${tier2Case} ELSE 99 END ASC,
+      c.loan_released DESC,
       (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
-      COALESCE(c.touchpoint_number, 1) DESC,
+      COALESCE(c.touchpoint_number, 0) DESC,
       c.created_at DESC`;
 
     if (sortBy === 'touchpoint_status') {
@@ -885,6 +893,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
       ${searchOrderBy && searchOrderBy.trim().length > 0 ? `ORDER BY ${searchOrderBy},` : `ORDER BY`}
+        (cf.client_id IS NOT NULL) DESC,
         CASE
           WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
             AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
@@ -2584,91 +2593,37 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
   }
 });
 
-// POST /api/clients/:id/favorite - Add client to user's favorites
-clients.post('/:id/favorite', authMiddleware, async (c) => {
-  try {
-    const user = c.get('user');
-    const { id } = c.req.param();
+// POST /api/clients/:id/favorite — Star a client for the current user
+clients.post('/:id/favorite', requirePermission('clients', 'update'), async (c) => {
+  const user = c.get('user');
+  const clientId = c.req.param('id');
 
-    // Validate UUID
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(id)) {
-      throw new ValidationError('Invalid client ID format');
-    }
-
-    // Check if client exists
-    const clientResult = await pool.query(
-      'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
-      [id]
-    );
-
-    if (clientResult.rows.length === 0) {
-      throw new NotFoundError('Client not found');
-    }
-
-    // Add to favorites (ON CONFLICT do nothing - already favorited)
-    await pool.query(
-      `INSERT INTO client_favorites (user_id, client_id)
-       VALUES ($1, $2)
-       ON CONFLICT (user_id, client_id) DO NOTHING`,
-      [user.sub, id]
-    );
-
-    return c.json({
-      success: true,
-      message: 'Client added to favorites',
-      is_favorited: true
-    });
-  } catch (error) {
-    if (error instanceof NotFoundError || error instanceof ValidationError) {
-      throw error;
-    }
-    console.error('Favorite client error:', error);
-    throw new Error('Failed to favorite client');
+  const exists = await pool.query('SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL', [clientId]);
+  if (exists.rows.length === 0) {
+    throw new NotFoundError('Client');
   }
+
+  await pool.query(
+    `INSERT INTO client_favorites (user_id, client_id)
+     VALUES ($1, $2)
+     ON CONFLICT (user_id, client_id) DO NOTHING`,
+    [user.sub, clientId]
+  );
+
+  return c.json({ success: true });
 });
 
-// DELETE /api/clients/:id/favorite - Remove client from user's favorites
-clients.delete('/:id/favorite', authMiddleware, async (c) => {
-  try {
-    const user = c.get('user');
-    const { id } = c.req.param();
+// DELETE /api/clients/:id/favorite — Unstar a client for the current user
+clients.delete('/:id/favorite', requirePermission('clients', 'update'), async (c) => {
+  const user = c.get('user');
+  const clientId = c.req.param('id');
 
-    // Validate UUID
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    if (!uuidRegex.test(id)) {
-      throw new ValidationError('Invalid client ID format');
-    }
+  await pool.query(
+    'DELETE FROM client_favorites WHERE user_id = $1 AND client_id = $2',
+    [user.sub, clientId]
+  );
 
-    // Remove from favorites
-    const result = await pool.query(
-      `DELETE FROM client_favorites
-       WHERE user_id = $1 AND client_id = $2
-       RETURNING *`,
-      [user.sub, id]
-    );
-
-    if (result.rows.length === 0) {
-      // Client wasn't favorited - return success anyway (idempotent)
-      return c.json({
-        success: true,
-        message: 'Client not in favorites',
-        is_favorited: false
-      });
-    }
-
-    return c.json({
-      success: true,
-      message: 'Client removed from favorites',
-      is_favorited: false
-    });
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      throw error;
-    }
-    console.error('Unfavorite client error:', error);
-    throw new Error('Failed to unfavorite client');
-  }
+  return c.json({ success: true });
 });
 
 export default clients;
