@@ -782,9 +782,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
       // Using the new province and municipality columns directly
       // NOTE: Using UPPER() for case-insensitive matching due to data inconsistencies
       // (e.g., "METRO MANILA" vs "Metro Manila" in database)
+      // IMPORTANT: Only return clients with PSGC assigned (psgc_id IS NOT NULL)
       areaFilterWhereClause = `AND (
         UPPER(c.province) IN (SELECT UPPER(province) FROM user_areas)
         AND UPPER(c.municipality) IN (SELECT UPPER(municipality) FROM user_areas)
+        AND c.psgc_id IS NOT NULL
       )`;
     }
 
