@@ -2596,7 +2596,7 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
 });
 
 // POST /api/clients/:id/favorite — Star a client for the current user
-clients.post('/:id/favorite', requirePermission('clients', 'update'), async (c) => {
+clients.post('/:id/favorite', authMiddleware, async (c) => {
   const user = c.get('user');
   const clientId = c.req.param('id');
 
@@ -2616,7 +2616,7 @@ clients.post('/:id/favorite', requirePermission('clients', 'update'), async (c) 
 });
 
 // DELETE /api/clients/:id/favorite — Unstar a client for the current user
-clients.delete('/:id/favorite', requirePermission('clients', 'update'), async (c) => {
+clients.delete('/:id/favorite', authMiddleware, async (c) => {
   const user = c.get('user');
   const clientId = c.req.param('id');
 
