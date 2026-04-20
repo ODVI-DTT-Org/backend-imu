@@ -327,7 +327,7 @@ clients.get('/', authMiddleware, async (c) => {
       tier2Case = ''; // admin/area_manager: skip tier 2
     }
 
-    const orderByClause = `
+    let orderByClause = `
       (cf.client_id IS NOT NULL) DESC,
       CASE ${tier2Case} ELSE 99 END ASC,
       c.loan_released DESC,
