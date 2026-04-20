@@ -99,7 +99,7 @@ function buildClientFilters(
 const clients = new Hono();
 
 // Pagination limits
-const MAX_PER_PAGE = 100;
+const MAX_PER_PAGE = 500;
 
 // Validation schemas
 const createClientSchema = z.object({
