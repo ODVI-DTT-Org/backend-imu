@@ -36,11 +36,19 @@ async function signPhotoUrl(photoUrl: string | null | undefined): Promise<string
     return photoUrl;
   }
 }
-import {
-  validateTouchpointSequence,
-  validateRoleBasedTouchpoint,
-  getNextTouchpointType,
-} from '../services/touchpoint-validation.js';
+// COMMENTED OUT for Unli Touchpoint - pattern validation removed
+// import {
+//   validateTouchpointSequence,
+//   validateRoleBasedTouchpoint,
+//   getNextTouchpointType,
+// } from '../services/touchpoint-validation.js';
+
+// NEW: Auto-calculate next touchpoint number
+// TEMPORARY: Commented out due to conflict with local function
+// Will be properly updated in Task 2
+// import {
+//   getNextTouchpointNumber,
+// } from '../services/touchpoint-validation.js';
 
 const touchpoints = new Hono();
 
@@ -468,22 +476,23 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     // === Role-based Validation ===
 
+    // COMMENTED OUT for Unli Touchpoint - pattern validation removed
     // Validate touchpoint type against user role and sequence using the new validation service
-    try {
-      validateRoleBasedTouchpoint(user.role, validated.touchpoint_number, validated.type);
-    } catch (error) {
-      if (error instanceof ValidationError) {
-        return c.json({
-          message: error.message,
-          errorCode: 'INVALID_TOUCHPOINT_TYPE_FOR_ROLE',
-          touchpointNumber: validated.touchpoint_number,
-          requestedType: validated.type,
-          userRole: user.role,
-          expectedType: getExpectedTouchpointType(validated.touchpoint_number),
-        }, 403);
-      }
-      throw error;
-    }
+    // try {
+    //   validateRoleBasedTouchpoint(user.role, validated.touchpoint_number, validated.type);
+    // } catch (error) {
+    //   if (error instanceof ValidationError) {
+    //     return c.json({
+    //       message: error.message,
+    //       errorCode: 'INVALID_TOUCHPOINT_TYPE_FOR_ROLE',
+    //       touchpointNumber: validated.touchpoint_number,
+    //       requestedType: validated.type,
+    //       userRole: user.role,
+    //       expectedType: getExpectedTouchpointType(validated.touchpoint_number),
+    //     }, 403);
+    //   }
+    //   throw error;
+    // }
 
     // === Loan Released Validation ===
     // RULE: Cannot create touchpoints for clients with released loans (they're "done")
@@ -519,29 +528,30 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     // === Touchpoint Sequence Validation ===
 
+    // COMMENTED OUT for Unli Touchpoint - no 7-touchpoint limit
     // 1. Get current touchpoint count for validation
-    const currentTouchpointCount = await pool.query(
-      `SELECT COUNT(DISTINCT touchpoint_number) as count
-       FROM touchpoints
-       WHERE client_id = $1`,
-      [validated.client_id]
-    );
-    const currentCount = parseInt(currentTouchpointCount.rows[0].count);
+    // const currentTouchpointCount = await pool.query(
+    //   `SELECT COUNT(DISTINCT touchpoint_number) as count
+    //    FROM touchpoints
+    //    WHERE client_id = $1`,
+    //   [validated.client_id]
+    // );
+    // const currentCount = parseInt(currentTouchpointCount.rows[0].count);
 
     // 2. Validate touchpoint sequence using the new validation service
-    try {
-      validateTouchpointSequence(currentCount, validated.touchpoint_number);
-    } catch (error) {
-      if (error instanceof ValidationError) {
-        return c.json({
-          message: error.message,
-          expectedNumber: currentCount + 1,
-          providedNumber: validated.touchpoint_number,
-          sequence: TOUCHPOINT_SEQUENCE,
-        }, 400);
-      }
-      throw error;
-    }
+    // try {
+    //   validateTouchpointSequence(currentCount, validated.touchpoint_number);
+    // } catch (error) {
+    //   if (error instanceof ValidationError) {
+    //     return c.json({
+    //       message: error.message,
+    //       expectedNumber: currentCount + 1,
+    //       providedNumber: validated.touchpoint_number,
+    //       sequence: TOUCHPOINT_SEQUENCE,
+    //     }, 400);
+    //   }
+    //   throw error;
+    // }
 
     // 3. Check if this is the next expected touchpoint number for the client
     const nextTouchpointNumber = await getNextTouchpointNumber(validated.client_id);
@@ -768,18 +778,19 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
     for (const touchpointData of validated.touchpoints) {
       try {
         // === Role-based Validation ===
-        try {
-          validateRoleBasedTouchpoint(user.role, touchpointData.touchpoint_number, touchpointData.type);
-        } catch (error) {
-          if (error instanceof ValidationError) {
-            errors.push({
-              clientId: touchpointData.client_id,
-              error: error.message,
-            });
-            continue;
-          }
-          throw error;
-        }
+        // COMMENTED OUT for Unli Touchpoint - pattern validation removed
+        // try {
+        //   validateRoleBasedTouchpoint(user.role, touchpointData.touchpoint_number, touchpointData.type);
+        // } catch (error) {
+        //   if (error instanceof ValidationError) {
+        //     errors.push({
+        //       clientId: touchpointData.client_id,
+        //       error: error.message,
+        //     });
+        //     continue;
+        //   }
+        //   throw error;
+        // }
 
         // Check if client exists and loan not released
         const clientCheck = await client.query(
