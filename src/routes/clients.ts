@@ -2672,14 +2672,17 @@ clients.post('/:id/favorite', authMiddleware, async (c) => {
     throw new NotFoundError('Client');
   }
 
-  await pool.query(
+  // Return the created row so PowerSync can match it with the local row
+  const result = await pool.query(
     `INSERT INTO client_favorites (user_id, client_id)
      VALUES ($1, $2)
-     ON CONFLICT (user_id, client_id) DO NOTHING`,
+     ON CONFLICT (user_id, client_id) DO NOTHING
+     RETURNING *`,
     [user.sub, clientId]
   );
 
-  return c.json({ success: true });
+  // Return the created row (or null if conflict/already exists)
+  return c.json({ success: true, data: result.rows[0] || null });
 });
 
 // DELETE /api/clients/:id/favorite — Unstar a client for the current user
@@ -2687,12 +2690,14 @@ clients.delete('/:id/favorite', authMiddleware, async (c) => {
   const user = c.get('user');
   const clientId = c.req.param('id');
 
-  await pool.query(
-    'DELETE FROM client_favorites WHERE user_id = $1 AND client_id = $2',
+  // Return the deleted row so PowerSync can match it with the local row
+  const result = await pool.query(
+    'DELETE FROM client_favorites WHERE user_id = $1 AND client_id = $2 RETURNING *',
     [user.sub, clientId]
   );
 
-  return c.json({ success: true });
+  // Return the deleted row (or null if not found)
+  return c.json({ success: true, data: result.rows[0] || null });
 });
 
 export default clients;
