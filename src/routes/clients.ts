@@ -386,10 +386,9 @@ clients.get('/', authMiddleware, async (c) => {
         COALESCE(c.touchpoint_number, 0) DESC,
         c.created_at DESC`;
     } else {
-      // Admin/Area Manager: no tier 2 role-based sorting, use constant
+      // Admin/Area Manager: no tier 2 role-based sorting
       orderByClause = `
         (cf.client_id IS NOT NULL) DESC,
-        99 ASC,
         c.loan_released DESC,
         (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
         COALESCE(c.touchpoint_number, 0) DESC,
