@@ -44,11 +44,9 @@ async function signPhotoUrl(photoUrl: string | null | undefined): Promise<string
 // } from '../services/touchpoint-validation.js';
 
 // NEW: Auto-calculate next touchpoint number
-// TEMPORARY: Commented out due to conflict with local function
-// Will be properly updated in Task 2
-// import {
-//   getNextTouchpointNumber,
-// } from '../services/touchpoint-validation.js';
+import {
+  getNextTouchpointNumber,
+} from '../services/touchpoint-validation.js';
 
 const touchpoints = new Hono();
 
@@ -74,17 +72,19 @@ function getExpectedTouchpointType(touchpointNumber: number): 'Visit' | 'Call' {
  * Get the next touchpoint number for a client
  * @param clientId - The client ID
  * @returns The next expected touchpoint number (1-7) or null if all 7 are completed
+ * DEPRECATED: Replaced by getNextTouchpointNumber from touchpoint-validation.js
+ * COMMENTED OUT for Unli Touchpoint - no 7-touchpoint limit
  */
-async function getNextTouchpointNumber(clientId: string): Promise<number | null> {
-  const result = await pool.query(
-    `SELECT COUNT(DISTINCT touchpoint_number) as count
-     FROM touchpoints
-     WHERE client_id = $1`,
-    [clientId]
-  );
-  const count = parseInt(result.rows[0].count);
-  return count >= 7 ? null : count + 1;
-}
+// async function getNextTouchpointNumber(clientId: string): Promise<number | null> {
+//   const result = await pool.query(
+//     `SELECT COUNT(DISTINCT touchpoint_number) as count
+//      FROM touchpoints
+//      WHERE client_id = $1`,
+//     [clientId]
+//   );
+//   const count = parseInt(result.rows[0].count);
+//   return count >= 7 ? null : count + 1;
+// }
 
 // Validation schemas (normalized schema - visit/call data moved to separate tables)
 const createTouchpointSchema = z.object({
@@ -314,7 +314,8 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
     }
 
     // Get the next expected touchpoint number
-    const nextTouchpointNumber = await getNextTouchpointNumber(clientId);
+    // UPDATED for Unli Touchpoint: Pass pool as first argument
+    const nextTouchpointNumber = await getNextTouchpointNumber(pool, clientId);
 
     if (nextTouchpointNumber === null) {
       return c.json({
@@ -526,9 +527,33 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       }
     }
 
+    // === Role Type Validation (Unli Touchpoint) ===
+    // Caravan can only create Visit, Tele can only create Call
+    // Managers can create both types
+    if (user.role === 'caravan' && validated.type !== 'Visit') {
+      return c.json({
+        message: 'Caravan users can only create Visit touchpoints',
+        errorCode: 'INVALID_TYPE_FOR_ROLE',
+        userRole: user.role,
+        requestedType: validated.type,
+      }, 403);
+    }
+    if (user.role === 'tele' && validated.type !== 'Call') {
+      return c.json({
+        message: 'Tele users can only create Call touchpoints',
+        errorCode: 'INVALID_TYPE_FOR_ROLE',
+        userRole: user.role,
+        requestedType: validated.type,
+      }, 403);
+    }
+
+    // === Auto-calculate Touchpoint Number (Unli Touchpoint) ===
+    // NEW: Auto-calculate next touchpoint number instead of using client-provided value
+    const touchpointNumber = await getNextTouchpointNumber(pool, validated.client_id);
+
     // === Touchpoint Sequence Validation ===
 
-    // COMMENTED OUT for Unli Touchpoint - no 7-touchpoint limit
+    // COMMENTED OUT for Unli Touchpoint - no 7-touchpoint limit, no pattern restrictions
     // 1. Get current touchpoint count for validation
     // const currentTouchpointCount = await pool.query(
     //   `SELECT COUNT(DISTINCT touchpoint_number) as count
@@ -554,53 +579,55 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     // }
 
     // 3. Check if this is the next expected touchpoint number for the client
-    const nextTouchpointNumber = await getNextTouchpointNumber(validated.client_id);
-    if (nextTouchpointNumber === null) {
-      return c.json({
-        message: 'All 7 touchpoints have been completed for this client',
-        completedTouchpoints: 7,
-        sequence: TOUCHPOINT_SEQUENCE,
-      }, 400);
-    }
+    // COMMENTED OUT for Unli Touchpoint - no 7-touchpoint limit
+    // const nextTouchpointNumber = await getNextTouchpointNumber(validated.client_id);
+    // if (nextTouchpointNumber === null) {
+    //   return c.json({
+    //     message: 'All 7 touchpoints have been completed for this client',
+    //     completedTouchpoints: 7,
+    //     sequence: TOUCHPOINT_SEQUENCE,
+    //   }, 400);
+    // }
 
     // 3. Golden Rule: Call touchpoints require the preceding touchpoint to be completed
+    // COMMENTED OUT for Unli Touchpoint - no pattern restrictions
     // TP2 (Call) requires TP1 (Visit) completed
     // TP3 (Call) requires TP2 (Call) completed
     // TP5 (Call) requires TP4 (Visit) completed
     // TP6 (Call) requires TP5 (Call) completed
-    if (validated.type === 'Call') {
-      const requiredPrecedingNumber = validated.touchpoint_number - 1;
+    // if (validated.type === 'Call') {
+    //   const requiredPrecedingNumber = validated.touchpoint_number - 1;
+    //
+    //   // Get existing touchpoints for this client
+    //   const existingTouchpointsResult = await pool.query(
+    //     `SELECT touchpoint_number FROM touchpoints WHERE client_id = $1`,
+    //     [validated.client_id]
+    //   );
+    //   const existingNumbers = existingTouchpointsResult.rows.map(r => r.touchpoint_number);
+    //
+    //   // Check if the required preceding touchpoint exists
+    //   if (!existingNumbers.includes(requiredPrecedingNumber)) {
+    //     const requiredType = getExpectedTouchpointType(requiredPrecedingNumber);
+    //     return c.json({
+    //       message: `Cannot create Call touchpoint #${validated.touchpoint_number}. Touchpoint #${requiredPrecedingNumber} (${requiredType}) must be completed first.`,
+    //       errorCode: 'PRECEDING_TOUCHPOINT_REQUIRED',
+    //       touchpointNumber: validated.touchpoint_number,
+    //       requiredPrecedingNumber,
+    //       requiredPrecedingType: requiredType,
+    //       sequence: TOUCHPOINT_SEQUENCE,
+    //     }, 400);
+    //   }
+    // }
 
-      // Get existing touchpoints for this client
-      const existingTouchpointsResult = await pool.query(
-        `SELECT touchpoint_number FROM touchpoints WHERE client_id = $1`,
-        [validated.client_id]
-      );
-      const existingNumbers = existingTouchpointsResult.rows.map(r => r.touchpoint_number);
-
-      // Check if the required preceding touchpoint exists
-      if (!existingNumbers.includes(requiredPrecedingNumber)) {
-        const requiredType = getExpectedTouchpointType(requiredPrecedingNumber);
-        return c.json({
-          message: `Cannot create Call touchpoint #${validated.touchpoint_number}. Touchpoint #${requiredPrecedingNumber} (${requiredType}) must be completed first.`,
-          errorCode: 'PRECEDING_TOUCHPOINT_REQUIRED',
-          touchpointNumber: validated.touchpoint_number,
-          requiredPrecedingNumber,
-          requiredPrecedingType: requiredType,
-          sequence: TOUCHPOINT_SEQUENCE,
-        }, 400);
-      }
-    }
-
-    if (validated.touchpoint_number !== nextTouchpointNumber) {
-      return c.json({
-        message: `Invalid touchpoint number. Expected touchpoint #${nextTouchpointNumber} (${getExpectedTouchpointType(nextTouchpointNumber)})`,
-        providedNumber: validated.touchpoint_number,
-        expectedNumber: nextTouchpointNumber,
-        expectedType: getExpectedTouchpointType(nextTouchpointNumber),
-        sequence: TOUCHPOINT_SEQUENCE,
-      }, 400);
-    }
+    // if (validated.touchpoint_number !== nextTouchpointNumber) {
+    //   return c.json({
+    //     message: `Invalid touchpoint number. Expected touchpoint #${nextTouchpointNumber} (${getExpectedTouchpointType(nextTouchpointNumber)})`,
+    //     providedNumber: validated.touchpoint_number,
+    //     expectedNumber: nextTouchpointNumber,
+    //     expectedType: getExpectedTouchpointType(nextTouchpointNumber),
+    //     sequence: TOUCHPOINT_SEQUENCE,
+    //   }, 400);
+    // }
 
     // 4. Check if a touchpoint with this number already exists for this client
     const existingTouchpoint = await pool.query(
@@ -609,7 +636,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
        WHERE client_id = $1
        AND touchpoint_number = $2
        LIMIT 1`,
-      [validated.client_id, validated.touchpoint_number]
+      [validated.client_id, touchpointNumber]
     );
 
     if (existingTouchpoint.rows.length > 0) {
@@ -620,7 +647,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         return c.json(mapRowToTouchpoint(fullResult.rows[0]), 200);
       }
       return c.json({
-        message: `Touchpoint #${validated.touchpoint_number} already exists for this client`,
+        message: `Touchpoint #${touchpointNumber} already exists for this client`,
         existingTouchpoint: {
           id: existing.id,
           touchpointNumber: existing.touchpoint_number,
@@ -700,7 +727,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       RETURNING *`,
       [
         validated.id ?? null,
-        validated.client_id, validated.user_id, validated.touchpoint_number, validated.type,
+        validated.client_id, validated.user_id, touchpointNumber, validated.type,
         validated.rejection_reason, visitId, callId
       ]
     );

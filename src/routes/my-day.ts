@@ -388,19 +388,27 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       const primaryAddress = addresses.length > 0 ? addresses[0] : null;
 
       // Calculate next touchpoint number
+      // COMMENTED OUT for Unli Touchpoint - no 7-touchpoint limit
+      // const lastTpNumber = latestTp?.touchpoint_number || 0;
+      // const nextTpNumber = lastTpNumber < 7 ? lastTpNumber + 1 : lastTpNumber;
+
+      // NEW: No 7-touchpoint limit
       const lastTpNumber = latestTp?.touchpoint_number || 0;
-      const nextTpNumber = lastTpNumber < 7 ? lastTpNumber + 1 : lastTpNumber;
+      const nextTpNumber = lastTpNumber + 1;
 
       // Determine next touchpoint type based on sequence
+      // COMMENTED OUT for Unli Touchpoint - no pattern restrictions
       // Pattern: 1st: Visit, 2nd: Call, 3rd: Call, 4th: Visit, 5th: Call, 6th: Call, 7th: Visit
-      const getNextTouchpointType = (num: number): 'Visit' | 'Call' => {
-        switch (num) {
-          case 1: case 4: case 7: return 'Visit';
-          case 2: case 3: case 5: case 6: return 'Call';
-          default: return 'Visit';
-        }
-      };
+      // const getNextTouchpointType = (num: number): 'Visit' | 'Call' => {
+      //   switch (num) {
+      //     case 1: case 4: case 7: return 'Visit';
+      //     case 2: case 3: case 5: case 6: return 'Call';
+      //     default: return 'Visit';
+      //   }
+      // };
 
+      // NEW: No pattern - just show the number
+      // The type will be determined by the user's role when creating the touchpoint
       return {
         id: row.id,
         client_id: row.client_id,
@@ -410,7 +418,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
         priority: row.priority,
         notes: row.notes,
         touchpoint_number: nextTpNumber,
-        touchpoint_type: getNextTouchpointType(nextTpNumber),
+        touchpoint_type: null, // No pattern - type determined by user role
         time_in: latestTp?.created_at || null,
         client: {
           first_name: row.first_name,
