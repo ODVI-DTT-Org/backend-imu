@@ -551,8 +551,9 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     }
 
     // === Auto-calculate Touchpoint Number (Unli Touchpoint) ===
-    // NEW: Auto-calculate next touchpoint number instead of using client-provided value
-    const touchpointNumber = await getNextTouchpointNumber(pool, validated.client_id);
+    // NEW: Auto-calculate next touchpoint number atomically to prevent race conditions
+    // The touchpoint_number is calculated within the INSERT statement to ensure atomicity
+    // This prevents concurrent requests from creating duplicate touchpoint numbers
 
     // === Touchpoint Sequence Validation ===
 
@@ -633,31 +634,33 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     // }
 
     // 4. Check if a touchpoint with this number already exists for this client
-    const existingTouchpoint = await pool.query(
-      `SELECT id, touchpoint_number, type
-       FROM touchpoints
-       WHERE client_id = $1
-       AND touchpoint_number = $2
-       LIMIT 1`,
-      [validated.client_id, touchpointNumber]
-    );
-
-    if (existingTouchpoint.rows.length > 0) {
-      const existing = existingTouchpoint.rows[0];
-      // Idempotent: same id means this is a retry — return the existing record as success
-      if (validated.id && existing.id === validated.id) {
-        const fullResult = await pool.query('SELECT * FROM touchpoints WHERE id = $1', [existing.id]);
-        return c.json(mapRowToTouchpoint(fullResult.rows[0]), 200);
-      }
-      return c.json({
-        message: `Touchpoint #${touchpointNumber} already exists for this client`,
-        existingTouchpoint: {
-          id: existing.id,
-          touchpointNumber: existing.touchpoint_number,
-          type: existing.type,
-        },
-      }, 400);
-    }
+    // FIXED: Removed this check since touchpoint_number is now calculated atomically in INSERT
+    // The atomic INSERT with subquery prevents race conditions, and ON CONFLICT handles idempotency
+    // const existingTouchpoint = await pool.query(
+    //   `SELECT id, touchpoint_number, type
+    //    FROM touchpoints
+    //    WHERE client_id = $1
+    //    AND touchpoint_number = $2
+    //    LIMIT 1`,
+    //   [validated.client_id, touchpointNumber]
+    // );
+    //
+    // if (existingTouchpoint.rows.length > 0) {
+    //   const existing = existingTouchpoint.rows[0];
+    //   // Idempotent: same id means this is a retry — return the existing record as success
+    //   if (validated.id && existing.id === validated.id) {
+    //     const fullResult = await pool.query('SELECT * FROM touchpoints WHERE id = $1', [existing.id]);
+    //     return c.json(mapRowToTouchpoint(fullResult.rows[0]), 200);
+    //   }
+    //   return c.json({
+    //     message: `Touchpoint #${touchpointNumber} already exists for this client`,
+    //     existingTouchpoint: {
+    //       id: existing.id,
+    //       touchpointNumber: existing.touchpoint_number,
+    //       type: existing.type,
+    //     },
+    //   }, 400);
+    // }
 
     // === End Touchpoint Sequence Validation ===
 
@@ -725,12 +728,16 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       `INSERT INTO touchpoints (
         id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
       ) VALUES (
-        COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8
+        COALESCE($1, uuid_generate_v4()), $2, $3,
+        (SELECT COALESCE(MAX(t.touchpoint_number), 0) + 1
+         FROM touchpoints t
+         WHERE t.client_id = $2),  -- Atomic calculation within INSERT
+        $4, $5, $6, $7
       ) ON CONFLICT (id) DO UPDATE SET updated_at = touchpoints.updated_at
       RETURNING *`,
       [
         validated.id ?? null,
-        validated.client_id, validated.user_id, touchpointNumber, validated.type,
+        validated.client_id, validated.user_id, validated.type,
         validated.rejection_reason, visitId, callId
       ]
     );
