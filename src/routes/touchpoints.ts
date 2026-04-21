@@ -145,6 +145,7 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     let paramIndex = 1;
 
     // Scope-based filtering (respects explicit scope parameter)
+    // COMMENTED OUT for Unli Touchpoint - show all touchpoints by default
     // scope='all': show ALL touchpoints (no user_id filter for any role)
     // scope='own': show only user's own touchpoints
     // scope not provided: show based on role and type (role-based defaults)
@@ -159,13 +160,15 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     } else if (user.role === 'admin' || user.role === 'area_manager' || user.role === 'assistant_area_manager') {
       // Admin/Manager: can see all touchpoints by default (no filtering)
       // Don't add user_id condition
-    } else if (user.role === 'caravan' || (user.role === 'tele' && type !== 'all')) {
-      // Caravan: always see own touchpoints by default
-      // Tele: see own touchpoints unless type='all'
-      conditions.push(`t.user_id = $${paramIndex}`);
-      params.push(user.sub);
-      paramIndex++;
     }
+    // COMMENTED OUT for Unli Touchpoint - show all touchpoints
+    // else if (user.role === 'caravan' || (user.role === 'tele' && type !== 'all')) {
+    //   // Caravan: always see own touchpoints by default
+    //   // Tele: see own touchpoints unless type='all'
+    //   conditions.push(`t.user_id = $${paramIndex}`);
+    //   params.push(user.sub);
+    //   paramIndex++;
+    // }
 
     if (clientId) {
       conditions.push(`t.client_id = $${paramIndex}`);

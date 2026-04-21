@@ -43,6 +43,10 @@ function buildClientFilters(
     agency_id?: string;
     municipality?: string | string[];
     province?: string | string[];
+    // NEW: Touchpoint-based filters
+    touchpoint_reason_codes?: string | string[];
+    touchpoint_date_from?: string;
+    touchpoint_date_to?: string;
   },
   startIdx: number = 1
 ): ClientFilterResult {
@@ -91,6 +95,44 @@ function buildClientFilters(
       params.push(...values);
       idx += values.length;
     }
+  }
+
+  // NEW: Touchpoint reason codes filter
+  if (q.touchpoint_reason_codes) {
+    const values = Array.isArray(q.touchpoint_reason_codes)
+      ? q.touchpoint_reason_codes
+      : (q.touchpoint_reason_codes as string).split(',').map(v => v.trim());
+    if (values.length > 0) {
+      // Store for later use in touchpoint subquery
+      conditions.push(`EXISTS (
+        SELECT 1 FROM touchpoints t
+        WHERE t.client_id = c.id
+        AND t.reason_code = ANY($${idx}::text[])
+      )`);
+      params.push(values);
+      idx++;
+    }
+  }
+
+  // NEW: Touchpoint date range filters
+  if (q.touchpoint_date_from) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM touchpoints t
+      WHERE t.client_id = c.id
+      AND t.date >= $${idx}::date
+    )`);
+    params.push(q.touchpoint_date_from);
+    idx++;
+  }
+
+  if (q.touchpoint_date_to) {
+    conditions.push(`EXISTS (
+      SELECT 1 FROM touchpoints t
+      WHERE t.client_id = c.id
+      AND t.date <= $${idx}::date
+    )`);
+    params.push(q.touchpoint_date_to);
+    idx++;
   }
 
   return { conditions, params, nextIdx: idx };
@@ -290,6 +332,12 @@ clients.get('/', authMiddleware, async (c) => {
       agency_id: c.req.query('agency_id'),
       municipality,
       province,
+      // NEW: Touchpoint-based filters
+      touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes')?.length
+        ? c.req.queries('touchpoint_reason_codes')
+        : undefined,
+      touchpoint_date_from: c.req.query('touchpoint_date_from'),
+      touchpoint_date_to: c.req.query('touchpoint_date_to'),
     });
 
     // Handle touchpoint_status (can be array or string)
@@ -567,7 +615,8 @@ clients.get('/', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: completedCount >= 7 || loanReleased, // Complete when 7/7 touchpoints OR loan released
+          is_complete: loanReleased, // COMMENTED OUT for Unli Touchpoint: No 7-touchpoint limit - complete only when loan released
+          // is_complete: completedCount >= 7 || loanReleased, // Complete when 7/7 touchpoints OR loan released
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
@@ -625,6 +674,12 @@ clients.get('/assigned', authMiddleware, async (c) => {
       agency_id: c.req.query('agency_id'),
       municipality,
       province,
+      // NEW: Touchpoint-based filters
+      touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes')?.length
+        ? c.req.queries('touchpoint_reason_codes')
+        : undefined,
+      touchpoint_date_from: c.req.query('touchpoint_date_from'),
+      touchpoint_date_to: c.req.query('touchpoint_date_to'),
     });
 
     // Handle touchpoint_status (can be array or string)
