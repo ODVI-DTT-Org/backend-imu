@@ -2672,16 +2672,22 @@ clients.post('/:id/favorite', authMiddleware, async (c) => {
     throw new NotFoundError('Client');
   }
 
-  // Return the created row so PowerSync can match it with the local row
+  // Get id from request body (sent by PowerSync client) or generate new one
+  const body = await c.req.json();
+  const clientProvidedId = body?.id;
+  const id = clientProvidedId || null; // Use null to let database generate via gen_random_uuid()
+
+  // Use the client-provided id if available, otherwise let database generate
+  // This ensures PowerSync can match the local and remote rows by id
   const result = await pool.query(
-    `INSERT INTO client_favorites (user_id, client_id)
-     VALUES ($1, $2)
-     ON CONFLICT (user_id, client_id) DO NOTHING
+    `INSERT INTO client_favorites (id, user_id, client_id)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, client_id) DO UPDATE SET id = EXCLUDED.id
      RETURNING *`,
-    [user.sub, clientId]
+    [id, user.sub, clientId]
   );
 
-  // Return the created row (or null if conflict/already exists)
+  // Return the created/updated row so PowerSync can match it with the local row
   return c.json({ success: true, data: result.rows[0] || null });
 });
 
