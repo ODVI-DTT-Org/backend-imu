@@ -161,14 +161,14 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       // Admin/Manager: can see all touchpoints by default (no filtering)
       // Don't add user_id condition
     }
-    // COMMENTED OUT for Unli Touchpoint - show all touchpoints
-    // else if (user.role === 'caravan' || (user.role === 'tele' && type !== 'all')) {
-    //   // Caravan: always see own touchpoints by default
-    //   // Tele: see own touchpoints unless type='all'
-    //   conditions.push(`t.user_id = $${paramIndex}`);
-    //   params.push(user.sub);
-    //   paramIndex++;
-    // }
+    // FIXED: Restore user filtering for Caravan and Tele users to prevent data leak
+    // Caravan: always see own touchpoints by default
+    // Tele: see own touchpoints unless type='all' (can see all call touchpoints)
+    else if (user.role === 'caravan' || (user.role === 'tele' && type !== 'all')) {
+      conditions.push(`t.user_id = $${paramIndex}`);
+      params.push(user.sub);
+      paramIndex++;
+    }
 
     if (clientId) {
       conditions.push(`t.client_id = $${paramIndex}`);
