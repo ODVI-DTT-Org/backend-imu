@@ -360,28 +360,41 @@ clients.get('/', authMiddleware, async (c) => {
     // Use /api/clients/assigned for area-filtered clients
 
     // 4-tier ORDER BY: favorites → role-based callable → loan released → default
-    let tier2Case: string;
+    let orderByClause: string;
     if (user.role === 'tele') {
-      tier2Case = `WHEN c.next_touchpoint = 'Call' THEN
-        CASE COALESCE(c.touchpoint_number, 0) + 1
-          WHEN 6 THEN 1 WHEN 5 THEN 2 WHEN 3 THEN 3 WHEN 2 THEN 4 ELSE 5
-        END`;
+      // Tele: prioritize Call touchpoints with specific ordering
+      orderByClause = `
+        (cf.client_id IS NOT NULL) DESC,
+        CASE WHEN c.next_touchpoint = 'Call' THEN
+          CASE COALESCE(c.touchpoint_number, 0) + 1
+            WHEN 6 THEN 1 WHEN 5 THEN 2 WHEN 3 THEN 3 WHEN 2 THEN 4 ELSE 5
+          END ELSE 99 END ASC,
+        c.loan_released DESC,
+        (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
+        COALESCE(c.touchpoint_number, 0) DESC,
+        c.created_at DESC`;
     } else if (user.role === 'caravan') {
-      tier2Case = `WHEN c.next_touchpoint = 'Visit' THEN
-        CASE COALESCE(c.touchpoint_number, 0) + 1
-          WHEN 7 THEN 1 WHEN 4 THEN 2 WHEN 1 THEN 3 ELSE 4
-        END`;
+      // Caravan: prioritize Visit touchpoints with specific ordering
+      orderByClause = `
+        (cf.client_id IS NOT NULL) DESC,
+        CASE WHEN c.next_touchpoint = 'Visit' THEN
+          CASE COALESCE(c.touchpoint_number, 0) + 1
+            WHEN 7 THEN 1 WHEN 4 THEN 2 WHEN 1 THEN 3 ELSE 4
+          END ELSE 99 END ASC,
+        c.loan_released DESC,
+        (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
+        COALESCE(c.touchpoint_number, 0) DESC,
+        c.created_at DESC`;
     } else {
-      tier2Case = ''; // admin/area_manager: skip tier 2
+      // Admin/Area Manager: no tier 2 role-based sorting, use constant
+      orderByClause = `
+        (cf.client_id IS NOT NULL) DESC,
+        99 ASC,
+        c.loan_released DESC,
+        (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
+        COALESCE(c.touchpoint_number, 0) DESC,
+        c.created_at DESC`;
     }
-
-    let orderByClause = `
-      (cf.client_id IS NOT NULL) DESC,
-      CASE ${tier2Case} ELSE 99 END ASC,
-      c.loan_released DESC,
-      (c.touchpoint_summary->-1->>'date') DESC NULLS LAST,
-      COALESCE(c.touchpoint_number, 0) DESC,
-      c.created_at DESC`;
 
     if (sortBy === 'touchpoint_status') {
       // For Tele role: use group scoring directly
