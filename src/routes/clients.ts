@@ -80,20 +80,22 @@ function buildClientFilters(
   if (q.municipality) {
     const values = Array.isArray(q.municipality) ? q.municipality : [q.municipality];
     if (values.length > 0) {
-      const placeholders = values.map((_, i) => `$${idx + i}`).join(', ');
-      conditions.push(`c.municipality IN (${placeholders})`);
-      params.push(...values);
-      idx += values.length;
+      // Add wildcards for pattern matching
+      const patterns = values.map(v => `%${v}%`);
+      conditions.push(`c.municipality ILIKE ANY($${idx}::text[])`);
+      params.push(patterns);
+      idx++;
     }
   }
 
   if (q.province) {
     const values = Array.isArray(q.province) ? q.province : [q.province];
     if (values.length > 0) {
-      const placeholders = values.map((_, i) => `$${idx + i}`).join(', ');
-      conditions.push(`c.province IN (${placeholders})`);
-      params.push(...values);
-      idx += values.length;
+      // Add wildcards for pattern matching
+      const patterns = values.map(v => `%${v}%`);
+      conditions.push(`c.province ILIKE ANY($${idx}::text[])`);
+      params.push(patterns);
+      idx++;
     }
   }
 
@@ -847,12 +849,18 @@ clients.get('/assigned', authMiddleware, async (c) => {
     if (shouldFilterByArea) {
       // For Caravan/Tele: Filter by assigned provinces/municipalities
       // Using the new province and municipality columns directly
-      // NOTE: Using UPPER() for case-insensitive matching due to data inconsistencies
-      // (e.g., "METRO MANILA" vs "Metro Manila" in database)
+      // NOTE: Using ILIKE with pattern matching for flexible matching
+      // (e.g., "Metro Manila" will match "Metro Manila", "METRO MANILA", etc.)
       // IMPORTANT: Only return clients with PSGC assigned (psgc_id IS NOT NULL)
       areaFilterWhereClause = `AND (
-        UPPER(c.province) IN (SELECT UPPER(province) FROM user_areas)
-        AND UPPER(c.municipality) IN (SELECT UPPER(municipality) FROM user_areas)
+        EXISTS (
+          SELECT 1 FROM user_areas ua
+          WHERE c.province ILIKE CONCAT('%', ua.province, '%')
+        )
+        AND EXISTS (
+          SELECT 1 FROM user_areas ua
+          WHERE c.municipality ILIKE CONCAT('%', ua.municipality, '%')
+        )
         AND c.psgc_id IS NOT NULL
       )`;
     }
