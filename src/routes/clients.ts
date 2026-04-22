@@ -27,6 +27,36 @@ function parseLoanType(value: any): string | null {
   return String(value);
 }
 
+/**
+ * Normalize location names by removing common prefixes/suffixes
+ * Examples:
+ * - "City of Cotabato" → "Cotabato"
+ * - "Cotabato City" → "Cotabato"
+ * - "Municipality of Tampilisan" → "Tampilisan"
+ * - "Tampilisan Municipality" → "Tampilisan"
+ */
+function normalizeLocationName(name: string): string {
+  if (!name) return '';
+  return name
+    .replace(/^(City of|City|Municipality of|Municipality)\s*/i, '')
+    .replace(/\s*(City|Municipality)$/i, '')
+    .trim();
+}
+
+/**
+ * Generate SQL function for normalizing location names in database queries
+ * This creates a portable SQL expression that works in PostgreSQL
+ */
+function getNormalizeLocationSQL(column: string): string {
+  return `REGEXP_REPLACE(
+    REGEXP_REPLACE(
+      REGEXP_REPLACE(${column}, '^(City of|City|Municipality of|Municipality)\\s*', 'i'),
+      '\\s*(City|Municipality)$', 'i'
+    ),
+    '\\s+', ' ', 'g'
+  )`;
+}
+
 interface ClientFilterResult {
   conditions: string[];
   params: any[];
@@ -80,10 +110,15 @@ function buildClientFilters(
   if (q.municipality) {
     const values = Array.isArray(q.municipality) ? q.municipality : [q.municipality];
     if (values.length > 0) {
-      // Add wildcards for pattern matching
-      const patterns = values.map(v => `%${v}%`);
-      conditions.push(`c.municipality ILIKE ANY($${idx}::text[])`);
-      params.push(patterns);
+      // Normalize input values (remove "City of", "City", etc.)
+      const normalizedPatterns = values
+        .map(v => normalizeLocationName(v))
+        .filter(v => v.length > 0)
+        .map(v => `%${v}%`);
+
+      // Match against normalized database column
+      conditions.push(`${getNormalizeLocationSQL('c.municipality')} ILIKE ANY($${idx}::text[])`);
+      params.push(normalizedPatterns);
       idx++;
     }
   }
@@ -91,10 +126,15 @@ function buildClientFilters(
   if (q.province) {
     const values = Array.isArray(q.province) ? q.province : [q.province];
     if (values.length > 0) {
-      // Add wildcards for pattern matching
-      const patterns = values.map(v => `%${v}%`);
-      conditions.push(`c.province ILIKE ANY($${idx}::text[])`);
-      params.push(patterns);
+      // Normalize input values (remove "City of", "City", etc.)
+      const normalizedPatterns = values
+        .map(v => normalizeLocationName(v))
+        .filter(v => v.length > 0)
+        .map(v => `%${v}%`);
+
+      // Match against normalized database column
+      conditions.push(`${getNormalizeLocationSQL('c.province')} ILIKE ANY($${idx}::text[])`);
+      params.push(normalizedPatterns);
       idx++;
     }
   }
@@ -848,18 +888,15 @@ clients.get('/assigned', authMiddleware, async (c) => {
     let areaFilterWhereClause = '';
     if (shouldFilterByArea) {
       // For Caravan/Tele: Filter by assigned provinces/municipalities
-      // Using the new province and municipality columns directly
-      // NOTE: Using ILIKE with pattern matching for flexible matching
-      // (e.g., "Metro Manila" will match "Metro Manila", "METRO MANILA", etc.)
+      // APPROACH: Use PSGC table for canonical matching (most accurate)
+      // This handles variations like "Cotabato" vs "Cotabato City" vs "City of Cotabato"
       // IMPORTANT: Only return clients with PSGC assigned (psgc_id IS NOT NULL)
       areaFilterWhereClause = `AND (
         EXISTS (
-          SELECT 1 FROM user_areas ua
-          WHERE c.province ILIKE CONCAT('%', ua.province, '%')
-        )
-        AND EXISTS (
-          SELECT 1 FROM user_areas ua
-          WHERE c.municipality ILIKE CONCAT('%', ua.municipality, '%')
+          SELECT 1
+          FROM user_areas ua
+          JOIN psgc psgc_ref ON psgc_ref.province = ua.province AND psgc_ref.mun_city = ua.municipality
+          WHERE c.psgc_id = psgc_ref.id
         )
         AND c.psgc_id IS NOT NULL
       )`;
