@@ -218,6 +218,11 @@ CREATE TABLE IF NOT EXISTS visits (
     time_in TIMESTAMPTZ,
     time_out TIMESTAMPTZ,
     source TEXT,
+    -- Structured location fields from PSGC data
+    barangay TEXT,
+    municipality TEXT,
+    province TEXT,
+    region TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT visits_type_check CHECK (type IN ('regular_visit', 'release_loan'))

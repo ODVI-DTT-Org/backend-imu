@@ -20,6 +20,11 @@ export const createVisitSchema = z.object({
   latitude: z.preprocess(v => (v === '' ? null : (typeof v === 'string' ? parseFloat(v as string) : v)), z.number().min(-90).max(90).nullish()),
   longitude: z.preprocess(v => (v === '' ? null : (typeof v === 'string' ? parseFloat(v as string) : v)), z.number().min(-180).max(180).nullish()),
   source: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
+  // Structured location fields from PSGC data
+  barangay: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
+  municipality: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
+  province: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
+  region: z.preprocess(v => (v === '' ? null : v), z.string().max(200).nullish()),
 });
 
 export const updateVisitSchema = createVisitSchema.partial();
@@ -42,6 +47,11 @@ export interface Visit {
   latitude?: number;
   longitude?: number;
   source?: string;
+  // Structured location fields
+  barangay?: string;
+  municipality?: string;
+  province?: string;
+  region?: string;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -61,6 +71,11 @@ const UPDATEABLE_VISIT_FIELDS = [
   'latitude',
   'longitude',
   'source',
+  // Structured location fields
+  'barangay',
+  'municipality',
+  'province',
+  'region',
 ];
 
 export const visitService = {
@@ -119,8 +134,8 @@ export const visitService = {
     const result = await pool.query(
       `INSERT INTO visits (id, client_id, user_id, type, time_in, time_out,
         odometer_arrival, odometer_departure, photo_url, remarks, reason, status,
-        address, latitude, longitude, source)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+        address, latitude, longitude, source, barangay, municipality, province, region)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
        ON CONFLICT (id) DO UPDATE SET updated_at = visits.updated_at
        RETURNING *`,
       [
@@ -128,7 +143,8 @@ export const visitService = {
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
         validated.odometer_arrival, validated.odometer_departure, validated.photo_url,
         validated.remarks ?? validated.notes ?? null, validated.reason, validated.status, validated.address,
-        validated.latitude, validated.longitude, 'IMU'
+        validated.latitude, validated.longitude, validated.source ?? 'IMU',
+        validated.barangay, validated.municipality, validated.province, validated.region
       ]
     );
     return result.rows[0];

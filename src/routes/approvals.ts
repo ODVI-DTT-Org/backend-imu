@@ -1279,6 +1279,12 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       latitude: z.number().optional(),
       longitude: z.number().optional(),
       address: z.string().optional(),
+      // Structured location fields
+      barangay: z.string().max(200).optional(),
+      municipality: z.string().max(200).optional(),
+      province: z.string().max(200).optional(),
+      region: z.string().max(200).optional(),
+      source: z.string().max(200).optional(),
       photo_url: z.string().optional(),
       remarks: z.string().optional(),
     });
@@ -1368,6 +1374,12 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       latitude: z.number().optional(),
       longitude: z.number().optional(),
       address: z.string().optional(),
+      // Structured location fields
+      barangay: z.string().max(200).optional(),
+      municipality: z.string().max(200).optional(),
+      province: z.string().max(200).optional(),
+      region: z.string().max(200).optional(),
+      source: z.string().max(200).optional(),
       photo_url: z.string().url('photo_url must be a valid URL'),
       // Tele-specific fields
       phone_number: z.string().regex(/^09\d{9}$/).optional(),
@@ -1406,15 +1418,17 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
             odometer_arrival, odometer_departure,
-            latitude, longitude, address, photo_url, notes,
-            reason, status, source
+            latitude, longitude, address, barangay, municipality, province, region, source,
+            photo_url, notes, reason, status
           ) VALUES (
-            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11,
-            'Loan Release', 'Completed', 'IMU'
+            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+            $15, $16, 'Loan Release', 'Completed'
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
             validated.odometer_in ?? null, validated.odometer_out ?? null,
             validated.latitude, validated.longitude, validated.address,
+            validated.barangay, validated.municipality, validated.province, validated.region,
+            validated.source ?? 'IMU',
             validated.photo_url, validated.notes]);
 
         activityId = visitResult.rows[0].id;
