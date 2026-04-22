@@ -402,8 +402,8 @@ clients.get('/', authMiddleware, async (c) => {
         orderByClause = `
           CASE
             WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
-              AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
-            WHEN COALESCE(c.touchpoint_number, 1) >= 7 OR c.loan_released THEN 2
+              AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
+            WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
             ELSE 3
           END ASC,
           COALESCE(c.touchpoint_number, 1) DESC,
@@ -418,11 +418,11 @@ clients.get('/', authMiddleware, async (c) => {
           canCreateCondition = `c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1`;
         }
 
-        // Group score CASE expression for ordering
+        // Group score CASE expression for ordering (unlimited touchpoints)
         const groupScoreCase = `CASE
-          WHEN (${canCreateCondition}) AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
-          WHEN COALESCE(c.touchpoint_number, 1) >= 7 OR c.loan_released THEN 2
-          WHEN COALESCE(c.touchpoint_number, 1) > 0 AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT (${canCreateCondition}) THEN 3
+          WHEN (${canCreateCondition}) AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
+          WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
+          WHEN COALESCE(c.touchpoint_number, 1) > 0 AND c.next_touchpoint IS NOT NULL AND NOT (${canCreateCondition}) THEN 3
           ELSE 4
         END`;
 
@@ -476,7 +476,7 @@ clients.get('/', authMiddleware, async (c) => {
         baseParamIndex++;
       }
       if (hasArchive) {
-        parts.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
+        parts.push(`(c.next_touchpoint IS NULL OR c.loan_released = true)`);
       }
       if (parts.length > 0) {
         baseWhereConditions.push(`(${parts.join(' OR ')})`);
@@ -524,11 +524,11 @@ clients.get('/', authMiddleware, async (c) => {
         COALESCE(
           phones.phones_json, '[]'
         ) as phone_numbers,
-        -- touchpoint_number already stores the actual count (0-7), not next number
+        -- touchpoint_number already stores the actual count, not next number
         COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
-        -- Calculate next touchpoint number (1-7 or null if complete)
+        -- Calculate next touchpoint number (unlimited, null if complete based on next_touchpoint)
         CASE
-          WHEN c.touchpoint_number >= 7 THEN NULL
+          WHEN c.next_touchpoint IS NULL THEN NULL
           ELSE c.touchpoint_number + 1
         END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
@@ -802,27 +802,27 @@ clients.get('/assigned', authMiddleware, async (c) => {
         baseParamIndex++;
       }
       if (hasArchive) {
-        parts.push(`(COALESCE(c.touchpoint_number, 0) >= 7 OR c.loan_released = true)`);
+        parts.push(`(c.next_touchpoint IS NULL OR c.loan_released = true)`);
       }
       if (parts.length > 0) {
         baseWhereConditions.push(`(${parts.join(' OR ')})`);
       }
     }
 
-    // Apply touchpoint_status filter to WHERE clause
+    // Apply touchpoint_status filter to WHERE clause (unlimited touchpoints)
     if (touchpointStatus && touchpointStatus.length > 0) {
       const tsConds: string[] = [];
       if (includeCallable) {
-        tsConds.push(`(c.next_touchpoint = 'Call' AND COALESCE(c.touchpoint_number, 0) < 7 AND c.loan_released = false)`);
+        tsConds.push(`(c.next_touchpoint = 'Call' AND c.loan_released = false)`);
       }
       if (includeWaitingForCaravan) {
-        tsConds.push(`(c.next_touchpoint = 'Visit' AND COALESCE(c.touchpoint_number, 0) < 7 AND c.loan_released = false)`);
+        tsConds.push(`(c.next_touchpoint = 'Visit' AND c.loan_released = false)`);
       }
       if (includeNoProgress) {
         tsConds.push(`(COALESCE(c.touchpoint_number, 0) = 0 AND c.loan_released = false)`);
       }
       if (includeCompleted) {
-        tsConds.push(`(COALESCE(c.touchpoint_number, 0) >= 7 AND c.loan_released = false)`);
+        tsConds.push(`(c.next_touchpoint IS NULL AND c.loan_released = false)`);
       }
       if (includeLoanReleased) {
         tsConds.push(`c.loan_released = true`);
@@ -902,21 +902,21 @@ clients.get('/assigned', authMiddleware, async (c) => {
         COALESCE(
           phones.phones_json, '[]'
         ) as phone_numbers,
-        -- touchpoint_number already stores the actual count (0-7), not next number
+        -- touchpoint_number already stores the actual count, not next number
         COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
-        -- Calculate next touchpoint number (1-7 or null if complete) — mirrors /clients endpoint
+        -- Calculate next touchpoint number (unlimited, null if complete based on next_touchpoint)
         CASE
-          WHEN COALESCE(c.touchpoint_number, 0) >= 7 THEN NULL
+          WHEN c.next_touchpoint IS NULL THEN NULL
           ELSE COALESCE(c.touchpoint_number, 0) + 1
         END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
         (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
-        -- Calculate group_score for ordering
+        -- Calculate group_score for ordering (unlimited touchpoints)
         CASE
           WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
-            AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
-          WHEN COALESCE(c.touchpoint_number, 1) >= 7 OR c.loan_released THEN 2
+            AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
+          WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
           ELSE 3
         END as group_score${similaritySelect},
         lt.first_name as last_touchpoint_first_name,
@@ -965,8 +965,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
         (cf.client_id IS NOT NULL) DESC,
         CASE
           WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
-            AND COALESCE(c.touchpoint_number, 1) < 7 AND NOT c.loan_released THEN 1
-          WHEN COALESCE(c.touchpoint_number, 1) >= 7 OR c.loan_released THEN 2
+            AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
+          WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
           ELSE 3
         END ASC
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
@@ -1040,7 +1040,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: completedCount >= 7 || loanReleased,
+          is_complete: row.next_touchpoint === null || loanReleased,
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,

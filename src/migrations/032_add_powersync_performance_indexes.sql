@@ -30,8 +30,8 @@ CREATE INDEX IF NOT EXISTS idx_touchpoints_client_status ON touchpoints(client_i
 -- User locations indexes for municipality filtering
 CREATE INDEX IF NOT EXISTS idx_user_locations_user_municipality ON user_locations(user_id, municipality_id) WHERE deleted_at IS NULL;
 
--- Partial index for active touchpoints only
-CREATE INDEX IF NOT EXISTS idx_touchpoints_active ON touchpoints(client_id, touchpoint_number) WHERE touchpoint_number <= 7;
+-- Partial index for active touchpoints only (unlimited touchpoints)
+CREATE INDEX IF NOT EXISTS idx_touchpoints_active ON touchpoints(client_id, touchpoint_number) WHERE deleted_at IS NULL;
 
 COMMIT;
 
