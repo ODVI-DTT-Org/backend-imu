@@ -493,8 +493,10 @@ export const validateTouchpointType = () => {
       return c.json({ message: 'touchpoint_number and type are required' }, 400);
     }
 
-    const visitNumbers = [1, 4, 7];
-    const callNumbers = [2, 3, 5, 6];
+    // Validate touchpoint number is positive (unlimited touchpoints)
+    if (touchpointNumber < 1) {
+      return c.json({ message: 'touchpoint_number must be a positive number' }, 400);
+    }
 
     // Check permissions instead of just role name
     const canCreateVisit = await hasPermission(user.sub, 'touchpoints', 'create', 'visit');
@@ -504,27 +506,13 @@ export const validateTouchpointType = () => {
       if (!canCreateVisit) {
         return c.json({
           message: 'You do not have permission to create Visit touchpoints',
-          allowed_numbers: visitNumbers,
         }, 403);
-      }
-      if (!visitNumbers.includes(touchpointNumber)) {
-        return c.json({
-          message: `Invalid touchpoint number ${touchpointNumber} for Visit type`,
-          allowed_numbers: visitNumbers,
-        }, 400);
       }
     } else if (touchpointType === 'Call') {
       if (!canCreateCall) {
         return c.json({
           message: 'You do not have permission to create Call touchpoints',
-          allowed_numbers: callNumbers,
         }, 403);
-      }
-      if (!callNumbers.includes(touchpointNumber)) {
-        return c.json({
-          message: `Invalid touchpoint number ${touchpointNumber} for Call type`,
-          allowed_numbers: callNumbers,
-        }, 400);
       }
     } else {
       return c.json({ message: 'Invalid touchpoint type. Must be Visit or Call' }, 400);

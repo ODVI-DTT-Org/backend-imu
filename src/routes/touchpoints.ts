@@ -53,11 +53,13 @@ const touchpoints = new Hono();
 // Manager roles for authorization
 const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as const;
 
-// Touchpoint sequence pattern: Visit → Call → Call → Visit → Call → Call → Visit
+// DEPRECATED: Touchpoint sequence pattern (legacy code)
+// Modern system uses backend-determined types (unlimited touchpoints)
 const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
 
 /**
- * Get the expected touchpoint type for a given touchpoint number
+ * DEPRECATED: Get the expected touchpoint type for a given touchpoint number
+ * Modern system uses backend-determined types (unlimited touchpoints)
  * @param touchpointNumber - The touchpoint number (1-7)
  * @returns The expected type ('Visit' or 'Call')
  */
@@ -91,7 +93,7 @@ const createTouchpointSchema = z.object({
   id: z.string().uuid().optional(),
   client_id: z.string().uuid(),
   user_id: z.preprocess(v => (v === '' ? null : v), z.string().uuid().nullish()), // empty string from PowerSync CRUD coerced to null
-  touchpoint_number: z.union([z.number().int(), z.string().transform(Number)]).pipe(z.number().int().min(1).max(7)), // coerce string→number from PowerSync CRUD
+  touchpoint_number: z.union([z.number().int(), z.string().transform(Number)]).pipe(z.number().int().min(1)), // coerce string→number from PowerSync CRUD, unlimited touchpoints
   type: z.enum(['Visit', 'Call']),
   rejection_reason: z.string().nullish(),
   visit_id: z.string().uuid().nullish(),
@@ -322,8 +324,8 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
 
     if (nextTouchpointNumber === null) {
       return c.json({
-        message: 'All 7 touchpoints have been completed',
-        completedTouchpoints: 7,
+        message: 'All touchpoints have been completed',
+        completedTouchpoints: nextTouchpointNumber,
         nextTouchpoint: null,
         sequence: TOUCHPOINT_SEQUENCE,
       });

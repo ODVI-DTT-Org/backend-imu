@@ -51,8 +51,8 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
     const touchpoints: TouchpointSummaryItem[] = touchpointsResult.rows;
     const count = touchpoints.length;
 
-    // Calculate next touchpoint based on pattern
-    // Pattern: 1:Visit, 2:Call, 3:Call, 4:Visit, 5:Call, 6:Call, 7:Visit
+    // DEPRECATED: Pattern-based calculation (legacy code)
+    // Modern system uses backend-determined types (unlimited touchpoints)
     let nextTouchpoint: 'Visit' | 'Call' | null = 'Visit';
     if (count >= 7) {
       nextTouchpoint = null;

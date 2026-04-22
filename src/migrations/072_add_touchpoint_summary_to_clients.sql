@@ -23,5 +23,5 @@ CREATE INDEX IF NOT EXISTS idx_clients_next_touchpoint
 
 -- Add comment for documentation
 COMMENT ON COLUMN clients.touchpoint_summary IS 'JSONB array of all touchpoints with full details (id, number, type, date, reason, status, user_id, time_in, time_out, location)';
-COMMENT ON COLUMN clients.touchpoint_number IS 'Current touchpoint count (1-7). Defaults to 1 for new clients.';
-COMMENT ON COLUMN clients.next_touchpoint IS 'Next touchpoint type based on pattern (1:Visit, 2:Call, 3:Call, 4:Visit, 5:Call, 6:Call, 7:Visit). NULL when complete.';
+COMMENT ON COLUMN clients.touchpoint_number IS 'Current touchpoint count (unlimited). Defaults to 1 for new clients.';
+COMMENT ON COLUMN clients.next_touchpoint IS 'Next touchpoint type (backend-determined). NULL when complete.';

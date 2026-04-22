@@ -27,7 +27,7 @@ DROP MATERIALIZED VIEW IF EXISTS client_touchpoint_summary_mv CASCADE;
 -- ============================================
 -- Pre-computes touchpoint data for all clients using:
 -- 1. Window functions for totals and counts
--- 2. Touchpoint sequence pattern (1:Visit, 2:Call, 3:Call, 4:Visit, 5:Call, 6:Call, 7:Visit)
+-- 2. Backend-determined touchpoint types (unlimited touchpoints)
 -- 3. LEFT JOIN to ensure all clients are included (even those with 0 touchpoints)
 CREATE MATERIALIZED VIEW client_touchpoint_summary_mv AS
 SELECT
@@ -36,8 +36,8 @@ SELECT
   COALESCE(tp.completed_count, 0) AS completed_count,
   tp.last_touchpoint_type,
   tp.last_touchpoint_date,
-  -- Calculate next touchpoint based on sequence pattern
-  -- Pattern: 1:Visit, 2:Call, 3:Call, 4:Visit, 5:Call, 6:Call, 7:Visit
+  -- DEPRECATED: Pattern-based calculation (legacy code)
+  -- Modern system uses backend-determined types (unlimited touchpoints)
   CASE
     WHEN COALESCE(tp.total_count, 0) >= 7 THEN NULL
     ELSE COALESCE(tp.total_count, 0) + 1

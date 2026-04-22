@@ -48,7 +48,7 @@ const createApprovalSchema = z.object({
   type: z.enum(['client', 'udi', 'address_add', 'address_edit', 'address_delete', 'phone_add', 'phone_edit', 'phone_delete', 'client_delete', 'loan_release', 'loan_release_v2']),
   client_id: z.string().uuid().optional(),
   user_id: z.string().uuid().optional(),
-  touchpoint_number: z.number().int().min(1).max(7).optional(),
+  touchpoint_number: z.number().int().min(1).optional(), // unlimited touchpoints
   role: z.string().optional(),
   reason: z.string().optional(),
   notes: z.string().optional(),

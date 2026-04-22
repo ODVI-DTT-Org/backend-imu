@@ -260,21 +260,11 @@ export async function canCreateTouchpointType(
   touchpointNumber: number,
   touchpointType: 'Visit' | 'Call'
 ): Promise<{ allowed: boolean; reason?: string }> {
-  // Validate touchpoint number
-  const visitNumbers = [1, 4, 7];
-  const callNumbers = [2, 3, 5, 6];
-
-  if (touchpointType === 'Visit' && !visitNumbers.includes(touchpointNumber)) {
+  // Validate touchpoint number is positive (unlimited touchpoints)
+  if (touchpointNumber < 1) {
     return {
       allowed: false,
-      reason: `Invalid touchpoint number ${touchpointNumber} for Visit type. Valid numbers: ${visitNumbers.join(', ')}`,
-    };
-  }
-
-  if (touchpointType === 'Call' && !callNumbers.includes(touchpointNumber)) {
-    return {
-      allowed: false,
-      reason: `Invalid touchpoint number ${touchpointNumber} for Call type. Valid numbers: ${callNumbers.join(', ')}`,
+      reason: 'touchpoint_number must be a positive number',
     };
   }
 

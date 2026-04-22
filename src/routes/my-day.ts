@@ -27,7 +27,7 @@ const VALID_STATUSES = ['Interested', 'Undecided', 'Not Interested', 'Completed'
 // Validation schemas
 const visitFormSchema = z.object({
   client_id: z.string().uuid(),
-  touchpoint_number: z.number().int().min(1).max(7),
+  touchpoint_number: z.number().int().min(1), // unlimited touchpoints
   type: z.enum(['Visit', 'Call']),
   reason: z.string(),
   status: z.enum(['Interested', 'Undecided', 'Not Interested', 'Completed', 'Follow-up Needed']).optional(),

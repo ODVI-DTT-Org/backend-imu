@@ -627,8 +627,8 @@ clients.get('/', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: loanReleased, // COMMENTED OUT for Unli Touchpoint: No 7-touchpoint limit - complete only when loan released
-          // is_complete: completedCount >= 7 || loanReleased, // Complete when 7/7 touchpoints OR loan released
+          is_complete: loanReleased, // Unlimited touchpoints: complete only when loan released
+          // is_complete: completedCount >= 7 || loanReleased, // REMOVED: No 7-touchpoint limit
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,

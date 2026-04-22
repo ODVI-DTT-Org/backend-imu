@@ -35,10 +35,10 @@ ON targets (user_id, period, year, COALESCE(month, 0), COALESCE(week, 0));
 -- 2. MISSING CONSTRAINTS
 -- ============================================
 
--- Touchpoint number must be 1-7
+-- Touchpoint number must be positive (unlimited touchpoints)
 ALTER TABLE touchpoints DROP CONSTRAINT IF EXISTS chk_touchpoint_number;
 ALTER TABLE touchpoints ADD CONSTRAINT chk_touchpoint_number
-CHECK (touchpoint_number >= 1 AND touchpoint_number <= 7);
+CHECK (touchpoint_number >= 1);
 
 -- Status constraints
 ALTER TABLE approvals DROP CONSTRAINT IF EXISTS chk_approvals_status;
