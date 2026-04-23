@@ -83,3 +83,15 @@ streams:
         a.rejection_reason, a.created_at, a.updated_at
       FROM approvals a
       WHERE a.status = 'pending'
+
+  # ============================================================
+  # CLIENT FAVORITES - User's starred clients
+  # ============================================================
+
+  # Client favorites - sync user's favorited clients
+  client_favorites:
+    auto_subscribe: true
+    query: |
+      SELECT cf.id, cf.user_id, cf.client_id, cf.created_at
+      FROM client_favorites cf
+      WHERE cf.user_id = auth.user_id()
