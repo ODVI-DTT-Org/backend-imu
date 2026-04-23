@@ -366,6 +366,30 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
   }
 });
 
+// GET /api/touchpoints/max-number - Get maximum touchpoint number across all touchpoints
+touchpoints.get('/max-number', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
+  try {
+    const result = await pool.query(`
+      SELECT COALESCE(MAX(touchpoint_number), 7) as max_number
+      FROM touchpoints
+    `);
+
+    const maxNumber = parseInt(result.rows[0].max_number) || 7;
+
+    return c.json({
+      maxNumber,
+      message: `Maximum touchpoint number: ${maxNumber}`
+    });
+  } catch (error) {
+    console.error('Get max touchpoint number error:', error);
+    // Return default value on error
+    return c.json({
+      maxNumber: 7,
+      message: 'Maximum touchpoint number: 7 (default)'
+    });
+  }
+});
+
 // GET /api/touchpoints/:id/gps-validate - Validate touchpoint GPS location
 touchpoints.get('/:id/gps-validate', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   const touchpointId = c.req.param('id');
