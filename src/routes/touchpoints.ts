@@ -370,22 +370,24 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
 touchpoints.get('/max-number', authMiddleware, requirePermission('touchpoints', 'read'), async (c) => {
   try {
     const result = await pool.query(`
-      SELECT COALESCE(MAX(touchpoint_number), 7) as max_number
+      SELECT COALESCE(MAX(touchpoint_number), 0) as max_number
       FROM touchpoints
     `);
 
-    const maxNumber = parseInt(result.rows[0].max_number) || 7;
+    const maxNumber = parseInt(result.rows[0].max_number) || 0;
 
     return c.json({
       maxNumber,
-      message: `Maximum touchpoint number: ${maxNumber}`
+      message: maxNumber > 0
+        ? `Maximum touchpoint number: ${maxNumber}`
+        : 'No touchpoints found'
     });
   } catch (error) {
     console.error('Get max touchpoint number error:', error);
-    // Return default value on error
+    // Return 0 on error (no touchpoints)
     return c.json({
-      maxNumber: 7,
-      message: 'Maximum touchpoint number: 7 (default)'
+      maxNumber: 0,
+      message: 'No touchpoints found'
     });
   }
 });
