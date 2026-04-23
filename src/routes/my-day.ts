@@ -314,7 +314,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
 
     // Get itineraries for the target date with client info
     const itinerariesResult = await pool.query(
-      `SELECT i.*, c.first_name, c.last_name, c.email, c.phone, c.client_type,
+      `SELECT i.*, c.first_name, c.middle_name, c.last_name, c.email, c.phone, c.client_type,
               a.name as agency_name,
               u.name as assigned_by_name
        FROM itineraries i
@@ -409,9 +409,16 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
 
       // NEW: No pattern - just show the number
       // The type will be determined by the user's role when creating the touchpoint
+
+      // Calculate full_name: "Last, First Middle" format
+      const middleName = row.middle_name || '';
+      const firstNameParts = [row.first_name, middleName].filter((p: string) => p && p.trim().length > 0);
+      const fullName = `${row.last_name}, ${firstNameParts.join(' ')}`.trim();
+
       return {
         id: row.id,
         client_id: row.client_id,
+        full_name: fullName, // ✅ ADD full_name at root level
         scheduled_date: row.scheduled_date,
         scheduled_time: row.scheduled_time,
         status: row.status,
@@ -422,6 +429,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
         time_in: latestTp?.created_at || null,
         client: {
           first_name: row.first_name,
+          middle_name: row.middle_name,
           last_name: row.last_name,
           email: row.email,
           phone: row.phone,
@@ -437,7 +445,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     // Get completed touchpoints for the target date
     const completedTouchpointsResult = await pool.query(
       `SELECT t.id, t.client_id, t.touchpoint_number, t.type, t.rejection_reason, t.visit_id, t.call_id,
-              t.created_at, t.updated_at, c.first_name, c.last_name, c.client_type
+              t.created_at, t.updated_at, c.first_name, c.middle_name, c.last_name, c.client_type
        FROM touchpoints t
        JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
        WHERE t.user_id = $1 AND t.created_at::date = $2
@@ -445,22 +453,31 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       [user.sub, targetDate]
     );
 
-    const completedTouchpoints = completedTouchpointsResult.rows.map(row => ({
-      id: row.id,
-      client_id: row.client_id,
-      touchpoint_number: row.touchpoint_number,
-      type: row.type,
-      rejection_reason: row.rejection_reason,
-      visit_id: row.visit_id,
-      call_id: row.call_id,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      client: {
-        first_name: row.first_name,
-        last_name: row.last_name,
-        client_type: row.client_type,
-      },
-    }));
+    const completedTouchpoints = completedTouchpointsResult.rows.map(row => {
+      // Calculate full_name: "Last, First Middle" format
+      const middleName = row.middle_name || '';
+      const firstNameParts = [row.first_name, middleName].filter((p: string) => p && p.trim().length > 0);
+      const fullName = `${row.last_name}, ${firstNameParts.join(' ')}`.trim();
+
+      return {
+        id: row.id,
+        client_id: row.client_id,
+        full_name: fullName, // ✅ ADD full_name at root level
+        touchpoint_number: row.touchpoint_number,
+        type: row.type,
+        rejection_reason: row.rejection_reason,
+        visit_id: row.visit_id,
+        call_id: row.call_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        client: {
+          first_name: row.first_name,
+          middle_name: row.middle_name,
+          last_name: row.last_name,
+          client_type: row.client_type,
+        },
+      };
+    });
 
     const totalTasks = tasks.length;
     const completedTasks = tasks.filter(t => t.status === 'completed').length;

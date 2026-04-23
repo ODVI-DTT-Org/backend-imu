@@ -234,13 +234,13 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     if (loanReleased) {
       // loan_released can be a boolean or an array of booleans
       const loanReleasedValues = Array.isArray(loanReleased) ? loanReleased : [loanReleased];
-      const loanConditions = loanReleasedValues.map((v: string) => {
+      const loanConditions = loanReleasedValues.map((v: string | boolean) => {
         const boolValue = v === 'true' || v === true;
         return `c.loan_released = $${paramIndex++}`;
       });
       if (loanConditions.length > 0) {
         conditions.push(`(${loanConditions.join(' OR ')})`);
-        loanReleasedValues.forEach((v: string) => {
+        loanReleasedValues.forEach((v: string | boolean) => {
           params.push(v === 'true' || v === true);
         });
       }

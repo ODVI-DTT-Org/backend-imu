@@ -172,6 +172,7 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
 
       return {
         ...mapRowToItinerary(row),
+        full_name: clientDisplayName, // ✅ ADD full_name at root level
         expand: {
           client_id: {
             id: row.client_id,
@@ -215,7 +216,7 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
 
     const result = await pool.query(
       `SELECT i.*,
-              c.first_name as client_first_name, c.last_name as client_last_name,
+              c.first_name as client_first_name, c.middle_name as client_middle_name, c.last_name as client_last_name,
               c.municipality as client_municipality,
               u.first_name as user_first_name, u.last_name as user_last_name,
               cb.first_name as created_by_first_name, cb.last_name as created_by_last_name
@@ -240,8 +241,14 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
       }
     }
 
+    // Calculate display_name for client: "Surname, First Name MiddleName"
+    const middleName = itinerary.client_middle_name || '';
+    const nameParts = [itinerary.client_first_name, middleName].filter((p: string) => p && p.trim().length > 0);
+    const clientDisplayName = `${itinerary.client_last_name}, ${nameParts.join(' ')}`;
+
     return c.json({
       ...mapRowToItinerary(itinerary),
+      full_name: clientDisplayName, // ✅ ADD full_name at root level
       expand: {
         user_id: itinerary.user_id ? {
           id: itinerary.user_id,
@@ -250,7 +257,9 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
         client_id: {
           id: itinerary.client_id,
           first_name: itinerary.client_first_name,
+          middle_name: itinerary.client_middle_name,
           last_name: itinerary.client_last_name,
+          display_name: clientDisplayName,
           municipality: itinerary.client_municipality,
         },
         created_by: itinerary.created_by ? {
@@ -360,20 +369,14 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     // Validate and insert each client individually
     for (const clientId of client_ids) {
       try {
-        // Validate that client exists and check loan_released status
+        // Validate that client exists (loan released clients are allowed)
         const clientCheck = await client.query(
-          `SELECT id, municipality, loan_released::int as loan_released_bool FROM clients WHERE id = $1 AND deleted_at IS NULL`,
+          `SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL`,
           [clientId]
         );
 
         if (clientCheck.rows.length === 0) {
           errors.push({ client_id: clientId, error: 'Client not found' });
-          continue;
-        }
-
-        const clientData = clientCheck.rows[0];
-        if (clientData.loan_released || clientData.loan_released_bool) {
-          errors.push({ client_id: clientId, error: 'Cannot add client: Loan has already been released' });
           continue;
         }
 
