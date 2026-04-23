@@ -1479,6 +1479,7 @@ CREATE PUBLICATION powersync FOR TABLE
     user_profiles,
     user_locations,
     approvals,
+    client_favorites,
     psgc,
     touchpoint_reasons;
 
