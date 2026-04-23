@@ -230,7 +230,10 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
               c.middle_name as client_middle_name,
               u.first_name as user_first_name, u.last_name as user_last_name,
               COALESCE(v.photo_url, ca.photo_url) AS photo_url,
-              COALESCE(v.reason, ca.reason) AS reason
+              COALESCE(v.reason, ca.reason) AS reason,
+              -- Get status and remarks from visits/calls tables, fallback to touchpoints table
+              COALESCE(v.status, ca.status, t.status) AS status,
+              COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
@@ -418,7 +421,10 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               c.client_type as client_client_type,
               u.first_name as user_first_name, u.last_name as user_last_name,
               COALESCE(v.photo_url, ca.photo_url) AS photo_url,
-              COALESCE(v.reason, ca.reason) AS reason
+              COALESCE(v.reason, ca.reason) AS reason,
+              -- Get status and remarks from visits/calls tables, fallback to touchpoints table
+              COALESCE(v.status, ca.status, t.status) AS status,
+              COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
