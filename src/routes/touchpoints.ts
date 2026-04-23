@@ -140,6 +140,9 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
     const endDate = c.req.query('end_date');
     const municipality = c.req.query('municipality');
     const province = c.req.query('province');
+    const touchpointMin = c.req.query('touchpoint_min');
+    const touchpointMax = c.req.query('touchpoint_max');
+    const loanReleased = c.req.query('loan_released');
 
     const offset = (page - 1) * perPage;
     const conditions: string[] = [];
@@ -212,6 +215,35 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       conditions.push(`t.created_at::date <= $${paramIndex}`);
       params.push(endDate);
       paramIndex++;
+    }
+
+    // Touchpoint range filter (min/max)
+    if (touchpointMin) {
+      conditions.push(`t.touchpoint_number >= $${paramIndex}`);
+      params.push(parseInt(touchpointMin));
+      paramIndex++;
+    }
+
+    if (touchpointMax) {
+      conditions.push(`t.touchpoint_number <= $${paramIndex}`);
+      params.push(parseInt(touchpointMax));
+      paramIndex++;
+    }
+
+    // Loan released filter
+    if (loanReleased) {
+      // loan_released can be a boolean or an array of booleans
+      const loanReleasedValues = Array.isArray(loanReleased) ? loanReleased : [loanReleased];
+      const loanConditions = loanReleasedValues.map((v: string) => {
+        const boolValue = v === 'true' || v === true;
+        return `c.loan_released = $${paramIndex++}`;
+      });
+      if (loanConditions.length > 0) {
+        conditions.push(`(${loanConditions.join(' OR ')})`);
+        loanReleasedValues.forEach((v: string) => {
+          params.push(v === 'true' || v === true);
+        });
+      }
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
