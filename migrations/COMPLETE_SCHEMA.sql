@@ -1460,6 +1460,25 @@ INSERT INTO touchpoint_reasons (reason_code, label, touchpoint_type, role, categ
 ON CONFLICT (reason_code, role, touchpoint_type) DO NOTHING;
 
 -- ============================================================
+-- CLIENT FAVORITES (was missing from canonical schema; required by powersync publication below)
+-- Source: migrations/092_create_client_favorites.sql
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS client_favorites (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    client_id UUID NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT unique_user_client UNIQUE (user_id, client_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_client_favorites_user_id ON client_favorites(user_id);
+CREATE INDEX IF NOT EXISTS idx_client_favorites_client_id ON client_favorites(client_id);
+CREATE INDEX IF NOT EXISTS idx_client_favorites_created_at ON client_favorites(created_at DESC);
+
+COMMENT ON TABLE client_favorites IS 'Stores user favorites/stars for clients';
+
+-- ============================================================
 -- POWERSYNC PUBLICATION SETUP
 -- ============================================================
 
