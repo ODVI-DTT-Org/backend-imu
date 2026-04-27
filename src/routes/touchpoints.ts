@@ -756,6 +756,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         address: body.address || null,
         latitude: body.latitude || null,
         longitude: body.longitude || null,
+        barangay: body.barangay || null,
+        municipality: body.municipality || null,
+        province: body.province || null,
+        region: body.region || null,
       };
 
       // Create a visit record from the touchpoint data
@@ -763,9 +767,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         `INSERT INTO visits (
           client_id, user_id, type, time_in, time_out,
           odometer_arrival, odometer_departure, photo_url, remarks,
-          reason, status, address, latitude, longitude, source
+          reason, status, address, latitude, longitude, source,
+          barangay, municipality, province, region
         ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
         ) RETURNING *`,
         [
           validated.client_id,
@@ -783,6 +788,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
           visitData.latitude,
           visitData.longitude,
           'IMU',
+          visitData.barangay,
+          visitData.municipality,
+          visitData.province,
+          visitData.region,
         ]
       );
 

@@ -725,13 +725,18 @@ myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints'
       const visitResult = await dbClient.query(`
         INSERT INTO visits (
           id, client_id, user_id, type, time_in, time_out,
-          latitude, longitude, address, photo_url, remarks
+          latitude, longitude, address, photo_url, remarks,
+          barangay, municipality, province, region
         ) VALUES (
-          gen_random_uuid(), $1, $2, 'regular_visit', $3, $4, $5, $6, $7, $8, $9
+          gen_random_uuid(), $1, $2, 'regular_visit', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
         ) RETURNING id
       `, [clientId, user.sub, validated.time_in, validated.time_out,
           validated.latitude, validated.longitude, validated.address,
-          validated.photo_url, validated.remarks ?? validated.notes ?? null]);
+          validated.photo_url, validated.remarks ?? validated.notes ?? null,
+          (validated as any).barangay ?? null,
+          (validated as any).municipality ?? null,
+          (validated as any).province ?? null,
+          (validated as any).region ?? null]);
 
       // UPDATE itineraries (with error handling)
       const itineraryResult = await dbClient.query(`
@@ -861,6 +866,10 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     const remarks = (body['remarks'] || body['notes']) as string | undefined;
     const latitudeStr = body['latitude'] as string | undefined;
     const longitudeStr = body['longitude'] as string | undefined;
+    const visitBarangay = body['barangay'] as string | undefined;
+    const visitMunicipality = body['municipality'] as string | undefined;
+    const visitProvince = body['province'] as string | undefined;
+    const visitRegion = body['region'] as string | undefined;
 
     // Extract files
     const photoFile = body['photo'] as File | undefined;
@@ -1082,16 +1091,21 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
         const visitResult = await pool.query(
           `INSERT INTO visits (
             client_id, user_id, type, reason, status, remarks,
-            address, latitude, longitude, photo_url, time_in, time_out
+            address, latitude, longitude, photo_url, time_in, time_out,
+            barangay, municipality, province, region
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
           ) RETURNING *`,
           [
             clientId, user.sub, 'regular_visit',
             reason, status || 'Interested', remarks,
             address, latitude, longitude,
             uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
-            timeArrival || null, timeDeparture || null
+            timeArrival || null, timeDeparture || null,
+            visitBarangay || null,
+            visitMunicipality || null,
+            visitProvince || null,
+            visitRegion || null,
           ]
         );
 
@@ -1394,6 +1408,10 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     const remarks = (body['remarks'] || body['notes']) as string | undefined;
     const latitudeStr = body['latitude'] as string | undefined;
     const longitudeStr = body['longitude'] as string | undefined;
+    const visitBarangay = body['barangay'] as string | undefined;
+    const visitMunicipality = body['municipality'] as string | undefined;
+    const visitProvince = body['province'] as string | undefined;
+    const visitRegion = body['region'] as string | undefined;
     const scheduledTime = body['scheduled_time'] as string | undefined;
 
     // Extract files
@@ -1611,16 +1629,21 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
         const visitResult = await pool.query(
           `INSERT INTO visits (
             client_id, user_id, type, reason, status, remarks,
-            address, latitude, longitude, photo_url, time_in, time_out
+            address, latitude, longitude, photo_url, time_in, time_out,
+            barangay, municipality, province, region
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
           ) RETURNING *`,
           [
             clientId, user.sub, 'regular_visit',
             reason, status || 'Interested', remarks,
             address, latitude, longitude,
             uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
-            timeArrival || null, timeDeparture || null
+            timeArrival || null, timeDeparture || null,
+            visitBarangay || null,
+            visitMunicipality || null,
+            visitProvince || null,
+            visitRegion || null,
           ]
         );
 

@@ -99,6 +99,10 @@ function mapRowToApproval(row: Record<string, any>) {
     visit_latitude: row.visit_latitude ?? null,
     visit_longitude: row.visit_longitude ?? null,
     visit_address: row.visit_address ?? null,
+    visit_barangay: row.visit_barangay ?? null,
+    visit_municipality: row.visit_municipality ?? null,
+    visit_province: row.visit_province ?? null,
+    visit_region: row.visit_region ?? null,
     visit_time_in: row.visit_time_in ?? null,
     visit_time_out: row.visit_time_out ?? null,
     updated_client_information: row.updated_client_information,
@@ -205,6 +209,10 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
               v.latitude as visit_latitude,
               v.longitude as visit_longitude,
               v.address as visit_address,
+              v.barangay as visit_barangay,
+              v.municipality as visit_municipality,
+              v.province as visit_province,
+              v.region as visit_region,
               v.time_in as visit_time_in,
               v.time_out as visit_time_out
        FROM approvals a
@@ -212,7 +220,7 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
        LEFT JOIN users car ON car.id = a.user_id
        LEFT JOIN users u ON u.id = a.approved_by
        LEFT JOIN LATERAL (
-         SELECT remarks, photo_url, latitude, longitude, address, time_in, time_out FROM visits
+         SELECT remarks, photo_url, latitude, longitude, address, barangay, municipality, province, region, time_in, time_out FROM visits
          WHERE a.type IN ('udi', 'loan_release_v2')
            AND left(a.notes, 1) = '{'
            AND id = (a.notes::jsonb->>'visit_id')::uuid
