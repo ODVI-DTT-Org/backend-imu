@@ -525,6 +525,12 @@ clients.get('/', authMiddleware, async (c) => {
       }
     }
 
+    // Restrict to released-loan clients when the mobile filter sends loan_released=true.
+    const loanReleasedQuery = c.req.query('loan_released');
+    if (loanReleasedQuery === 'true' || loanReleasedQuery === '1') {
+      baseWhereConditions.push(`c.loan_released = true`);
+    }
+
     // Build WHERE clause for main query
     // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
     // This will be handled differently in each endpoint
