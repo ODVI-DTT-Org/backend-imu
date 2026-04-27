@@ -531,6 +531,26 @@ clients.get('/', authMiddleware, async (c) => {
       baseWhereConditions.push(`c.loan_released = true`);
     }
 
+    // visit_status: per-touchpoint interest level (INTERESTED, NOT_INTERESTED,
+    // UNDECIDED, COMPLETED, FOLLOW_UP_NEEDED). Independent of touchpoint_status
+    // (lifecycle) — those have separate semantics. Filters using the
+    // denormalized clients.touchpoint_summary JSONB array maintained by the
+    // trigger in migrations/073, so no JOIN against touchpoints is needed.
+    const visitStatusQuery = c.req.queries('visit_status');
+    const visitStatusValues = visitStatusQuery?.length
+      ? visitStatusQuery.flatMap(v => v.split(',')).map(s => s.trim()).filter(Boolean)
+      : [];
+    if (visitStatusValues.length > 0) {
+      baseWhereConditions.push(
+        `EXISTS (
+          SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
+          WHERE elem->>'status' = ANY($${baseParamIndex}::text[])
+        )`
+      );
+      baseParams.push(visitStatusValues);
+      baseParamIndex++;
+    }
+
     // Build WHERE clause for main query
     // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
     // This will be handled differently in each endpoint
@@ -878,6 +898,24 @@ clients.get('/assigned', authMiddleware, async (c) => {
       if (tsConds.length > 0) {
         baseWhereConditions.push(`(${tsConds.join(' OR ')})`);
       }
+    }
+
+    // visit_status: per-touchpoint interest level (INTERESTED, NOT_INTERESTED,
+    // UNDECIDED, COMPLETED, FOLLOW_UP_NEEDED). See /api/clients above for the
+    // rationale; same EXISTS-on-touchpoint_summary trick avoids a JOIN.
+    const visitStatusQueryAssigned = c.req.queries('visit_status');
+    const visitStatusValuesAssigned = visitStatusQueryAssigned?.length
+      ? visitStatusQueryAssigned.flatMap(v => v.split(',')).map(s => s.trim()).filter(Boolean)
+      : [];
+    if (visitStatusValuesAssigned.length > 0) {
+      baseWhereConditions.push(
+        `EXISTS (
+          SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
+          WHERE elem->>'status' = ANY($${baseParamIndex}::text[])
+        )`
+      );
+      baseParams.push(visitStatusValuesAssigned);
+      baseParamIndex++;
     }
 
     // Build WHERE clause for main query
