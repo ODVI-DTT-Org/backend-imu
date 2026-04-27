@@ -43,6 +43,7 @@ import reportsRoutes from './routes/reports.js';
 import approvalsRoutes from './routes/approvals.js';
 import auditLogsRoutes from './routes/audit-logs.js';
 import psgcRoutes from './routes/psgc.js';
+import geocodeRoutes from './routes/geocode.js';
 import touchpointReasonsRoutes from './routes/touchpoint-reasons.js';
 import debugAuditRoutes from './routes/debug-audit.js';
 import touchpointsAnalyticsRoutes from './routes/touchpoints-analytics.js';
@@ -662,6 +663,7 @@ app.get('/', (c) => {
       approvals: '/api/approvals',
       auditLogs: '/api/audit-logs',
       psgc: '/api/psgc',
+      geocode: '/api/geocode',
       touchpointReasons: '/api/touchpoint-reasons',
       touchpointsAnalytics: '/api/touchpoints/analytics',
       errorLogs: '/api/error-logs',
@@ -696,6 +698,7 @@ app.route('/api/reports', reportsRoutes);
 app.route('/api/approvals', approvalsRoutes);
 app.route('/api/audit-logs', auditLogsRoutes);
 app.route('/api/psgc', psgcRoutes);
+app.route('/api/geocode', geocodeRoutes);
 app.route('/api/touchpoint-reasons', touchpointReasonsRoutes);
 app.route('/api/debug-audit', debugAuditRoutes);
 app.route('/api/search', searchRoutes);
