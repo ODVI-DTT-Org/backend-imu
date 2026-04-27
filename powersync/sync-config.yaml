@@ -1,97 +1,217 @@
-# PowerSync Sync Configuration for IMU
-# Docs: https://docs.powersync.com/sync/streams/overview
-#
-# BUSINESS RULE: Caravan users can VIEW all clients
-# Touchpoint status controls who can CREATE touchpoints
-
 config:
   edition: 3
 
-# Define Sync Streams to control which data is synced to each user
 streams:
-  # ============================================================
-  # GLOBAL DATA - Sync to all users (reference tables)
-  # ============================================================
-
-  # PSGC geographic data (single table with all locations)
-  psgc:
+  user_profiles:
     auto_subscribe: true
     query: |
-      SELECT id, region, province, mun_city_kind, mun_city, barangay, pin_location, zip_code
-      FROM psgc
+      SELECT id, user_id, name, email, role, avatar_url, updated_at
+      FROM user_profiles
+      WHERE user_id = auth.user_id()
 
-  # Touchpoint reasons (Caravan role only)
-  touchpoint_reasons:
+  user_locations:
     auto_subscribe: true
     query: |
-      SELECT id, reason_code, label, touchpoint_type, role, category, sort_order, is_active
-      FROM touchpoint_reasons
-      WHERE is_active = true AND role = 'caravan'
-
-  # ============================================================
-  # USER-SPECIFIC DATA
-  # ============================================================
-
-  # User municipality assignments - for location-based filtering
-  # Using separate province and municipality columns
-  user_municipalities:
-    auto_subscribe: true
-    query: |
-      SELECT id, user_id, province, municipality, assigned_at, assigned_by, deleted_at
+      SELECT id, user_id, province, municipality, assigned_at, assigned_by,
+        deleted_at, created_at, updated_at
       FROM user_locations
       WHERE user_id = auth.user_id() AND deleted_at IS NULL
 
-  # ============================================================
-  # CLIENT DATA - Territory-based filtering for ALL users
-  # ============================================================
-
-  # Clients - sync all clients
-  # Note: Territory filtering done in mobile app local sync rules
-  clients:
-    auto_subscribe: true
-    query: |
-      SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
-        c.birth_date, c.pan, c.client_type, c.product_type, c.market_type, c.pension_type,
-        c.psgc_id, c.province, c.municipality, c.region, c.barangay,
-        c.is_starred, c.loan_released, c.udi,
-        c.created_at, c.updated_at
-      FROM clients c
-
-  # ============================================================
-  # TOUCHPOINT & ITINERARY DATA
-  # ============================================================
-
-  # Touchpoints - all touchpoints
-  touchpoints:
-    auto_subscribe: true
-    query: |
-      SELECT * FROM touchpoints
-
-  # Itineraries - user's own itineraries
-  itineraries:
-    auto_subscribe: true
-    query: |
-      SELECT * FROM itineraries WHERE user_id = auth.user_id()
-
-  # Approvals - for caravan/tele approval workflow
-  approvals:
-    auto_subscribe: true
-    query: |
-      SELECT a.id, a.type, a.status, a.client_id, a.user_id, a.touchpoint_number,
-        a.role, a.reason, a.notes, a.updated_client_information, a.updated_udi,
-        a.udi_number, a.approved_by, a.approved_at, a.rejected_by, a.rejected_at,
-        a.rejection_reason, a.created_at, a.updated_at
-      FROM approvals a
-      WHERE a.status = 'pending'
-
-  # ============================================================
-  # CLIENT FAVORITES - User's starred clients
-  # ============================================================
-
-  # Client favorites - sync user's favorited clients
   client_favorites:
     auto_subscribe: true
     query: |
-      SELECT cf.id, cf.user_id, cf.client_id, cf.created_at
-      FROM client_favorites cf
-      WHERE cf.user_id = auth.user_id()
+      SELECT id, user_id, client_id, created_at
+      FROM client_favorites
+      WHERE user_id = auth.user_id()
+
+  visits:
+    auto_subscribe: true
+    query: |
+      SELECT id, user_id, client_id, type, odometer_arrival,
+        odometer_departure, photo_url, notes, reason, status,
+        address, latitude, longitude, time_in, time_out,
+        source, created_at, updated_at
+      FROM visits
+      WHERE user_id = auth.user_id()
+
+  calls:
+    auto_subscribe: true
+    query: |
+      SELECT id, client_id, user_id, phone_number, type,
+        dial_time, duration, notes, reason, status,
+        photo_url, source, created_at, updated_at
+      FROM calls
+      WHERE user_id = auth.user_id()
+
+  touchpoints:
+    auto_subscribe: true
+    query: |
+      SELECT id, client_id, user_id, touchpoint_number, type,
+        date, status, next_visit_date, notes, rejection_reason,
+        visit_id, call_id, is_legacy, created_at, updated_at
+      FROM touchpoints
+      WHERE user_id = auth.user_id()
+
+  itineraries:
+    auto_subscribe: true
+    query: |
+      SELECT id, user_id, client_id, scheduled_date, scheduled_time,
+        status, priority, notes, created_by, created_at, updated_at
+      FROM itineraries
+      WHERE user_id = auth.user_id()
+
+  groups:
+    auto_subscribe: true
+    query: |
+      SELECT id, name, description, area_manager_id,
+        assistant_area_manager_id, caravan_id, created_at
+      FROM groups
+      WHERE caravan_id = auth.user_id()
+
+  targets:
+    auto_subscribe: true
+    query: |
+      SELECT id, user_id, period, year, month, quarter, week,
+        target_clients, target_touchpoints, target_visits, target_calls,
+        created_at, updated_at, created_by
+      FROM targets
+      WHERE user_id = auth.user_id()
+
+  attendance:
+    auto_subscribe: true
+    query: |
+      SELECT id, user_id, date, time_in, time_out,
+        location_in_lat, location_in_lng, location_out_lat, location_out_lng,
+        notes, created_at
+      FROM attendance
+      WHERE user_id = auth.user_id()
+
+  approvals:
+    auto_subscribe: true
+    query: |
+      SELECT id, type, status, client_id, user_id, touchpoint_number,
+        role, reason, notes, updated_client_information, updated_udi,
+        udi_number, approved_by, approved_at, rejected_by, rejected_at,
+        rejection_reason, created_at, updated_at
+      FROM approvals
+      WHERE user_id = auth.user_id()
+
+  clients_territory:
+    auto_subscribe: true
+    query: |
+      SELECT id, first_name, last_name, middle_name, birth_date,
+        email, phone, agency_name, department, position,
+        employment_status, payroll_date, tenure, client_type,
+        product_type, market_type, pension_type, loan_type, pan,
+        facebook_link, remarks, agency_id, psgc_id,
+        region, province, municipality, barangay, udi,
+        loan_released, loan_released_at, created_at, updated_at,
+        created_by, deleted_at, deleted_by,
+        touchpoint_summary, touchpoint_number, next_touchpoint
+      FROM clients
+      WHERE deleted_at IS NULL
+        AND psgc_id IS NOT NULL
+        AND psgc_id IN (
+          SELECT id FROM psgc
+          WHERE province IN (
+            SELECT province FROM user_locations
+            WHERE user_id = auth.user_id() AND deleted_at IS NULL
+          )
+          AND mun_city IN (
+            SELECT municipality FROM user_locations
+            WHERE user_id = auth.user_id() AND deleted_at IS NULL
+          )
+        )
+
+  clients_favorited:
+    auto_subscribe: true
+    query: |
+      SELECT id, first_name, last_name, middle_name, birth_date,
+        email, phone, agency_name, department, position,
+        employment_status, payroll_date, tenure, client_type,
+        product_type, market_type, pension_type, loan_type, pan,
+        facebook_link, remarks, agency_id, psgc_id,
+        region, province, municipality, barangay, udi,
+        loan_released, loan_released_at, created_at, updated_at,
+        created_by, deleted_at, deleted_by,
+        touchpoint_summary, touchpoint_number, next_touchpoint
+      FROM clients
+      WHERE deleted_at IS NULL
+        AND id IN (
+          SELECT client_id FROM client_favorites
+          WHERE user_id = auth.user_id()
+        )
+
+  addresses_territory:
+    auto_subscribe: true
+    query: |
+      SELECT id, client_id, type, street, barangay, city, province,
+        postal_code, latitude, longitude, is_primary, psgc_id,
+        street_address, created_at, updated_at, deleted_at
+      FROM addresses
+      WHERE deleted_at IS NULL
+        AND client_id IN (
+          SELECT id FROM clients
+          WHERE deleted_at IS NULL
+            AND psgc_id IS NOT NULL
+            AND psgc_id IN (
+              SELECT id FROM psgc
+              WHERE province IN (
+                SELECT province FROM user_locations
+                WHERE user_id = auth.user_id() AND deleted_at IS NULL
+              )
+              AND mun_city IN (
+                SELECT municipality FROM user_locations
+                WHERE user_id = auth.user_id() AND deleted_at IS NULL
+              )
+            )
+        )
+
+  addresses_favorited:
+    auto_subscribe: true
+    query: |
+      SELECT id, client_id, type, street, barangay, city, province,
+        postal_code, latitude, longitude, is_primary, psgc_id,
+        street_address, created_at, updated_at, deleted_at
+      FROM addresses
+      WHERE deleted_at IS NULL
+        AND client_id IN (
+          SELECT client_id FROM client_favorites
+          WHERE user_id = auth.user_id()
+        )
+
+  phone_numbers_territory:
+    auto_subscribe: true
+    query: |
+      SELECT id, client_id, number, label, is_primary,
+        created_at, updated_at, deleted_at
+      FROM phone_numbers
+      WHERE deleted_at IS NULL
+        AND client_id IN (
+          SELECT id FROM clients
+          WHERE deleted_at IS NULL
+            AND psgc_id IS NOT NULL
+            AND psgc_id IN (
+              SELECT id FROM psgc
+              WHERE province IN (
+                SELECT province FROM user_locations
+                WHERE user_id = auth.user_id() AND deleted_at IS NULL
+              )
+              AND mun_city IN (
+                SELECT municipality FROM user_locations
+                WHERE user_id = auth.user_id() AND deleted_at IS NULL
+              )
+            )
+        )
+
+  phone_numbers_favorited:
+    auto_subscribe: true
+    query: |
+      SELECT id, client_id, number, label, is_primary,
+        created_at, updated_at, deleted_at
+      FROM phone_numbers
+      WHERE deleted_at IS NULL
+        AND client_id IN (
+          SELECT client_id FROM client_favorites
+          WHERE user_id = auth.user_id()
+        )

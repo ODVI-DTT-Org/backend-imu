@@ -1,3 +1,11 @@
+# ============================================================
+# NOT DEPLOYED — see backend-imu/powersync/sync-config.yaml
+# ============================================================
+# This file is kept for historical reference. The deployed sync rules
+# live in backend-imu/powersync/sync-config.yaml. Edits here have no
+# effect on production. To verify the live config, run:
+#   powersync fetch config --instance-id 69cd6b238fa42c16d7f725a9 #     --project-id 69cd6b22aaa9a3000762ff0b
+# ============================================================
 # PowerSync Sync Configuration for IMU
 # Edition 2: bucket_definitions
 
