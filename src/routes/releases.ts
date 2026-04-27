@@ -54,21 +54,38 @@ releases.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
 
     const dataResult = await dbClient.query(
       `SELECT
-         r.id,
-         r.client_id,
-         (cl.first_name || ' ' || cl.last_name) AS client_name,
-         r.user_id AS agent_id,
-         (u.first_name || ' ' || u.last_name) AS agent_name,
-         r.product_type,
-         r.loan_type,
-         r.udi_number,
-         r.remarks,
-         r.approval_notes,
-         r.status,
-         r.created_at
-       ${baseQuery}
-       ORDER BY r.created_at DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
+  r.id,
+  r.client_id,
+  (cl.first_name || ' ' || cl.last_name) AS client_name,
+  r.user_id AS agent_id,
+  (u.first_name || ' ' || u.last_name) AS agent_name,
+  r.product_type,
+  r.loan_type,
+  r.udi_number,
+  r.amount,
+  r.remarks,
+  r.approval_notes,
+  r.status,
+  r.created_at,
+  r.approved_by,
+  r.approved_at,
+  (ap.first_name || ' ' || ap.last_name) AS approved_by_name,
+  r.visit_id,
+  v.address  AS visit_address,
+  v.latitude AS visit_latitude,
+  v.longitude AS visit_longitude,
+  v.time_in  AS visit_time_in,
+  v.time_out AS visit_time_out,
+  v.photo_url AS visit_photo_url,
+  v.remarks  AS visit_remarks
+FROM releases r
+JOIN clients cl ON cl.id = r.client_id
+JOIN users u ON u.id = r.user_id
+LEFT JOIN visits v ON v.id = r.visit_id
+LEFT JOIN users ap ON ap.id = r.approved_by
+${where}
+ORDER BY r.created_at DESC
+LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, perPage, offset]
     );
 
