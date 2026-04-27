@@ -2736,6 +2736,94 @@ clients.post('/:id/favorite', authMiddleware, async (c) => {
   return c.json({ success: true, data: result.rows[0] || null });
 });
 
+// POST /api/clients/by-ids - Fetch full client records by IDs
+// Used by mobile favorites tab as a last-resort fallback when a
+// favorited client is missing from local PowerSync and Hive cache.
+const byIdsSchema = z.object({
+  ids: z.array(z.string().uuid()).max(100),
+});
+
+clients.post('/by-ids', authMiddleware, requirePermission('clients', 'read'), async (c) => {
+  const user = c.get('user');
+  let body: { ids: string[] };
+  try {
+    body = byIdsSchema.parse(await c.req.json());
+  } catch (e) {
+    return c.json({ error: 'Invalid request body. Expected { ids: uuid[] }, max 100.' }, 400);
+  }
+
+  if (body.ids.length === 0) {
+    return c.json({ clients: [] }, 200);
+  }
+
+  // Fetch the clients with embedded addresses and phone_numbers
+  const placeholders = body.ids.map((_, i) => `$${i + 1}`).join(',');
+  const clientsResult = await pool.query(
+    `SELECT
+       c.id, c.first_name, c.last_name, c.middle_name, c.birth_date,
+       c.email, c.phone, c.agency_name, c.department, c.position,
+       c.employment_status, c.payroll_date, c.tenure, c.client_type,
+       c.product_type, c.market_type, c.pension_type, c.loan_type, c.pan,
+       c.facebook_link, c.remarks, c.agency_id, c.psgc_id,
+       c.region, c.province, c.municipality, c.barangay, c.udi,
+       c.loan_released, c.loan_released_at, c.created_at, c.updated_at,
+       c.touchpoint_summary, c.touchpoint_number, c.next_touchpoint
+     FROM clients c
+     WHERE c.id IN (${placeholders})
+       AND c.deleted_at IS NULL`,
+    body.ids
+  );
+
+  if (clientsResult.rows.length === 0) {
+    return c.json({ clients: [] }, 200);
+  }
+
+  const clientIds = clientsResult.rows.map(r => r.id);
+  const idPlaceholders = clientIds.map((_, i) => `$${i + 1}`).join(',');
+
+  const [addressesResult, phonesResult] = await Promise.all([
+    pool.query(
+      `SELECT id, client_id, type, street, barangay, city, province,
+              postal_code, latitude, longitude, is_primary, psgc_id,
+              street_address, created_at, updated_at
+       FROM addresses
+       WHERE client_id IN (${idPlaceholders})
+         AND deleted_at IS NULL`,
+      clientIds
+    ),
+    pool.query(
+      `SELECT id, client_id, number, label, is_primary, created_at, updated_at
+       FROM phone_numbers
+       WHERE client_id IN (${idPlaceholders})
+         AND deleted_at IS NULL`,
+      clientIds
+    ),
+  ]);
+
+  // Group addresses and phones by client_id
+  const addressesByClient = new Map<string, any[]>();
+  for (const row of addressesResult.rows) {
+    const existing = addressesByClient.get(row.client_id) ?? [];
+    existing.push(row);
+    addressesByClient.set(row.client_id, existing);
+  }
+
+  const phonesByClient = new Map<string, any[]>();
+  for (const row of phonesResult.rows) {
+    const existing = phonesByClient.get(row.client_id) ?? [];
+    existing.push(row);
+    phonesByClient.set(row.client_id, existing);
+  }
+
+  const clientsWithEmbeds = clientsResult.rows.map(c => ({
+    ...c,
+    addresses: addressesByClient.get(c.id) ?? [],
+    phone_numbers: phonesByClient.get(c.id) ?? [],
+  }));
+
+  return c.json({ clients: clientsWithEmbeds }, 200);
+});
+
 // DELETE /api/clients/:id/favorite — Unstar a client for the current user
 clients.delete('/:id/favorite', authMiddleware, async (c) => {
   const user = c.get('user');
