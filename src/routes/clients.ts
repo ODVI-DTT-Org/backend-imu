@@ -1850,6 +1850,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
         COUNT(c.psgc_id) as with_psgc,
         COUNT(*) - COUNT(c.psgc_id) as without_psgc
       FROM clients c
+      WHERE c.deleted_at IS NULL
     `);
 
     // Get sample of clients without PSGC (up to 20) with debug info
@@ -1864,6 +1865,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
         c.barangay
       FROM clients c
       WHERE c.psgc_id IS NULL
+      AND c.deleted_at IS NULL
       AND (c.province IS NOT NULL OR c.municipality IS NOT NULL)
       ORDER BY c.created_at DESC
       LIMIT 20
@@ -1955,6 +1957,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       SELECT COUNT(*) as total
       FROM clients c
       INNER JOIN psgc psg ON psg.id = c.psgc_id
+      WHERE c.deleted_at IS NULL
     `);
     const matchedTotal = parseInt(matchedCountResult.rows[0].total);
 
@@ -1975,6 +1978,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
         c.updated_at as matched_at
       FROM clients c
       INNER JOIN psgc psg ON psg.id = c.psgc_id
+      WHERE c.deleted_at IS NULL
       ORDER BY c.updated_at DESC
       LIMIT $1 OFFSET $2
     `, [perPage, offset]);
