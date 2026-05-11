@@ -16,6 +16,7 @@ import { addLocationJob, addReportJob, getJobStatus, cancelJob as cancelBullMQJo
 import { LocationJobType, ReportJobType } from '../queues/jobs/job-types.js';
 import { manualRefreshActionItems } from '../services/actionItemsRefreshService.js';
 import { getSchedulerStatus, triggerTask } from '../services/cronScheduler.js';
+import { pool } from '../db/index.js';
 
 const jobs = new Hono();
 
@@ -55,12 +56,25 @@ jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) =>
     const body = await c.req.json();
     const validated = createPSGCJobSchema.parse(body);
 
-    const job = await addLocationJob(LocationJobType.PSGC_MATCHING, user.sub, [], validated);
+    const unmatchedClients = await pool.query<{ id: string }>(`
+      SELECT id
+      FROM clients
+      WHERE psgc_id IS NULL
+        AND deleted_at IS NULL
+        AND province IS NOT NULL
+        AND municipality IS NOT NULL
+      ORDER BY created_at ASC
+    `);
+
+    const clientIds = unmatchedClients.rows.map((row) => row.id);
+
+    const job = await addLocationJob(LocationJobType.PSGC_MATCHING, user.sub, clientIds, validated);
 
     return c.json({
       success: true,
       job_id: job.id,
       message: 'PSGC matching job started',
+      total_clients: clientIds.length,
       status_url: `/api/jobs/queue/${job.id}`,
     }, 201);
   } catch (error: any) {

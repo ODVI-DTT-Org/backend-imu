@@ -36,7 +36,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     }
 
     // Process in batches
-    const batchSize = 20;
+    const batchSize = this.getBatchSize(type);
     const batches = batchItems(items, batchSize);
 
     const succeeded: string[] = [];
@@ -65,6 +65,14 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       operation: type,
       processed: 'assigned',
     });
+  }
+
+  private getBatchSize(operation: string): number {
+    if (operation === 'psgc_matching') {
+      return parseInt(process.env.PSGC_MATCHING_BATCH_SIZE || '500');
+    }
+
+    return 20;
   }
 
   /**
