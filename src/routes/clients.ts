@@ -2486,51 +2486,48 @@ clients.post(
   }
 );
 
-// POST /api/clients/check-duplicates - Check which name+pension_type combos already exist in DB
+// POST /api/clients/check-duplicates - Check which client names already exist in DB.
+// Duplicate detection is name-only (last + first + middle, case-insensitive).
+// `nameConflicts` is kept in the response shape for backward compatibility but is
+// always an empty array; the frontend no longer auto-prefixes pension types.
 clients.post('/check-duplicates', authMiddleware, async (c) => {
   try {
     const body = await c.req.json()
     const schema = z.object({
       rows: z.array(z.object({
         name: z.string(),
-        pension_type: z.string()
+        // pension_type kept in the request shape for backward compat but
+        // intentionally unused — duplicate detection is name-only.
+        pension_type: z.string().optional()
       }))
     })
     const { rows } = schema.parse(body)
 
     const result = await pool.query(
-      `SELECT last_name, first_name, middle_name, pension_type
+      `SELECT last_name, first_name, middle_name
        FROM clients
        WHERE deleted_at IS NULL`
     )
 
-    const dbDupKeys = new Set<string>()
     const dbNameKeys = new Set<string>()
-
     for (const row of result.rows) {
       const nameKey = [row.last_name, row.first_name, row.middle_name]
         .filter(Boolean)
         .join(' ')
         .toLowerCase()
         .trim()
-      dbDupKeys.add(`${nameKey}|${(row.pension_type || '').toLowerCase().trim()}`)
-      dbNameKeys.add(nameKey)
+      if (nameKey) dbNameKeys.add(nameKey)
     }
 
     const duplicates: string[] = []
-    const nameConflicts: string[] = []
-
     for (const row of rows) {
       const normalizedName = row.name.toLowerCase().trim()
-      const dupKey = `${normalizedName}|${row.pension_type.toLowerCase().trim()}`
-      if (dbDupKeys.has(dupKey)) {
-        duplicates.push(dupKey)
-      } else if (dbNameKeys.has(normalizedName)) {
-        nameConflicts.push(normalizedName)
+      if (normalizedName && dbNameKeys.has(normalizedName)) {
+        duplicates.push(normalizedName)
       }
     }
 
-    return c.json({ duplicates, nameConflicts })
+    return c.json({ duplicates, nameConflicts: [] })
   } catch (error) {
     if (error instanceof z.ZodError) {
       return c.json({ error: 'Invalid request', details: error.errors }, 400)
