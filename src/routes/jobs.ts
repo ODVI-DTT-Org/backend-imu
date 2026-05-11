@@ -29,11 +29,15 @@ const createPSGCJobSchema = z.object({
   dry_run: z.boolean().optional(),
 });
 
-const createReportJobSchema = z.object({
-  report_type: z.enum(['agent_performance', 'client_activity', 'touchpoint_summary']),
+export const createReportJobSchema = z.object({
+  report_type: z.enum(['agent_performance', 'client_activity', 'touchpoint_summary', 'market_saturation']),
   start_date: z.string().optional(),
   end_date: z.string().optional(),
   user_id: z.string().optional(),
+  // Market Saturation filters (all optional, AND-composed; empty/missing = include all)
+  team_ids: z.array(z.string().uuid()).optional(),
+  categories: z.array(z.enum(['VIRGIN', 'FAVORABLE', 'OTHERS', 'EXISTING'])).optional(),
+  regions: z.array(z.string()).optional(),
 });
 
 const createUserLocationAssignmentSchema = z.object({
@@ -86,13 +90,29 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
       agent_performance: ReportJobType.REPORT_AGENT_PERFORMANCE,
       client_activity: ReportJobType.REPORT_CLIENT_ACTIVITY,
       touchpoint_summary: ReportJobType.REPORT_TOUCHPOINT_SUMMARY,
+      market_saturation: ReportJobType.REPORT_MARKET_SATURATION,
     };
     const jobType = reportTypeMap[validated.report_type] ?? ReportJobType.REPORT_AGENT_PERFORMANCE;
+
+    // Market-Saturation filters travel inside params.filters so we don't widen the
+    // shared ReportJobData['params'] type for one report.
+    const hasMSFilters =
+      validated.report_type === 'market_saturation' &&
+      (validated.team_ids?.length || validated.categories?.length || validated.regions?.length);
 
     const job = await addReportJob(jobType, user.sub, {
       startDate: validated.start_date,
       endDate: validated.end_date,
       userId: validated.user_id,
+      ...(hasMSFilters
+        ? {
+            filters: {
+              team_ids: validated.team_ids ?? [],
+              categories: validated.categories ?? [],
+              regions: validated.regions ?? [],
+            },
+          }
+        : {}),
     });
 
     return c.json({

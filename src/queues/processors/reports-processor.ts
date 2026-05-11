@@ -38,16 +38,16 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
     });
   }
 
-  private rowsToCsv(rows: Record<string, any>[]): string {
-    if (rows.length === 0) return '';
-    const headers = Object.keys(rows[0]);
+  private rowsToCsv(rows: Record<string, any>[], headers?: string[]): string {
+    const resolvedHeaders = headers ?? (rows.length > 0 ? Object.keys(rows[0]) : []);
+    if (resolvedHeaders.length === 0) return '';
     const escape = (v: any) => {
       const s = String(v ?? '');
       return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
     };
     return [
-      headers.join(','),
-      ...rows.map(r => headers.map(h => escape(r[h])).join(',')),
+      resolvedHeaders.join(','),
+      ...rows.map(r => resolvedHeaders.map(h => escape(r[h])).join(',')),
     ].join('\n');
   }
 
@@ -106,6 +106,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         case 'report_area_coverage':
           result = await this.generateAreaCoverageReport(userId, params);
           break;
+        case 'report_market_saturation':
+          result = await this.generateMarketSaturationReport(userId, params);
+          break;
         default:
           throw new Error(`Unknown report type: ${type}`);
       }
@@ -119,11 +122,12 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
       let downloadUrl: string | undefined;
       try {
-        const csv = this.rowsToCsv(result.data || []);
+        const csv = this.rowsToCsv(result.data || [], result.csvHeaders);
         const fileName = `${type}-${Date.now()}.csv`;
         downloadUrl = await this.uploadCsvToS3(fileName, csv);
       } catch (uploadError: any) {
-        logger.error('ReportsProcessor', 'CSV upload failed (continuing without download URL)', uploadError);
+        logger.error('ReportsProcessor', 'CSV upload failed', uploadError);
+        throw uploadError;
       }
 
       await this.updateProgress(job, {
@@ -540,6 +544,244 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       reportType: 'area_coverage',
       generatedAt: new Date(),
       parameters: { startDate, endDate },
+      data: result.rows,
+    };
+  }
+
+  /**
+   * Generate Market Saturation report.
+   *
+   * One row per active client, categorized as VIRGIN / FAVORABLE / OTHERS / EXISTING:
+   *   EXISTING  = any release with status IN ('approved','released')
+   *   VIRGIN    = no rows in visits
+   *   FAVORABLE = latest visit reason in the seven team-defined FAVORABLE codes
+   *   OTHERS    = otherwise
+   *
+   * EXISTING wins over visit-based categorization. The seven FAVORABLE codes are hard-coded
+   * here, not joined from touchpoint_reasons.category (which lumps NOT_INTERESTED under
+   * Unfavorable — incompatible with the team's MS definition).
+   *
+   * Filters (all optional, AND-composed):
+   *   filters.team_ids   UUID[] — match the derived Assigned Team
+   *   filters.categories TEXT[] — match the computed category
+   *   filters.regions    TEXT[] — match clients.region
+   *
+   * SQL column aliases are Title-Case so rowsToCsv() emits the headers spelled the way
+   * the existing Visits / Releases CSVs spell them.
+   */
+  private async generateMarketSaturationReport(_userId: string, params?: any) {
+    const filters = (params?.filters ?? {}) as {
+      team_ids?: string[];
+      categories?: string[];
+      regions?: string[];
+    };
+
+    const teamIds = filters.team_ids && filters.team_ids.length > 0 ? filters.team_ids : null;
+    const categories = filters.categories && filters.categories.length > 0 ? filters.categories : null;
+    const regions = filters.regions && filters.regions.length > 0 ? filters.regions : null;
+
+    const result = await pool.query(
+      `
+      WITH
+        visit_agg AS (
+          SELECT
+            client_id,
+            COUNT(*) AS visit_count,
+            MIN(COALESCE(time_in, created_at)) AS first_visit_at,
+            MAX(COALESCE(time_in, created_at)) AS last_visit_at
+          FROM visits
+          GROUP BY client_id
+        ),
+        latest_visit AS (
+          SELECT DISTINCT ON (client_id)
+            client_id,
+            reason  AS last_reason,
+            remarks AS last_remarks
+          FROM visits
+          ORDER BY client_id, COALESCE(time_in, created_at) DESC, id ASC
+        ),
+        latest_release AS (
+          SELECT DISTINCT ON (client_id)
+            client_id,
+            COALESCE(approved_at, created_at) AS release_date,
+            user_id   AS release_user_id,
+            loan_type,
+            udi_number
+          FROM releases
+          WHERE status IN ('approved', 'released')
+          ORDER BY client_id, COALESCE(approved_at, created_at) DESC, id ASC
+        ),
+        has_call AS (
+          SELECT DISTINCT client_id FROM calls
+        ),
+        assigned_group AS (
+          SELECT DISTINCT ON (gm.province, gm.municipality)
+            gm.province,
+            gm.municipality,
+            g.id          AS group_id,
+            g.name        AS team_name,
+            g.caravan_id
+          FROM group_municipalities gm
+          JOIN groups g ON g.id = gm.group_id
+          ORDER BY gm.province, gm.municipality, g.created_at ASC
+        ),
+        release_user_group AS (
+          SELECT DISTINCT ON (gm.client_id)
+            gm.client_id AS user_id,
+            g.name       AS team_name
+          FROM group_members gm
+          JOIN groups g ON g.id = gm.group_id
+          ORDER BY gm.client_id, gm.joined_at ASC
+        ),
+        categorized AS (
+          SELECT
+            c.id,
+            c.full_name,
+            c.first_name,
+            c.middle_name,
+            c.last_name,
+            c.ext_name,
+            CASE
+              WHEN lr.client_id IS NOT NULL                THEN 'EXISTING'
+              WHEN va.client_id IS NULL                    THEN 'VIRGIN'
+              WHEN lv.last_reason IN (
+                'FOR_VERIFICATION','LOAN_INQUIRY','INTERESTED',
+                'NOT_INTERESTED','UNDECIDED','NOT_AROUND','WITH_OTHER_LENDING'
+              )                                            THEN 'FAVORABLE'
+              ELSE                                              'OTHERS'
+            END AS category,
+            c.pension_type,
+            c.product_type,
+            c.region,
+            c.province,
+            c.municipality,
+            c.barangay,
+            c.full_address,
+            c.phone,
+            c.account_number,
+            c.agency_name,
+            c.created_at,
+            va.first_visit_at,
+            va.last_visit_at,
+            va.visit_count,
+            lv.last_reason,
+            lv.last_remarks,
+            lr.release_date,
+            lr.release_user_id,
+            lr.loan_type,
+            lr.udi_number,
+            CASE WHEN hc.client_id IS NOT NULL THEN 'Yes' ELSE 'No' END AS tele_endorsed,
+            ag.caravan_id AS assigned_caravan_user_id,
+            ag.team_name  AS assigned_team_name,
+            rug.team_name AS lr_team_name
+          FROM clients c
+          LEFT JOIN visit_agg          va  ON va.client_id  = c.id
+          LEFT JOIN latest_visit       lv  ON lv.client_id  = c.id
+          LEFT JOIN latest_release     lr  ON lr.client_id  = c.id
+          LEFT JOIN has_call           hc  ON hc.client_id  = c.id
+          LEFT JOIN assigned_group     ag  ON ag.province     = c.province
+                                          AND ag.municipality = c.municipality
+          LEFT JOIN release_user_group rug ON rug.user_id     = lr.release_user_id
+          WHERE c.deleted_at IS NULL
+            AND c.status = 'active'
+        )
+      SELECT
+        cat.id                                                     AS "ID",
+        COALESCE(
+          cat.full_name,
+          TRIM(BOTH ', ' FROM
+            CONCAT_WS(
+              ' ',
+              CONCAT_WS(', ', NULLIF(cat.last_name, ''), NULLIF(cat.first_name, '')),
+              NULLIF(cat.middle_name, ''),
+              NULLIF(cat.ext_name, '')
+            )
+          )
+        )                                                          AS "Full Name",
+        cat.first_name                                             AS "First Name",
+        cat.middle_name                                            AS "Middle Name",
+        cat.last_name                                              AS "Last Name",
+        cat.ext_name                                               AS "Ext Name",
+        cat.category                                               AS "Category",
+        cat.pension_type                                           AS "Pension Type",
+        cat.product_type                                           AS "Product Type",
+        cat.region                                                 AS "Region",
+        cat.province                                               AS "Province",
+        cat.municipality                                           AS "Municipality",
+        cat.barangay                                               AS "Barangay",
+        cat.full_address                                           AS "Full Address",
+        ucar.username                                              AS "Assigned Caravan",
+        cat.assigned_team_name                                     AS "Assigned Team",
+        TO_CHAR(cat.last_visit_at, 'YYYY-MM-DD"T"HH24:MI:SSOF')    AS "Last Visit Date",
+        cat.last_reason                                            AS "Last Visit Reason",
+        cat.last_remarks                                           AS "Last Visit Remarks",
+        COALESCE(cat.visit_count, 0)                               AS "No. of Visits",
+        CASE
+          WHEN cat.first_visit_at IS NULL THEN NULL
+          ELSE (EXTRACT(YEAR  FROM AGE(NOW(), cat.first_visit_at)) * 12
+              + EXTRACT(MONTH FROM AGE(NOW(), cat.first_visit_at)))::INT
+        END                                                        AS "Aging (months)",
+        TO_CHAR(cat.release_date, 'YYYY-MM-DD"T"HH24:MI:SSOF')     AS "Release Date",
+        ulr.username                                               AS "Release By",
+        cat.lr_team_name                                           AS "LR Team",
+        cat.loan_type                                              AS "Loan Type",
+        cat.udi_number                                             AS "UDI Number",
+        cat.tele_endorsed                                          AS "Tele Endorsed",
+        cat.phone                                                  AS "Contact Number",
+        cat.account_number                                         AS "Account Number",
+        cat.agency_name                                            AS "Agency Name",
+        TO_CHAR(cat.created_at, 'YYYY-MM-DD"T"HH24:MI:SSOF')       AS "Created At"
+      FROM categorized cat
+      LEFT JOIN users ucar ON ucar.id = cat.assigned_caravan_user_id
+      LEFT JOIN users ulr  ON ulr.id  = cat.release_user_id
+      WHERE
+        ($1::uuid[] IS NULL OR cat.assigned_team_name IN (
+            SELECT name FROM groups WHERE id = ANY($1)))
+        AND ($2::text[] IS NULL OR cat.category = ANY($2))
+        AND ($3::text[] IS NULL OR cat.region   = ANY($3))
+      ORDER BY "Full Name" ASC, "ID" ASC
+      LIMIT 100000
+      `,
+      [teamIds, categories, regions]
+    );
+
+    return {
+      reportType: 'market_saturation',
+      generatedAt: new Date(),
+      parameters: { teamIds, categories, regions },
+      csvHeaders: [
+        'ID',
+        'Full Name',
+        'First Name',
+        'Middle Name',
+        'Last Name',
+        'Ext Name',
+        'Category',
+        'Pension Type',
+        'Product Type',
+        'Region',
+        'Province',
+        'Municipality',
+        'Barangay',
+        'Full Address',
+        'Assigned Caravan',
+        'Assigned Team',
+        'Last Visit Date',
+        'Last Visit Reason',
+        'Last Visit Remarks',
+        'No. of Visits',
+        'Aging (months)',
+        'Release Date',
+        'Release By',
+        'LR Team',
+        'Loan Type',
+        'UDI Number',
+        'Tele Endorsed',
+        'Contact Number',
+        'Account Number',
+        'Agency Name',
+        'Created At',
+      ],
       data: result.rows,
     };
   }
