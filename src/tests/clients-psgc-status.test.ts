@@ -44,7 +44,15 @@ describe('GET /api/clients/psgc/status', () => {
         } as any);
       }
 
-      if (q.includes('from clients c') && q.includes('where c.psgc_id is null')) {
+      if (q.includes('count(*) as total') && q.includes('where c.psgc_id is null')) {
+        return Promise.resolve({
+          rows: q.includes('deleted_at is null')
+            ? [{ total: '3' }]
+            : [{ total: '311477' }],
+        } as any);
+      }
+
+      if (q.includes('from clients c') && q.includes('where c.psgc_id is null') && q.includes('limit $1 offset $2')) {
         return Promise.resolve({
           rows: q.includes('deleted_at is null')
             ? [
@@ -121,6 +129,8 @@ describe('GET /api/clients/psgc/status', () => {
     expect(data.stats.total_clients).toBe('10');
     expect(data.unmatched).toHaveLength(1);
     expect(data.unmatched[0].id).toBe('client-1');
+    expect(data.unmatched_pagination.total).toBe(3);
+    expect(data.unmatched_pagination.totalPages).toBe(1);
     expect(data.recently_matched_pagination.total).toBe(7);
     expect(data.recently_matched).toHaveLength(1);
   });

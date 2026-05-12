@@ -1853,7 +1853,20 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       WHERE c.deleted_at IS NULL
     `);
 
-    // Get sample of clients without PSGC (up to 20) with debug info
+    const unmatchedPage = parseInt(c.req.query('unmatchedPage') || '1');
+    const unmatchedPerPage = parseInt(c.req.query('unmatchedPerPage') || '10');
+    const unmatchedOffset = (unmatchedPage - 1) * unmatchedPerPage;
+
+    const unmatchedCountResult = await pool.query(`
+      SELECT COUNT(*) as total
+      FROM clients c
+      WHERE c.psgc_id IS NULL
+      AND c.deleted_at IS NULL
+      AND (c.province IS NOT NULL OR c.municipality IS NOT NULL)
+    `);
+    const unmatchedTotal = parseInt(unmatchedCountResult.rows[0].total);
+
+    // Get paginated clients without PSGC with debug info
     const unmatchedResult = await pool.query(`
       SELECT
         c.id,
@@ -1868,8 +1881,8 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       AND c.deleted_at IS NULL
       AND (c.province IS NOT NULL OR c.municipality IS NOT NULL)
       ORDER BY c.created_at DESC
-      LIMIT 20
-    `);
+      LIMIT $1 OFFSET $2
+    `, [unmatchedPerPage, unmatchedOffset]);
 
     // Fetch PSGC data for debug information
     const psgcResult = await pool.query(`
@@ -1947,7 +1960,7 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
       };
     });
 
-    // Get pagination parameters
+    // Get matched pagination parameters
     const page = parseInt(c.req.query('page') || '1');
     const perPage = parseInt(c.req.query('perPage') || '10');
     const offset = (page - 1) * perPage;
@@ -1986,6 +1999,12 @@ clients.get('/psgc/status', authMiddleware, requirePermission('clients', 'update
     return c.json({
       stats: statsResult.rows[0],
       unmatched: unmatchedWithDebug,
+      unmatched_pagination: {
+        page: unmatchedPage,
+        perPage: unmatchedPerPage,
+        total: unmatchedTotal,
+        totalPages: Math.ceil(unmatchedTotal / unmatchedPerPage)
+      },
       recently_matched: matchedResult.rows,
       recently_matched_pagination: {
         page,
