@@ -23,6 +23,8 @@ export async function startWorkers() {
   try {
     const queueManager = getQueueManager();
 
+    logger.info('Workers', 'Starting BullMQ workers');
+
     // Removed verbose startup logs - now handled by init-logger
 
     // Register bulk delete processor
@@ -58,6 +60,7 @@ export async function startWorkers() {
     const locationAssignmentsWorker = locationAssignmentsProcessor.getWorker();
     if (locationAssignmentsWorker) {
       queueManager.registerWorker('location-assignments', locationAssignmentsWorker);
+      logger.info('Workers', 'Location assignments worker started for queue=location-assignments');
     }
 
     // Register sync operations processor
@@ -81,7 +84,7 @@ export async function startWorkers() {
       queueManager.registerWorker('bulk-upload', bulkUploadWorker);
     }
 
-    // Removed verbose startup logs - now handled by init-logger
+    logger.info('Workers', 'BullMQ workers started successfully');
   } catch (error) {
     logger.error('Workers', 'Failed to start workers', error);
     throw error;

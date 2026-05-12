@@ -96,6 +96,11 @@ jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) =>
     const body = await c.req.json();
     const validated = createPSGCJobSchema.parse(body);
 
+    logger.info(
+      'jobs/psgc/matching',
+      `PSGC matching request received for user=${user.sub} dry_run=${validated.dry_run === true ? 'true' : 'false'}`
+    );
+
     const unmatchedClients = await pool.query<{ id: string }>(`
       SELECT id
       FROM clients
@@ -108,7 +113,26 @@ jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) =>
 
     const clientIds = unmatchedClients.rows.map((row) => row.id);
 
+    logger.info(
+      'jobs/psgc/matching',
+      `PSGC matching candidate query returned count=${clientIds.length}`
+    );
+
+    if (clientIds.length > 0) {
+      logger.info(
+        'jobs/psgc/matching',
+        `PSGC matching first candidates=${clientIds.slice(0, 5).join(',')}`
+      );
+    } else {
+      logger.warn('jobs/psgc/matching', 'PSGC matching request found zero eligible unmatched clients');
+    }
+
     const job = await addLocationJob(LocationJobType.PSGC_MATCHING, user.sub, clientIds, validated);
+
+    logger.info(
+      'jobs/psgc/matching',
+      `PSGC matching job enqueued job_id=${job.id} total_clients=${clientIds.length}`
+    );
 
     return c.json({
       success: true,

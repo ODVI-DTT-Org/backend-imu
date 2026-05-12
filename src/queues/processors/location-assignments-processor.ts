@@ -32,12 +32,18 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
 
     // Validate job data
     if (!items || items.length === 0) {
+      logger.warn('PSGCMatching', `Job ${job.id} received no items for type=${type}`);
       throw new Error('No items to process');
     }
 
     // Process in batches
     const batchSize = this.getBatchSize(type);
     const batches = batchItems(items, batchSize);
+
+    logger.info(
+      'PSGCMatching',
+      `Job ${job.id} started type=${type} user=${userId} total_items=${items.length} batch_size=${batchSize} total_batches=${batches.length}`
+    );
 
     const succeeded: string[] = [];
     const failed: Array<{ id: string; error: string }> = [];
@@ -55,11 +61,26 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
         failed,
       });
 
+      logger.info(
+        'PSGCMatching',
+        `Job ${job.id} processing batch=${i + 1}/${batches.length} batch_items=${batch.length} succeeded_so_far=${succeeded.length} failed_so_far=${failed.length}`
+      );
+
       // Process batch with transaction
       const batchResult = await this.processBatch(batch, type, userId, params);
       succeeded.push(...batchResult.succeeded);
       failed.push(...batchResult.failed);
+
+      logger.info(
+        'PSGCMatching',
+        `Job ${job.id} finished batch=${i + 1}/${batches.length} batch_succeeded=${batchResult.succeeded.length} batch_failed=${batchResult.failed.length} total_succeeded=${succeeded.length} total_failed=${failed.length}`
+      );
     }
+
+    logger.info(
+      'PSGCMatching',
+      `Job ${job.id} completed type=${type} total=${items.length} succeeded=${succeeded.length} failed=${failed.length}`
+    );
 
     return createJobResult(items.length, succeeded, failed, startedAt, {
       operation: type,
@@ -86,6 +107,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
   ): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
     const succeeded: string[] = [];
     const failed: Array<{ id: string; error: string }> = [];
+    let detailedFailureLogs = 0;
 
     const client = await pool.connect();
 
@@ -116,6 +138,13 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
 
           succeeded.push(id);
         } catch (error: any) {
+          if (operation === 'psgc_matching' && detailedFailureLogs < 5) {
+            logger.warn(
+              'PSGCMatching',
+              `Client failed job_operation=${operation} client_id=${id} error=${error?.message || 'Unknown error'}`
+            );
+            detailedFailureLogs += 1;
+          }
           failed.push({
             id,
             error: handleJobError(error, id, { operation }),
@@ -126,9 +155,21 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
+      logger.error(
+        'PSGCMatching',
+        error as Error,
+        `Batch transaction failed operation=${operation} batch_size=${ids.length}`
+      );
       throw error;
     } finally {
       client.release();
+    }
+
+    if (operation === 'psgc_matching') {
+      logger.info(
+        'PSGCMatching',
+        `Batch committed operation=${operation} batch_size=${ids.length} succeeded=${succeeded.length} failed=${failed.length}`
+      );
     }
 
     return { succeeded, failed };
@@ -185,7 +226,13 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       );
     }
 
-    if (psgcResult.rows.length === 0) throw new Error('No matching PSGC record found');
+    if (psgcResult.rows.length === 0) {
+      logger.warn(
+        'PSGCMatching',
+        `No PSGC match found client_id=${clientId} province="${province}" municipality="${municipality}"`
+      );
+      throw new Error('No matching PSGC record found');
+    }
 
     const psgc = psgcResult.rows[0];
 
