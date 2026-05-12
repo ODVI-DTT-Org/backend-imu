@@ -20,6 +20,46 @@ import { pool } from '../db/index.js';
 
 const jobs = new Hono();
 
+function getJobSortTime(job: {
+  finishedOn?: string | number | null;
+  processedOn?: string | number | null;
+  timestamp?: string | number | null;
+}) {
+  const candidates = [job.finishedOn, job.processedOn, job.timestamp];
+
+  for (const value of candidates) {
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+
+    if (typeof value === 'string') {
+      const parsed = new Date(value).getTime();
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
+  return 0;
+}
+
+function getJobStatePriority(state: string) {
+  switch (state) {
+    case 'active':
+      return 0;
+    case 'waiting':
+      return 1;
+    case 'delayed':
+      return 2;
+    case 'failed':
+      return 3;
+    case 'completed':
+      return 4;
+    default:
+      return 5;
+  }
+}
+
 // Apply authentication middleware to all routes
 jobs.use('*', authMiddleware);
 
@@ -319,6 +359,7 @@ jobs.get('/queue/jobs', async (c) => {
               failedReason: job.failedReason,
               processedOn: job.processedOn,
               finishedOn: job.finishedOn,
+              timestamp: job.timestamp,
               attemptsMade: job.attemptsMade,
             });
           }
@@ -329,11 +370,14 @@ jobs.get('/queue/jobs', async (c) => {
       }
     }
 
-    // Sort by processedOn (newest first)
+    // Keep waiting/active jobs visible even when there are many historical jobs.
     allJobs.sort((a, b) => {
-      const aTime = a.processedOn ? new Date(a.processedOn).getTime() : 0;
-      const bTime = b.processedOn ? new Date(b.processedOn).getTime() : 0;
-      return bTime - aTime;
+      const priorityDiff = getJobStatePriority(a.state) - getJobStatePriority(b.state);
+      if (priorityDiff !== 0) {
+        return priorityDiff;
+      }
+
+      return getJobSortTime(b) - getJobSortTime(a);
     });
 
     return c.json({
