@@ -15,6 +15,15 @@ import type { BulkJobData, JobResult } from '../jobs/job-types.js';
 import { batchItems, createJobResult, handleJobError } from '../utils/job-helpers.js';
 import { logger } from '../../utils/logger.js';
 
+interface PsgcClientMatch {
+  clientId: string;
+  psgcId: string;
+  region: string | null;
+  province: string | null;
+  municipality: string | null;
+  barangay: string | null;
+}
+
 /**
  * Location Assignments Processor
  */
@@ -108,6 +117,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     const succeeded: string[] = [];
     const failed: Array<{ id: string; error: string }> = [];
     let detailedFailureLogs = 0;
+    const matchedClients: PsgcClientMatch[] = [];
 
     const client = await pool.connect();
 
@@ -118,7 +128,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
         try {
           switch (operation) {
             case 'psgc_matching':
-              await this.processPsgcMatching(client, id);
+              matchedClients.push(await this.resolvePsgcMatch(client, id));
               break;
             case 'bulk_assign_user_psgc':
               await this.assignUserPsgc(client, id, params);
@@ -152,6 +162,10 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
         }
       }
 
+      if (operation === 'psgc_matching' && matchedClients.length > 0) {
+        await this.bulkUpdateMatchedClients(client, matchedClients);
+      }
+
       await client.query('COMMIT');
     } catch (error) {
       await client.query('ROLLBACK');
@@ -181,7 +195,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
    * 2. Normalized match (strips CITY OF / CITY prefix/suffix)
    * 3. Trigram similarity fallback (requires pg_trgm extension)
    */
-  private async processPsgcMatching(client: any, clientId: string): Promise<void> {
+  private async resolvePsgcMatch(client: any, clientId: string): Promise<PsgcClientMatch> {
     const clientResult = await client.query(
       'SELECT municipality, province FROM clients WHERE id = $1 AND deleted_at IS NULL',
       [clientId]
@@ -236,16 +250,48 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
 
     const psgc = psgcResult.rows[0];
 
+    return {
+      clientId,
+      psgcId: psgc.id,
+      region: psgc.region ?? null,
+      province: psgc.province ?? null,
+      municipality: psgc.mun_city ?? null,
+      barangay: psgc.barangay ?? null,
+    };
+  }
+
+  private async bulkUpdateMatchedClients(client: any, matches: PsgcClientMatch[]): Promise<void> {
+    const valuesSql = matches
+      .map((_, index) => {
+        const offset = index * 6;
+        return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6})`;
+      })
+      .join(', ');
+
+    const params = matches.flatMap((match) => [
+      match.clientId,
+      match.psgcId,
+      match.region,
+      match.province,
+      match.municipality,
+      match.barangay,
+    ]);
+
     await client.query(
-      `UPDATE clients SET
-         psgc_id = $1,
-         region = COALESCE($2, region),
-         province = COALESCE($3, province),
-         municipality = COALESCE($4, municipality),
-         barangay = COALESCE($5, barangay),
+      `UPDATE clients AS c
+       SET
+         psgc_id = updates.psgc_id,
+         region = COALESCE(updates.region, c.region),
+         province = COALESCE(updates.province, c.province),
+         municipality = COALESCE(updates.municipality, c.municipality),
+         barangay = COALESCE(updates.barangay, c.barangay),
          updated_at = NOW()
-       WHERE id = $6 AND deleted_at IS NULL`,
-      [psgc.id, psgc.region, psgc.province, psgc.mun_city, psgc.barangay, clientId]
+       FROM (
+         VALUES ${valuesSql}
+       ) AS updates(client_id, psgc_id, region, province, municipality, barangay)
+       WHERE c.id = updates.client_id
+         AND c.deleted_at IS NULL`,
+      params
     );
   }
 
