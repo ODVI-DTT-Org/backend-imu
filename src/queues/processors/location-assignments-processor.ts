@@ -24,6 +24,8 @@ interface PsgcClientMatch {
   barangay: string | null;
 }
 
+type BatchProgressCallback = (batchProcessed: number) => Promise<void>;
+
 /**
  * Location Assignments Processor
  */
@@ -59,16 +61,26 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
 
     for (let i = 0; i < batches.length; i++) {
       const batch = batches[i];
+      const batchLabel = `Processing batch ${i + 1} of ${batches.length}`;
+      const completedBeforeBatch = succeeded.length + failed.length;
 
-      // Update progress
-      await this.updateProgress(job, {
-        progress: Math.floor((i / batches.length) * 100),
-        total: items.length,
-        current: succeeded.length + failed.length,
-        message: `Processing batch ${i + 1} of ${batches.length}`,
-        succeeded,
-        failed,
-      });
+      const reportProgress = async (batchProcessed: number) => {
+        const current = Math.min(items.length, completedBeforeBatch + batchProcessed);
+        const progress = items.length === 0
+          ? 0
+          : Math.min(99, Math.floor((current / items.length) * 100));
+
+        await this.updateProgress(job, {
+          progress,
+          total: items.length,
+          current,
+          message: batchLabel,
+          succeeded,
+          failed,
+        });
+      };
+
+      await reportProgress(0);
 
       logger.info(
         'PSGCMatching',
@@ -76,15 +88,26 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       );
 
       // Process batch with transaction
-      const batchResult = await this.processBatch(batch, type, userId, params);
+      const batchResult = await this.processBatch(batch, type, userId, params, reportProgress);
       succeeded.push(...batchResult.succeeded);
       failed.push(...batchResult.failed);
+
+      await reportProgress(batch.length);
 
       logger.info(
         'PSGCMatching',
         `Job ${job.id} finished batch=${i + 1}/${batches.length} batch_succeeded=${batchResult.succeeded.length} batch_failed=${batchResult.failed.length} total_succeeded=${succeeded.length} total_failed=${failed.length}`
       );
     }
+
+    await this.updateProgress(job, {
+      progress: 100,
+      total: items.length,
+      current: items.length,
+      message: 'PSGC matching completed',
+      succeeded,
+      failed,
+    });
 
     logger.info(
       'PSGCMatching',
@@ -112,19 +135,24 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     ids: string[],
     operation: string,
     userId: string,
-    params?: Record<string, any>
+    params?: Record<string, any>,
+    onProgress?: BatchProgressCallback
   ): Promise<{ succeeded: string[]; failed: Array<{ id: string; error: string }> }> {
     const succeeded: string[] = [];
     const failed: Array<{ id: string; error: string }> = [];
     let detailedFailureLogs = 0;
     const matchedClients: PsgcClientMatch[] = [];
+    const progressInterval = operation === 'psgc_matching'
+      ? Math.max(1, Math.min(25, Math.ceil(ids.length / 10)))
+      : ids.length;
 
     const client = await pool.connect();
 
     try {
       await client.query('BEGIN');
 
-      for (const id of ids) {
+      for (let index = 0; index < ids.length; index++) {
+        const id = ids[index];
         try {
           switch (operation) {
             case 'psgc_matching':
@@ -159,6 +187,11 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
             id,
             error: handleJobError(error, id, { operation }),
           });
+        }
+
+        const batchProcessed = index + 1;
+        if (onProgress && (batchProcessed % progressInterval === 0 || batchProcessed === ids.length)) {
+          await onProgress(batchProcessed);
         }
       }
 

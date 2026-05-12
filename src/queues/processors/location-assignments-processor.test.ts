@@ -45,21 +45,40 @@ describe('LocationAssignmentsProcessor', () => {
     expect(processBatch.mock.calls[1][0]).toHaveLength(500)
     expect(processBatch.mock.calls[2][0]).toHaveLength(1)
 
-    expect(updateProgress).toHaveBeenCalledTimes(3)
     expect(updateProgress.mock.calls[0][1]).toMatchObject({
       progress: 0,
       total: 1001,
       message: 'Processing batch 1 of 3',
     })
     expect(updateProgress.mock.calls[1][1]).toMatchObject({
-      progress: 33,
+      progress: 49,
+      total: 1001,
+      message: 'Processing batch 1 of 3',
+    })
+    expect(updateProgress.mock.calls[2][1]).toMatchObject({
+      progress: 49,
       total: 1001,
       message: 'Processing batch 2 of 3',
     })
-    expect(updateProgress.mock.calls[2][1]).toMatchObject({
-      progress: 66,
+    expect(updateProgress.mock.calls[3][1]).toMatchObject({
+      progress: 99,
+      total: 1001,
+      message: 'Processing batch 2 of 3',
+    })
+    expect(updateProgress.mock.calls[4][1]).toMatchObject({
+      progress: 99,
       total: 1001,
       message: 'Processing batch 3 of 3',
+    })
+    expect(updateProgress.mock.calls[5][1]).toMatchObject({
+      progress: 99,
+      total: 1001,
+      message: 'Processing batch 3 of 3',
+    })
+    expect(updateProgress.mock.calls[6][1]).toMatchObject({
+      progress: 100,
+      total: 1001,
+      message: 'PSGC matching completed',
     })
     expect(result.succeeded).toHaveLength(1001)
   })
@@ -154,5 +173,43 @@ describe('LocationAssignmentsProcessor', () => {
     expect(release).toHaveBeenCalledTimes(1)
     expect(result.succeeded).toEqual(['client-1', 'client-2', 'client-3'])
     expect(result.failed).toEqual([])
+  })
+
+  it('reports intermediate PSGC batch progress before completion', async () => {
+    const query = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+    const release = vi.fn()
+
+    vi.mocked(pool.connect).mockResolvedValue({
+      query,
+      release,
+    } as any)
+
+    vi.spyOn(processor as any, 'resolvePsgcMatch').mockImplementation(async (_client: any, clientId: string) => ({
+      clientId,
+      psgcId: `psgc-${clientId}`,
+      region: 'REGION IX',
+      province: 'ZAMBOANGA DEL NORTE',
+      municipality: 'SIOCON',
+      barangay: null,
+    }))
+
+    vi.spyOn(processor as any, 'bulkUpdateMatchedClients').mockResolvedValue(undefined)
+
+    const onProgress = vi.fn().mockResolvedValue(undefined)
+
+    await (processor as any).processBatch(
+      Array.from({ length: 30 }, (_, index) => `client-${index + 1}`),
+      'psgc_matching',
+      'user-1',
+      undefined,
+      onProgress,
+    )
+
+    expect(onProgress).toHaveBeenCalledTimes(10)
+    expect(onProgress.mock.calls[0][0]).toBe(3)
+    expect(onProgress.mock.calls[9][0]).toBe(30)
   })
 })
