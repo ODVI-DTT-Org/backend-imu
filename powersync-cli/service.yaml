@@ -24,13 +24,13 @@ replication:
   connections:
     - type: postgresql
       # [optional] Connection string using environment variables for security
-      # uri: ${DATABASE_URL}
+      # Omitted to avoid duplicating connection credentials in the repo.
       password:
         secret_ref: default_password
       # [optional] Alternative to uri: individual connection parameters.
       hostname: imu-do-user-21438450-0.j.db.ondigitalocean.com
       port: 25060
-      database: qa3
+      database: production
       username: doadmin
       # [optional] Connection identifiers.
       name: Default

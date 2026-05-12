@@ -24,8 +24,7 @@ replication:
   connections:
     - type: postgresql
       # [optional] Connection string using environment variables for security
-      uri: |
-        postgresql://doadmin:{{POWERSYNC_DATABASE_PASSWORD}}@imu-do-user-21438450-0.j.db.ondigitalocean.com:25060/production?uselibpqcompat=true&sslmode=require
+      # Omitted to avoid duplicating connection credentials in the repo.
       password:
         secret_ref: default_password
       # [optional] Alternative to uri: individual connection parameters.
