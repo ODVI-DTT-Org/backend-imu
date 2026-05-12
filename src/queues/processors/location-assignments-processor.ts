@@ -24,6 +24,18 @@ interface PsgcClientMatch {
   barangay: string | null;
 }
 
+interface PsgcClientCandidate {
+  clientId: string;
+  municipality: string;
+  province: string;
+  fullAddress: string | null;
+}
+
+interface PsgcBatchResolution {
+  matches: PsgcClientMatch[];
+  failed: Array<{ id: string; error: string }>;
+}
+
 type BatchProgressCallback = (batchProcessed: number) => Promise<void>;
 
 /**
@@ -141,62 +153,69 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     const succeeded: string[] = [];
     const failed: Array<{ id: string; error: string }> = [];
     let detailedFailureLogs = 0;
-    const matchedClients: PsgcClientMatch[] = [];
-    const progressInterval = operation === 'psgc_matching'
-      ? Math.max(1, Math.min(25, Math.ceil(ids.length / 10)))
-      : ids.length;
 
     const client = await pool.connect();
 
     try {
       await client.query('BEGIN');
 
-      for (let index = 0; index < ids.length; index++) {
-        const id = ids[index];
-        try {
-          switch (operation) {
-            case 'psgc_matching':
-              matchedClients.push(await this.resolvePsgcMatch(client, id));
-              break;
-            case 'bulk_assign_user_psgc':
-              await this.assignUserPsgc(client, id, params);
-              break;
-            case 'bulk_assign_user_municipalities':
-              await this.assignUserMunicipalities(client, id, params);
-              break;
-            case 'bulk_assign_group_municipalities':
-              await this.assignGroupMunicipalities(client, id, params);
-              break;
-            case 'bulk_assign_caravan_municipalities':
-              await this.assignCaravanMunicipalities(client, id, params);
-              break;
-            default:
-              throw new Error(`Unknown location assignment operation: ${operation}`);
-          }
+      if (operation === 'psgc_matching') {
+        const resolution = await this.resolvePsgcMatches(client, ids, onProgress);
+        succeeded.push(...resolution.matches.map((match) => match.clientId));
 
-          succeeded.push(id);
-        } catch (error: any) {
-          if (operation === 'psgc_matching' && detailedFailureLogs < 5) {
+        for (const failure of resolution.failed) {
+          if (detailedFailureLogs < 5) {
             logger.warn(
               'PSGCMatching',
-              `Client failed job_operation=${operation} client_id=${id} error=${error?.message || 'Unknown error'}`
+              `Client failed job_operation=${operation} client_id=${failure.id} error=${failure.error}`
             );
             detailedFailureLogs += 1;
           }
           failed.push({
-            id,
-            error: handleJobError(error, id, { operation }),
+            id: failure.id,
+            error: handleJobError(new Error(failure.error), failure.id, { operation }),
           });
         }
 
-        const batchProcessed = index + 1;
-        if (onProgress && (batchProcessed % progressInterval === 0 || batchProcessed === ids.length)) {
-          await onProgress(batchProcessed);
+        if (resolution.matches.length > 0) {
+          await this.bulkUpdateMatchedClients(client, resolution.matches);
         }
-      }
+      } else {
+        const progressInterval = ids.length;
 
-      if (operation === 'psgc_matching' && matchedClients.length > 0) {
-        await this.bulkUpdateMatchedClients(client, matchedClients);
+        for (let index = 0; index < ids.length; index++) {
+          const id = ids[index];
+          try {
+            switch (operation) {
+              case 'bulk_assign_user_psgc':
+                await this.assignUserPsgc(client, id, params);
+                break;
+              case 'bulk_assign_user_municipalities':
+                await this.assignUserMunicipalities(client, id, params);
+                break;
+              case 'bulk_assign_group_municipalities':
+                await this.assignGroupMunicipalities(client, id, params);
+                break;
+              case 'bulk_assign_caravan_municipalities':
+                await this.assignCaravanMunicipalities(client, id, params);
+                break;
+              default:
+                throw new Error(`Unknown location assignment operation: ${operation}`);
+            }
+
+            succeeded.push(id);
+          } catch (error: any) {
+            failed.push({
+              id,
+              error: handleJobError(error, id, { operation }),
+            });
+          }
+
+          const batchProcessed = index + 1;
+          if (onProgress && (batchProcessed % progressInterval === 0 || batchProcessed === ids.length)) {
+            await onProgress(batchProcessed);
+          }
+        }
       }
 
       await client.query('COMMIT');
@@ -222,74 +241,235 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     return { succeeded, failed };
   }
 
-  /**
-   * Process PSGC matching for a single client using 3-strategy cascade:
-   * 1. Exact case-insensitive match
-   * 2. Normalized match (strips CITY OF / CITY prefix/suffix)
-   * 3. Trigram similarity fallback (requires pg_trgm extension)
-   */
-  private async resolvePsgcMatch(client: any, clientId: string): Promise<PsgcClientMatch> {
+  private async resolvePsgcMatches(
+    client: any,
+    ids: string[],
+    onProgress?: BatchProgressCallback
+  ): Promise<PsgcBatchResolution> {
+    const failed: Array<{ id: string; error: string }> = [];
+    const matchesById = new Map<string, PsgcClientMatch>();
+
+    const reportProgress = async (ratio: number) => {
+      if (!onProgress) return;
+      const current = Math.max(1, Math.min(ids.length, Math.floor(ids.length * ratio)));
+      await onProgress(current);
+    };
+
     const clientResult = await client.query(
-      'SELECT municipality, province FROM clients WHERE id = $1 AND deleted_at IS NULL',
-      [clientId]
+      `SELECT id::text AS client_id, municipality, province, full_address
+       FROM clients
+       WHERE id = ANY($1::uuid[])
+         AND deleted_at IS NULL`,
+      [ids]
     );
 
-    if (clientResult.rows.length === 0) throw new Error('Client not found');
+    const clientMap = new Map<string, {
+      municipality: string | null;
+      province: string | null;
+      fullAddress: string | null;
+    }>();
+    for (const row of clientResult.rows) {
+      clientMap.set(row.client_id, {
+        municipality: row.municipality,
+        province: row.province,
+        fullAddress: row.full_address ?? null,
+      });
+    }
 
-    const { municipality, province } = clientResult.rows[0];
-    if (!municipality || !province) throw new Error('Client missing municipality or province data');
+    const eligibleClients: PsgcClientCandidate[] = [];
+    for (const id of ids) {
+      const clientRow = clientMap.get(id);
 
-    const cols = 'id, region, province, mun_city, barangay';
+      if (!clientRow) {
+        failed.push({ id, error: 'Client not found' });
+        continue;
+      }
 
-    // Strategy 1: exact case-insensitive match
-    let psgcResult = await client.query(
-      `SELECT ${cols} FROM psgc
-       WHERE lower(mun_city) = lower($1) AND lower(province) = lower($2)
-       LIMIT 1`,
-      [municipality, province]
+      if (!clientRow.municipality || !clientRow.province) {
+        failed.push({ id, error: 'Client missing municipality or province data' });
+        continue;
+      }
+
+      eligibleClients.push({
+        clientId: id,
+        municipality: clientRow.municipality,
+        province: clientRow.province,
+        fullAddress: clientRow.fullAddress,
+      });
+    }
+
+    await reportProgress(0.15);
+
+    const exactMatches = await this.findExactPsgcMatches(client, eligibleClients);
+    exactMatches.forEach((match) => matchesById.set(match.clientId, match));
+    await reportProgress(0.45);
+
+    const unmatchedAfterExact = eligibleClients.filter((candidate) => !matchesById.has(candidate.clientId));
+    const normalizedMatches = await this.findNormalizedPsgcMatches(client, unmatchedAfterExact);
+    normalizedMatches.forEach((match) => matchesById.set(match.clientId, match));
+    await reportProgress(0.7);
+
+    const unmatchedAfterNormalized = unmatchedAfterExact.filter((candidate) => !matchesById.has(candidate.clientId));
+    const trigramMatches = await this.findTrigramPsgcMatches(client, unmatchedAfterNormalized);
+    trigramMatches.forEach((match) => matchesById.set(match.clientId, match));
+    await reportProgress(0.9);
+
+    const unmatchedAfterTrigram = unmatchedAfterNormalized.filter((candidate) => !matchesById.has(candidate.clientId));
+    const fullAddressMatches = await this.findFullAddressPsgcMatches(
+      client,
+      unmatchedAfterTrigram.filter((candidate) => Boolean(candidate.fullAddress))
     );
+    fullAddressMatches.forEach((match) => matchesById.set(match.clientId, match));
+    await reportProgress(0.97);
 
-    // Strategy 2: normalized match — strip leading/trailing CITY variants
-    if (psgcResult.rows.length === 0) {
-      const norm = (s: string) => s.replace(/ CITY$/i, '').replace(/^(CITY OF|CITY)\s*/i, '').trim();
-      psgcResult = await client.query(
-        `SELECT ${cols} FROM psgc
-         WHERE lower(regexp_replace(mun_city, '(^city of\\s+|^city\\s+|\\s+city$)', '', 'gi')) = lower($1)
-           AND lower(province) = lower($2)
-         LIMIT 1`,
-        [norm(municipality), province]
-      );
-    }
-
-    // Strategy 3: trigram similarity
-    if (psgcResult.rows.length === 0) {
-      psgcResult = await client.query(
-        `SELECT ${cols} FROM psgc
-         WHERE similarity(lower(mun_city), lower($1)) >= 0.35
-           AND similarity(lower(province), lower($2)) >= 0.5
-         ORDER BY (similarity(lower(mun_city), lower($1)) + similarity(lower(province), lower($2))) DESC
-         LIMIT 1`,
-        [municipality, province]
-      );
-    }
-
-    if (psgcResult.rows.length === 0) {
+    const unresolvedClients = unmatchedAfterTrigram.filter((candidate) => !matchesById.has(candidate.clientId));
+    for (const unresolved of unresolvedClients) {
       logger.warn(
         'PSGCMatching',
-        `No PSGC match found client_id=${clientId} province="${province}" municipality="${municipality}"`
+        `No PSGC match found client_id=${unresolved.clientId} province="${unresolved.province}" municipality="${unresolved.municipality}"`
       );
-      throw new Error('No matching PSGC record found');
+      failed.push({ id: unresolved.clientId, error: 'No matching PSGC record found' });
     }
 
-    const psgc = psgcResult.rows[0];
-
     return {
-      clientId,
-      psgcId: psgc.id,
-      region: psgc.region ?? null,
-      province: psgc.province ?? null,
-      municipality: psgc.mun_city ?? null,
-      barangay: psgc.barangay ?? null,
+      matches: eligibleClients
+        .map((candidate) => matchesById.get(candidate.clientId))
+        .filter((match): match is PsgcClientMatch => Boolean(match)),
+      failed,
+    };
+  }
+
+  private async findExactPsgcMatches(client: any, candidates: PsgcClientCandidate[]): Promise<PsgcClientMatch[]> {
+    if (candidates.length === 0) return [];
+
+    const result = await client.query(
+      `WITH input AS (
+         SELECT *
+         FROM unnest($1::uuid[], $2::text[], $3::text[]) AS input(client_id, municipality, province)
+       )
+       SELECT DISTINCT ON (input.client_id)
+         input.client_id::text AS client_id,
+         p.id::text AS psgc_id,
+         p.region,
+         p.province,
+         p.mun_city AS municipality,
+         p.barangay
+       FROM input
+       INNER JOIN psgc p
+         ON lower(p.mun_city) = lower(input.municipality)
+        AND lower(p.province) = lower(input.province)
+       ORDER BY input.client_id, p.id`,
+      this.buildPsgcCandidateParams(candidates)
+    );
+
+    return result.rows.map((row: any) => this.mapPsgcMatchRow(row));
+  }
+
+  private async findNormalizedPsgcMatches(client: any, candidates: PsgcClientCandidate[]): Promise<PsgcClientMatch[]> {
+    if (candidates.length === 0) return [];
+
+    const result = await client.query(
+      `WITH input AS (
+         SELECT *
+         FROM unnest($1::uuid[], $2::text[], $3::text[]) AS input(client_id, municipality, province)
+       )
+       SELECT DISTINCT ON (input.client_id)
+         input.client_id::text AS client_id,
+         p.id::text AS psgc_id,
+         p.region,
+         p.province,
+         p.mun_city AS municipality,
+         p.barangay
+       FROM input
+       INNER JOIN psgc p
+         ON lower(regexp_replace(p.mun_city, '(^city of\\s+|^city\\s+|\\s+city$)', '', 'gi')) =
+            lower(regexp_replace(input.municipality, '(^city of\\s+|^city\\s+|\\s+city$)', '', 'gi'))
+        AND lower(p.province) = lower(input.province)
+       ORDER BY input.client_id, p.id`,
+      this.buildPsgcCandidateParams(candidates)
+    );
+
+    return result.rows.map((row: any) => this.mapPsgcMatchRow(row));
+  }
+
+  private async findTrigramPsgcMatches(client: any, candidates: PsgcClientCandidate[]): Promise<PsgcClientMatch[]> {
+    if (candidates.length === 0) return [];
+
+    const result = await client.query(
+      `WITH input AS (
+         SELECT *
+         FROM unnest($1::uuid[], $2::text[], $3::text[]) AS input(client_id, municipality, province)
+       )
+       SELECT
+         input.client_id::text AS client_id,
+         p.id::text AS psgc_id,
+         p.region,
+         p.province,
+         p.mun_city AS municipality,
+         p.barangay
+       FROM input
+       INNER JOIN LATERAL (
+         SELECT id, region, province, mun_city, barangay
+         FROM psgc p
+         WHERE similarity(lower(p.mun_city), lower(input.municipality)) >= 0.35
+           AND similarity(lower(p.province), lower(input.province)) >= 0.5
+         ORDER BY (similarity(lower(p.mun_city), lower(input.municipality)) + similarity(lower(p.province), lower(input.province))) DESC
+         LIMIT 1
+       ) p ON true`,
+      this.buildPsgcCandidateParams(candidates)
+    );
+
+    return result.rows.map((row: any) => this.mapPsgcMatchRow(row));
+  }
+
+  private async findFullAddressPsgcMatches(client: any, candidates: PsgcClientCandidate[]): Promise<PsgcClientMatch[]> {
+    if (candidates.length === 0) return [];
+
+    const result = await client.query(
+      `WITH input AS (
+         SELECT
+           input.client_id,
+           input.full_address,
+           lower(regexp_replace(input.full_address, '[^a-z0-9]+', ' ', 'gi')) AS normalized_full_address
+         FROM unnest($1::uuid[], $2::text[]) AS input(client_id, full_address)
+       )
+       SELECT DISTINCT ON (input.client_id)
+         input.client_id::text AS client_id,
+         p.id::text AS psgc_id,
+         p.region,
+         p.province,
+         p.mun_city AS municipality,
+         p.barangay
+       FROM input
+       INNER JOIN psgc p
+         ON input.normalized_full_address LIKE '%' || lower(regexp_replace(p.province, '[^a-z0-9]+', ' ', 'gi')) || '%'
+        AND input.normalized_full_address LIKE '%' || lower(regexp_replace(regexp_replace(p.mun_city, '(^city of\\s+|^city\\s+|\\s+city$)', '', 'gi'), '[^a-z0-9]+', ' ', 'gi')) || '%'
+       ORDER BY input.client_id, length(p.mun_city) DESC, p.id`,
+      [
+        candidates.map((candidate) => candidate.clientId),
+        candidates.map((candidate) => candidate.fullAddress as string),
+      ]
+    );
+
+    return result.rows.map((row: any) => this.mapPsgcMatchRow(row));
+  }
+
+  private buildPsgcCandidateParams(candidates: PsgcClientCandidate[]): [string[], string[], string[]] {
+    return [
+      candidates.map((candidate) => candidate.clientId),
+      candidates.map((candidate) => candidate.municipality),
+      candidates.map((candidate) => candidate.province),
+    ];
+  }
+
+  private mapPsgcMatchRow(row: any): PsgcClientMatch {
+    return {
+      clientId: row.client_id,
+      psgcId: row.psgc_id,
+      region: row.region ?? null,
+      province: row.province ?? null,
+      municipality: row.municipality ?? null,
+      barangay: row.barangay ?? null,
     };
   }
 

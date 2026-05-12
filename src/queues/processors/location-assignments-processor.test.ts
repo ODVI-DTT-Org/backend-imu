@@ -95,16 +95,37 @@ describe('LocationAssignmentsProcessor', () => {
       release,
     } as any)
 
-    const resolvePsgcMatch = vi
-      .spyOn(processor as any, 'resolvePsgcMatch')
-      .mockImplementation(async (_client: any, clientId: string) => ({
-        clientId,
-        psgcId: `psgc-${clientId}`,
-        region: 'REGION IX',
-        province: 'ZAMBOANGA DEL NORTE',
-        municipality: 'SIOCON',
-        barangay: null,
-      }))
+    const resolvePsgcMatches = vi
+      .spyOn(processor as any, 'resolvePsgcMatches')
+      .mockResolvedValue({
+        matches: [
+          {
+            clientId: 'client-1',
+            psgcId: 'psgc-client-1',
+            region: 'REGION IX',
+            province: 'ZAMBOANGA DEL NORTE',
+            municipality: 'SIOCON',
+            barangay: null,
+          },
+          {
+            clientId: 'client-2',
+            psgcId: 'psgc-client-2',
+            region: 'REGION IX',
+            province: 'ZAMBOANGA DEL NORTE',
+            municipality: 'SIOCON',
+            barangay: null,
+          },
+          {
+            clientId: 'client-3',
+            psgcId: 'psgc-client-3',
+            region: 'REGION IX',
+            province: 'ZAMBOANGA DEL NORTE',
+            municipality: 'SIOCON',
+            barangay: null,
+          },
+        ],
+        failed: [],
+      })
 
     const bulkUpdateMatchedClients = vi.spyOn(processor as any, 'bulkUpdateMatchedClients')
 
@@ -115,7 +136,12 @@ describe('LocationAssignmentsProcessor', () => {
       undefined
     )
 
-    expect(resolvePsgcMatch).toHaveBeenCalledTimes(3)
+    expect(resolvePsgcMatches).toHaveBeenCalledTimes(1)
+    expect(resolvePsgcMatches).toHaveBeenCalledWith(
+      expect.anything(),
+      ['client-1', 'client-2', 'client-3'],
+      undefined,
+    )
     expect(bulkUpdateMatchedClients).toHaveBeenCalledTimes(1)
     expect(bulkUpdateMatchedClients).toHaveBeenCalledWith(
       expect.anything(),
@@ -177,41 +203,108 @@ describe('LocationAssignmentsProcessor', () => {
     expect(result.failed).toEqual([])
   })
 
-  it('reports intermediate PSGC batch progress before completion', async () => {
+  it('resolves PSGC matches with batch queries instead of per-client lookups', async () => {
     const query = vi.fn()
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined)
-    const release = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            client_id: 'client-1',
+            municipality: 'SIOCON',
+            province: 'ZAMBOANGA DEL NORTE',
+            full_address: 'SIOCON, ZAMBOANGA DEL NORTE',
+          },
+          {
+            client_id: 'client-2',
+            municipality: 'CITY OF ILAGAN',
+            province: 'ISABELA',
+            full_address: 'CITY OF ILAGAN, ISABELA',
+          },
+          {
+            client_id: 'client-3',
+            municipality: 'UNKNOWN',
+            province: 'UNKNOWN',
+            full_address: 'CORDOVA, CEBU',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            client_id: 'client-1',
+            psgc_id: 'psgc-1',
+            region: 'REGION IX',
+            province: 'ZAMBOANGA DEL NORTE',
+            municipality: 'SIOCON',
+            barangay: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            client_id: 'client-2',
+            psgc_id: 'psgc-2',
+            region: 'REGION II',
+            province: 'ISABELA',
+            municipality: 'ILAGAN',
+            barangay: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        rows: [],
+      })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            client_id: 'client-3',
+            psgc_id: 'psgc-3',
+            region: 'REGION VII',
+            province: 'CEBU',
+            municipality: 'CORDOVA',
+            barangay: null,
+          },
+        ],
+      })
 
-    vi.mocked(pool.connect).mockResolvedValue({
-      query,
-      release,
-    } as any)
-
-    vi.spyOn(processor as any, 'resolvePsgcMatch').mockImplementation(async (_client: any, clientId: string) => ({
-      clientId,
-      psgcId: `psgc-${clientId}`,
-      region: 'REGION IX',
-      province: 'ZAMBOANGA DEL NORTE',
-      municipality: 'SIOCON',
-      barangay: null,
-    }))
-
-    vi.spyOn(processor as any, 'bulkUpdateMatchedClients').mockResolvedValue(undefined)
-
-    const onProgress = vi.fn().mockResolvedValue(undefined)
-
-    await (processor as any).processBatch(
-      Array.from({ length: 30 }, (_, index) => `client-${index + 1}`),
-      'psgc_matching',
-      'user-1',
+    const result = await (processor as any).resolvePsgcMatches(
+      { query },
+      ['client-1', 'client-2', 'client-3'],
       undefined,
-      onProgress,
     )
 
-    expect(onProgress).toHaveBeenCalledTimes(10)
-    expect(onProgress.mock.calls[0][0]).toBe(3)
-    expect(onProgress.mock.calls[9][0]).toBe(30)
+    expect(query).toHaveBeenCalledTimes(5)
+    expect(query.mock.calls[0][0]).toContain('FROM clients')
+    expect(query.mock.calls[1][0]).toContain('lower(p.mun_city) = lower(input.municipality)')
+    expect(query.mock.calls[2][0]).toContain("regexp_replace(p.mun_city, '(^city of\\s+|^city\\s+|\\s+city$)', '', 'gi')")
+    expect(query.mock.calls[3][0]).toContain('similarity(lower(p.mun_city), lower(input.municipality)) >= 0.35')
+    expect(query.mock.calls[4][0]).toContain('normalized_full_address')
+    expect(result.matches).toEqual([
+      {
+        clientId: 'client-1',
+        psgcId: 'psgc-1',
+        region: 'REGION IX',
+        province: 'ZAMBOANGA DEL NORTE',
+        municipality: 'SIOCON',
+        barangay: null,
+      },
+      {
+        clientId: 'client-2',
+        psgcId: 'psgc-2',
+        region: 'REGION II',
+        province: 'ISABELA',
+        municipality: 'ILAGAN',
+        barangay: null,
+      },
+      {
+        clientId: 'client-3',
+        psgcId: 'psgc-3',
+        region: 'REGION VII',
+        province: 'CEBU',
+        municipality: 'CORDOVA',
+        barangay: null,
+      },
+    ])
+    expect(result.failed).toEqual([])
   })
 })
