@@ -149,6 +149,8 @@ describe('LocationAssignmentsProcessor', () => {
     expect(query).toHaveBeenNthCalledWith(1, 'BEGIN')
     expect(query.mock.calls[1][0]).toContain('UPDATE clients AS c')
     expect(query.mock.calls[1][0]).toContain('VALUES ($1, $2, $3, $4, $5, $6), ($7, $8, $9, $10, $11, $12), ($13, $14, $15, $16, $17, $18)')
+    expect(query.mock.calls[1][0]).toContain('updates.client_id::uuid')
+    expect(query.mock.calls[1][0]).toContain('updates.psgc_id::uuid')
     expect(query.mock.calls[1][1]).toEqual([
       'client-1',
       'psgc-client-1',

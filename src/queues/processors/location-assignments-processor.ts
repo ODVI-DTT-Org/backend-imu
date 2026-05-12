@@ -313,7 +313,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     await client.query(
       `UPDATE clients AS c
        SET
-         psgc_id = updates.psgc_id,
+         psgc_id = updates.psgc_id::uuid,
          region = COALESCE(updates.region, c.region),
          province = COALESCE(updates.province, c.province),
          municipality = COALESCE(updates.municipality, c.municipality),
@@ -322,7 +322,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
        FROM (
          VALUES ${valuesSql}
        ) AS updates(client_id, psgc_id, region, province, municipality, barangay)
-       WHERE c.id = updates.client_id
+       WHERE c.id = updates.client_id::uuid
          AND c.deleted_at IS NULL`,
       params
     );
