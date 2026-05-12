@@ -56,36 +56,11 @@ powersync-private-key.pem
 *.pem
 ```
 
-**Copy this private key:**
+**Copy this private key from your secret manager:**
 
 ```
 -----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDKAHOGiLOlbEQS
-fhlcM+o1UGVOd5G/d0gr71ZnuB3WBGYx/to2xrByNnCdRTTdrybiVUSd/j+gWS/v
-avINH1gd0mSNd76uuDvKTLTvWM38OB4+D91F5iqywII0SYlEOq5DmbO8AslRCqJx
-NkWap1K56zOEpkLBgA4t1uYuzKASBhr2VeUPtdKpJ17ZOgetacOqtLLSgmqdNoqT
-tiDuqfvJ0gFr0Mxz93LroUoe8PHfp5VYWBA9HZINjnMPW/20bRpygqYKK0pou+Dc
-g+Zknwdr+EwvpucfnlgL1wxmBikWyhuKaa8lG+fGupq4aMLKy2KGBoF2lh5MmG9+
-7rno56rJAgMBAAECggEAGKqQG3rQilVQxVFQl3RfbRMxdltzbgXgHOf6N8AWee50
-7DX1P4Bo8LQPxvnkcrgomgqqI6t1lDGlK38g/36MVq089L633MNHycmEGUCm0TL+
-aRBW3L+LseLVWL0ssyrXN2Squz073VbcbyaevpEgBkPfjpsexlzKCR7st1o//EiQ
-XCZMYdQsT4BqMx/rZr3S0pLHiKti+DDY3IwJ0/lAQQybhnrxW5sUKv3ijB7LJt0u
-7iNFKSKDc7f1DWo25xZf3SKjOCTrdK1Hov013hx9rAlOAbZ7dTf+E8USsZolD+1z
-wHm3rLPdIAJSkZSa2g+VugA01O2w2WBEGtT7EXBT4QKBgQDnQEX2+S3nDcSD1G0y
-VosAK0prH7qq3tl/DjRMctVP3A2vQ1ExQGZRIteAn3afWSW05jsyX9wHJYR1F2eS
-eHAUmKBsQpDs8o2U+y1gpQPZGF6586ZbMjEJmtRyNt80MtsSp8Y86S/WBDO1mVey
-lH52yccXBCDa2f9sd7aYzW++ZwKBgQDfntEg7Pg9uS1QoFQWucjgJcBJCch8Uteu
-BoCEYcywNKubVhmsDYy0DwOILPHxcCWP5aFpBrmBUtEngsTvwam2qUPjcoyvutPn
-5O+z4KEIAf7u8xfs4tL4P5poqhek+otdvqKsdmnV7CxjrJ0prPeJlYAHahpQcZ+p
-MDdX7HEvTwKBgEIJdbFYaQZRRSwMTn6QfjM3KZI7xlejOeLxkHfAVy/t/C5vf9Eb
-vdwvofDGGN7aW000bfUtsKyNxyyU2WvXXtJS34Tq4W34ufuwWr39gYLOVcauUHQ8
-egpvH3naN5U1bKAALzkXsiRgoM+cEZIam56acnMdJ7C3jhxQd2FdUSrDAoGAKJSU
-lOoL/n99RrVhrSIX3v1a0KZS2KTb+Pu7FMr+rzdPsQfF7uAimYZj+LFXUp4sYtmk
-GgAbZ+mUhRwJCw1U9A3xgPQHrdg0nk+AZF8uOdrK3agFvnpHGL/KEJZVZh4FboSq
-1qtCd4y9XXU0rBx0a2ZS7oWFsvV7qONUF8OToqcCgYALbcTmfr8PU1YJ/43Elwza
-meaweJeV7apcmrWVewbip+qz0hTLOxr08GOQFom6Y8lGzZEpO5gK9DnkbmNYx5wm
-HiBaR7xH/Pd9NaIv0PcxOVzpX9TwBiRGD59/co5w+8WUrpbcRjPW0Y8lcK5s6AoJ
-Yts+idNRYwG1gefNVMM3Qg==
+<redacted-private-key>
 -----END PRIVATE KEY-----
 ```
 
