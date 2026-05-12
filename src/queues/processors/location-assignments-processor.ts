@@ -17,7 +17,7 @@ import { logger } from '../../utils/logger.js';
 
 interface PsgcClientMatch {
   clientId: string;
-  psgcId: string;
+  psgcId: number;
   region: string | null;
   province: string | null;
   municipality: string | null;
@@ -349,7 +349,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
        )
        SELECT DISTINCT ON (input.client_id)
          input.client_id::text AS client_id,
-         p.id::text AS psgc_id,
+         p.id AS psgc_id,
          p.region,
          p.province,
          p.mun_city AS municipality,
@@ -375,7 +375,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
        )
        SELECT DISTINCT ON (input.client_id)
          input.client_id::text AS client_id,
-         p.id::text AS psgc_id,
+         p.id AS psgc_id,
          p.region,
          p.province,
          p.mun_city AS municipality,
@@ -402,7 +402,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
        )
        SELECT
          input.client_id::text AS client_id,
-         p.id::text AS psgc_id,
+         p.id AS psgc_id,
          p.region,
          p.province,
          p.mun_city AS municipality,
@@ -435,7 +435,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
        )
        SELECT DISTINCT ON (input.client_id)
          input.client_id::text AS client_id,
-         p.id::text AS psgc_id,
+         p.id AS psgc_id,
          p.region,
          p.province,
          p.mun_city AS municipality,
@@ -465,7 +465,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
   private mapPsgcMatchRow(row: any): PsgcClientMatch {
     return {
       clientId: row.client_id,
-      psgcId: row.psgc_id,
+      psgcId: Number(row.psgc_id),
       region: row.region ?? null,
       province: row.province ?? null,
       municipality: row.municipality ?? null,
@@ -493,7 +493,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     await client.query(
       `UPDATE clients AS c
        SET
-         psgc_id = updates.psgc_id::uuid,
+         psgc_id = updates.psgc_id::integer,
          region = COALESCE(updates.region, c.region),
          province = COALESCE(updates.province, c.province),
          municipality = COALESCE(updates.municipality, c.municipality),

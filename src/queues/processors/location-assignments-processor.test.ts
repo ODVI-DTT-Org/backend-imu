@@ -101,7 +101,7 @@ describe('LocationAssignmentsProcessor', () => {
         matches: [
           {
             clientId: 'client-1',
-            psgcId: 'psgc-client-1',
+            psgcId: 101,
             region: 'REGION IX',
             province: 'ZAMBOANGA DEL NORTE',
             municipality: 'SIOCON',
@@ -109,7 +109,7 @@ describe('LocationAssignmentsProcessor', () => {
           },
           {
             clientId: 'client-2',
-            psgcId: 'psgc-client-2',
+            psgcId: 102,
             region: 'REGION IX',
             province: 'ZAMBOANGA DEL NORTE',
             municipality: 'SIOCON',
@@ -117,7 +117,7 @@ describe('LocationAssignmentsProcessor', () => {
           },
           {
             clientId: 'client-3',
-            psgcId: 'psgc-client-3',
+            psgcId: 103,
             region: 'REGION IX',
             province: 'ZAMBOANGA DEL NORTE',
             municipality: 'SIOCON',
@@ -148,7 +148,7 @@ describe('LocationAssignmentsProcessor', () => {
       [
         {
           clientId: 'client-1',
-          psgcId: 'psgc-client-1',
+          psgcId: 101,
           region: 'REGION IX',
           province: 'ZAMBOANGA DEL NORTE',
           municipality: 'SIOCON',
@@ -156,7 +156,7 @@ describe('LocationAssignmentsProcessor', () => {
         },
         {
           clientId: 'client-2',
-          psgcId: 'psgc-client-2',
+          psgcId: 102,
           region: 'REGION IX',
           province: 'ZAMBOANGA DEL NORTE',
           municipality: 'SIOCON',
@@ -164,7 +164,7 @@ describe('LocationAssignmentsProcessor', () => {
         },
         {
           clientId: 'client-3',
-          psgcId: 'psgc-client-3',
+          psgcId: 103,
           region: 'REGION IX',
           province: 'ZAMBOANGA DEL NORTE',
           municipality: 'SIOCON',
@@ -176,22 +176,22 @@ describe('LocationAssignmentsProcessor', () => {
     expect(query.mock.calls[1][0]).toContain('UPDATE clients AS c')
     expect(query.mock.calls[1][0]).toContain('VALUES ($1, $2, $3, $4, $5, $6), ($7, $8, $9, $10, $11, $12), ($13, $14, $15, $16, $17, $18)')
     expect(query.mock.calls[1][0]).toContain('updates.client_id::uuid')
-    expect(query.mock.calls[1][0]).toContain('updates.psgc_id::uuid')
+    expect(query.mock.calls[1][0]).toContain('updates.psgc_id::integer')
     expect(query.mock.calls[1][1]).toEqual([
       'client-1',
-      'psgc-client-1',
+      101,
       'REGION IX',
       'ZAMBOANGA DEL NORTE',
       'SIOCON',
       null,
       'client-2',
-      'psgc-client-2',
+      102,
       'REGION IX',
       'ZAMBOANGA DEL NORTE',
       'SIOCON',
       null,
       'client-3',
-      'psgc-client-3',
+      103,
       'REGION IX',
       'ZAMBOANGA DEL NORTE',
       'SIOCON',
@@ -231,7 +231,7 @@ describe('LocationAssignmentsProcessor', () => {
         rows: [
           {
             client_id: 'client-1',
-            psgc_id: 'psgc-1',
+            psgc_id: 1,
             region: 'REGION IX',
             province: 'ZAMBOANGA DEL NORTE',
             municipality: 'SIOCON',
@@ -243,7 +243,7 @@ describe('LocationAssignmentsProcessor', () => {
         rows: [
           {
             client_id: 'client-2',
-            psgc_id: 'psgc-2',
+            psgc_id: 2,
             region: 'REGION II',
             province: 'ISABELA',
             municipality: 'ILAGAN',
@@ -258,7 +258,7 @@ describe('LocationAssignmentsProcessor', () => {
         rows: [
           {
             client_id: 'client-3',
-            psgc_id: 'psgc-3',
+            psgc_id: 3,
             region: 'REGION VII',
             province: 'CEBU',
             municipality: 'CORDOVA',
@@ -282,7 +282,7 @@ describe('LocationAssignmentsProcessor', () => {
     expect(result.matches).toEqual([
       {
         clientId: 'client-1',
-        psgcId: 'psgc-1',
+        psgcId: 1,
         region: 'REGION IX',
         province: 'ZAMBOANGA DEL NORTE',
         municipality: 'SIOCON',
@@ -290,7 +290,7 @@ describe('LocationAssignmentsProcessor', () => {
       },
       {
         clientId: 'client-2',
-        psgcId: 'psgc-2',
+        psgcId: 2,
         region: 'REGION II',
         province: 'ISABELA',
         municipality: 'ILAGAN',
@@ -298,7 +298,7 @@ describe('LocationAssignmentsProcessor', () => {
       },
       {
         clientId: 'client-3',
-        psgcId: 'psgc-3',
+        psgcId: 3,
         region: 'REGION VII',
         province: 'CEBU',
         municipality: 'CORDOVA',
