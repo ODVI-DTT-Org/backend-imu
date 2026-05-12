@@ -8,6 +8,7 @@
 import { Job, Worker } from 'bullmq';
 import { logger } from '../utils/logger.js';
 import type { JobProgress, JobResult } from './jobs/job-types.js';
+import { getQueueManager } from './queue-manager.js';
 
 /**
  * Abstract processor class that all queue processors should extend
@@ -29,12 +30,12 @@ export abstract class BaseProcessor<T = any, R = any> {
    * Get queue options for this processor
    */
   getQueueOptions() {
+    const queueManager = getQueueManager();
+    const { connection } = queueManager.getConnectionOptions();
+
     return {
       connection: {
-        host: process.env.REDIS_HOST || 'localhost',
-        port: parseInt(process.env.REDIS_PORT || '6379'),
-        db: parseInt(process.env.REDIS_DB || '0'),
-        password: process.env.REDIS_PASSWORD || undefined,
+        ...connection,
         maxRetriesPerRequest: 3,
         retryStrategy: (times: number) => {
           if (times > 3) return null;
