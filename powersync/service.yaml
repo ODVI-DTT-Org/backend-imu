@@ -8,7 +8,7 @@
 _type: cloud
 
 # [required] Instance name for display in the PowerSync Cloud dashboard.
-name: QA
+name: QA4
 
 # [required] Deployment region, e.g. us. Cannot be changed after initial deployment.
 region: jp
@@ -30,7 +30,7 @@ replication:
       # [optional] Alternative to uri: individual connection parameters.
       hostname: imu-do-user-21438450-0.j.db.ondigitalocean.com
       port: 25060
-      database: production
+      database: qa4
       username: doadmin
       # [optional] Connection identifiers.
       name: Default
