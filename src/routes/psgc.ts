@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import { getCacheService, CACHE_TTL, CACHE_PREFIX } from '../services/cache/redis-cache.js';
 
 const psgc = new Hono();
 
@@ -13,9 +14,24 @@ const psgc = new Hono();
 // ALL DATA - Single query for all PSGC data
 // ============================================
 
-// GET /api/psgc/all - Get all PSGC data in one query (no pagination)
+// GET /api/psgc/all - Get all PSGC data with pagination (max 1000/page, cached 24h per page)
 psgc.get('/all', authMiddleware, async (c) => {
   try {
+    const page = Math.max(1, parseInt(c.req.query('page') || '1'));
+    const perPage = Math.min(1000, Math.max(1, parseInt(c.req.query('per_page') || '1000')));
+    const offset = (page - 1) * perPage;
+
+    const cacheKey = `${CACHE_PREFIX.PSGC}all:p${page}:s${perPage}`;
+    const cache = getCacheService();
+    const cached = await cache.get<{ items: any[]; total: number; page: number; perPage: number; totalPages: number }>(cacheKey);
+    if (cached) {
+      return c.json(cached);
+    }
+
+    const countResult = await pool.query('SELECT COUNT(*) as count FROM psgc');
+    const total = parseInt(countResult.rows[0].count);
+    const totalPages = Math.ceil(total / perPage);
+
     const result = await pool.query(`
       SELECT
         id,
@@ -24,13 +40,13 @@ psgc.get('/all', authMiddleware, async (c) => {
         mun_city as municipality,
         mun_city_kind as municipality_kind,
         barangay,
-        pin_location,
         zip_code
       FROM psgc
       ORDER BY region, province, mun_city, barangay
-    `);
+      LIMIT $1 OFFSET $2
+    `, [perPage, offset]);
 
-    return c.json({
+    const response = {
       items: result.rows.map(row => ({
         id: row.id,
         region: row.region,
@@ -38,11 +54,17 @@ psgc.get('/all', authMiddleware, async (c) => {
         municipality: row.municipality,
         municipalityKind: row.municipality_kind,
         barangay: row.barangay,
-        pinLocation: row.pin_location,
         zipCode: row.zip_code,
       })),
-      total: result.rows.length
-    });
+      total,
+      page,
+      perPage,
+      totalPages,
+    };
+
+    await cache.set(cacheKey, response, CACHE_TTL.DAY);
+
+    return c.json(response);
   } catch (error) {
     console.error('Fetch all PSGC data error:', error);
     return c.json({ message: 'Internal server error' }, 500);
