@@ -271,12 +271,23 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       await onProgress(current);
     };
 
+    // JOIN primary address so we can fall back to addresses.city/province
+    // when the inline client fields are empty or absent.
+    // addresses.city maps to clients.municipality (different naming convention).
     const clientResult = await client.query(
-      `SELECT id::text AS client_id, municipality, province, full_address
-       FROM clients
-       WHERE id = ANY($1::uuid[])
-         AND deleted_at IS NULL
-         AND psgc_id IS NULL`,
+      `SELECT
+         c.id::text AS client_id,
+         COALESCE(NULLIF(TRIM(c.municipality), ''), NULLIF(TRIM(a.city), ''))    AS municipality,
+         COALESCE(NULLIF(TRIM(c.province),     ''), NULLIF(TRIM(a.province), '')) AS province,
+         c.full_address
+       FROM clients c
+       LEFT JOIN addresses a
+         ON a.client_id = c.id
+        AND a.is_primary = TRUE
+        AND a.deleted_at IS NULL
+       WHERE c.id = ANY($1::uuid[])
+         AND c.deleted_at IS NULL
+         AND c.psgc_id IS NULL`,
       [ids]
     );
 
@@ -303,7 +314,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       }
 
       if (!clientRow.municipality || !clientRow.province) {
-        failed.push({ id, error: 'Client missing municipality or province data' });
+        failed.push({ id, error: 'Client missing municipality or province data (checked inline fields and primary address)' });
         continue;
       }
 
@@ -522,6 +533,21 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
        WHERE c.id = updates.client_id::uuid
          AND c.deleted_at IS NULL
          AND c.psgc_id IS NULL`,
+      params
+    );
+
+    // Also sync psgc_id onto the primary address row so addresses table stays consistent
+    await client.query(
+      `UPDATE addresses AS a
+       SET psgc_id = updates.psgc_id::integer,
+           updated_at = NOW()
+       FROM (
+         VALUES ${valuesSql}
+       ) AS updates(client_id, psgc_id, region, province, municipality, barangay)
+       WHERE a.client_id = updates.client_id::uuid
+         AND a.is_primary = TRUE
+         AND a.deleted_at IS NULL
+         AND a.psgc_id IS NULL`,
       params
     );
   }
