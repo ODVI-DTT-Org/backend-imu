@@ -58,10 +58,18 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
     let items: string[];
     if (type === 'psgc_matching' && params?.fetchUnmatchedFromDb) {
       const result = await pool.query<{ id: string }>(`
-        SELECT id FROM clients
-        WHERE psgc_id IS NULL AND deleted_at IS NULL
-          AND province IS NOT NULL AND municipality IS NOT NULL
-        ORDER BY created_at ASC
+        SELECT id FROM clients c
+        WHERE c.psgc_id IS NULL AND c.deleted_at IS NULL
+          AND (
+            (c.province IS NOT NULL AND c.municipality IS NOT NULL)
+            OR EXISTS (
+              SELECT 1 FROM addresses a
+              WHERE a.client_id = c.id
+                AND a.city IS NOT NULL AND a.province IS NOT NULL
+                AND a.deleted_at IS NULL
+            )
+          )
+        ORDER BY c.created_at ASC
       `);
       items = result.rows.map((row) => row.id);
       logger.info('PSGCMatching', `Job ${job.id} fetched ${items.length} unmatched clients from DB`);
@@ -271,23 +279,30 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       await onProgress(current);
     };
 
-    // JOIN primary address so we can fall back to addresses.city/province
-    // when the inline client fields are empty or absent.
-    // addresses.city maps to clients.municipality (different naming convention).
+    // Fetch inline fields + best address (primary preferred, else oldest).
+    // addresses.city maps to the municipality concept; addresses table uses
+    // "city" while clients table uses "municipality".
     const clientResult = await client.query(
       `SELECT
          c.id::text AS client_id,
-         COALESCE(NULLIF(TRIM(c.municipality), ''), NULLIF(TRIM(a.city), ''))    AS municipality,
-         COALESCE(NULLIF(TRIM(c.province),     ''), NULLIF(TRIM(a.province), '')) AS province,
-         c.full_address
+         c.municipality   AS inline_municipality,
+         c.province       AS inline_province,
+         c.full_address,
+         COALESCE(
+           NULLIF(TRIM(MIN(CASE WHEN a.is_primary THEN a.city    END)), ''),
+           NULLIF(TRIM(MIN(a.city)),    '')
+         ) AS addr_city,
+         COALESCE(
+           NULLIF(TRIM(MIN(CASE WHEN a.is_primary THEN a.province END)), ''),
+           NULLIF(TRIM(MIN(a.province)), '')
+         ) AS addr_province
        FROM clients c
        LEFT JOIN addresses a
-         ON a.client_id = c.id
-        AND a.is_primary = TRUE
-        AND a.deleted_at IS NULL
+         ON a.client_id = c.id AND a.deleted_at IS NULL
        WHERE c.id = ANY($1::uuid[])
          AND c.deleted_at IS NULL
-         AND c.psgc_id IS NULL`,
+         AND c.psgc_id IS NULL
+       GROUP BY c.id, c.municipality, c.province, c.full_address`,
       [ids]
     );
 
@@ -297,10 +312,12 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       fullAddress: string | null;
     }>();
     for (const row of clientResult.rows) {
+      // Prefer address city/province over inline fields (addresses are more
+      // frequently updated by Tele; inline fields may be stale or empty)
       clientMap.set(row.client_id, {
-        municipality: row.municipality,
-        province: row.province,
-        fullAddress: row.full_address ?? null,
+        municipality: row.addr_city    || row.inline_municipality || null,
+        province:     row.addr_province || row.inline_province     || null,
+        fullAddress:  row.full_address ?? null,
       });
     }
 
@@ -314,7 +331,7 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       }
 
       if (!clientRow.municipality || !clientRow.province) {
-        failed.push({ id, error: 'Client missing municipality or province data (checked inline fields and primary address)' });
+        failed.push({ id, error: 'Client missing municipality or province data (checked inline fields and all addresses)' });
         continue;
       }
 
@@ -502,53 +519,41 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
   }
 
   private async bulkUpdateMatchedClients(client: any, matches: PsgcClientMatch[]): Promise<void> {
-    const valuesSql = matches
-      .map((_, index) => {
-        const offset = index * 6;
-        return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5}, $${offset + 6})`;
-      })
+    // clients table: only update psgc_id — do NOT overwrite user-entered text fields
+    // (region, province, municipality, barangay stay as the user entered them)
+    const clientValuesSql = matches
+      .map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`)
       .join(', ');
-
-    const params = matches.flatMap((match) => [
-      match.clientId,
-      match.psgcId,
-      match.region,
-      match.province,
-      match.municipality,
-      match.barangay,
-    ]);
+    const clientParams = matches.flatMap((m) => [m.clientId, m.psgcId]);
 
     await client.query(
       `UPDATE clients AS c
-       SET
-         psgc_id = updates.psgc_id::integer,
-         region = COALESCE(updates.region, c.region),
-         province = COALESCE(updates.province, c.province),
-         municipality = COALESCE(updates.municipality, c.municipality),
-         barangay = COALESCE(updates.barangay, c.barangay),
-         updated_at = NOW()
-       FROM (
-         VALUES ${valuesSql}
-       ) AS updates(client_id, psgc_id, region, province, municipality, barangay)
+       SET psgc_id     = updates.psgc_id::integer,
+           updated_at  = NOW()
+       FROM (VALUES ${clientValuesSql}) AS updates(client_id, psgc_id)
        WHERE c.id = updates.client_id::uuid
          AND c.deleted_at IS NULL
          AND c.psgc_id IS NULL`,
-      params
+      clientParams
     );
 
-    // Also sync psgc_id onto the primary address row so addresses table stays consistent
+    // addresses table: update psgc_id on every address for the client whose
+    // city+province matches the resolved PSGC location (handles multiple addresses).
+    const addrValuesSql = matches
+      .map((_, i) => `($${i * 3 + 1}, $${i * 3 + 2}, $${i * 3 + 3})`)
+      .join(', ');
+    const addrParams = matches.flatMap((m) => [m.clientId, m.psgcId, m.municipality]);
+
     await client.query(
       `UPDATE addresses AS a
-       SET psgc_id = updates.psgc_id::integer,
+       SET psgc_id    = updates.psgc_id::integer,
            updated_at = NOW()
-       FROM (
-         VALUES ${valuesSql}
-       ) AS updates(client_id, psgc_id, region, province, municipality, barangay)
+       FROM (VALUES ${addrValuesSql}) AS updates(client_id, psgc_id, municipality)
        WHERE a.client_id = updates.client_id::uuid
-         AND a.is_primary = TRUE
+         AND LOWER(TRIM(a.city)) = LOWER(TRIM(updates.municipality))
          AND a.deleted_at IS NULL
          AND a.psgc_id IS NULL`,
-      params
+      addrParams
     );
   }
 
