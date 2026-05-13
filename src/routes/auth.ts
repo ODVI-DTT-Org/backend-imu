@@ -111,6 +111,20 @@ auth.post('/login', authRateLimit, async (c) => {
     }
   );
 
+  // Generate refresh token (365 days)
+  const refreshToken = sign(
+    {
+      sub: user.id,
+      type: 'refresh',
+    },
+    signingKey,
+    {
+      algorithm: 'RS256',
+      keyid: 'imu-production-key-20260326',
+      expiresIn: '365d',
+    }
+  );
+
   // Audit log successful login
   await auditAuth.login(
     user.id,
@@ -156,6 +170,8 @@ auth.post('/login', authRateLimit, async (c) => {
 
   return c.json({
     access_token: accessToken,
+    refresh_token: refreshToken,
+    expires_in: expiryHours * 3600,
     user: {
       id: user.id,
       email: user.email,
@@ -392,6 +408,68 @@ auth.post('/logout', async (c) => {
   } catch {
     return c.json({ message: 'Logged out' });
   }
+});
+
+// Token refresh endpoint for mobile app
+auth.post('/refresh', async (c) => {
+  const body = await c.req.json();
+  const { refresh_token } = body;
+
+  if (!refresh_token) {
+    throw new TokenInvalidError();
+  }
+
+  let decoded: { sub: string; type?: string } | null = null;
+  try {
+    decoded = verify(refresh_token, verificationKey, { algorithms: ['RS256'] }) as { sub: string; type?: string };
+  } catch {
+    throw new TokenInvalidError();
+  }
+
+  if (decoded.type !== 'refresh') {
+    throw new TokenInvalidError();
+  }
+
+  const result = await pool.query(
+    'SELECT id, email, first_name, last_name, role FROM users WHERE id = $1',
+    [decoded.sub]
+  );
+
+  if (result.rows.length === 0) {
+    throw new TokenInvalidError();
+  }
+
+  const user = result.rows[0];
+  const expiryHours = parseInt(process.env.JWT_EXPIRY_HOURS || '720');
+
+  const accessToken = sign(
+    {
+      sub: user.id,
+      aud: powerSyncUrl,
+      email: user.email,
+      first_name: user.first_name,
+      last_name: user.last_name,
+      role: user.role,
+    },
+    signingKey,
+    {
+      algorithm: 'RS256',
+      keyid: 'imu-production-key-20260326',
+      expiresIn: `${expiryHours}h`,
+    }
+  );
+
+  const newRefreshToken = sign(
+    { sub: user.id, type: 'refresh' },
+    signingKey,
+    { algorithm: 'RS256', keyid: 'imu-production-key-20260326', expiresIn: '365d' }
+  );
+
+  return c.json({
+    access_token: accessToken,
+    refresh_token: newRefreshToken,
+    expires_in: expiryHours * 3600,
+  });
 });
 
 // Get permissions endpoint for mobile app
