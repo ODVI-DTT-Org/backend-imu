@@ -1201,8 +1201,8 @@ clients.get('/:id', authMiddleware, async (c) => {
         c.touchpoint_summary as touchpoints
        FROM clients c
        LEFT JOIN psgc psg ON psg.id = c.psgc_id
-       LEFT JOIN addresses a ON a.client_id = c.id
-       LEFT JOIN phone_numbers p ON p.client_id = c.id
+       LEFT JOIN addresses a ON a.client_id = c.id AND a.deleted_at IS NULL
+       LEFT JOIN phone_numbers p ON p.client_id = c.id AND p.deleted_at IS NULL
        WHERE c.id = $1 AND c.deleted_at IS NULL
        GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, c.touchpoint_summary
       `,
@@ -1687,6 +1687,46 @@ clients.post('/:id/addresses', authMiddleware, async (c) => {
     throw new Error();
   } finally {
     client.release();
+  }
+});
+
+// PATCH /api/clients/:id/addresses/:addressId/set-primary - Set address as primary
+clients.patch('/:id/addresses/:addressId/set-primary', authMiddleware, requirePermission('clients', 'update'), async (c) => {
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+
+    const clientId = c.req.param('id');
+    const addressId = c.req.param('addressId');
+
+    // Verify address belongs to client
+    const check = await dbClient.query(
+      'SELECT id FROM addresses WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL',
+      [addressId, clientId]
+    );
+    if (check.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
+      return c.json({ success: false, message: 'Address not found' }, 404);
+    }
+
+    // Unset all primaries for this client, then set this one
+    await dbClient.query(
+      'UPDATE addresses SET is_primary = false, updated_at = NOW() WHERE client_id = $1 AND deleted_at IS NULL',
+      [clientId]
+    );
+    const result = await dbClient.query(
+      'UPDATE addresses SET is_primary = true, updated_at = NOW() WHERE id = $1 RETURNING *',
+      [addressId]
+    );
+
+    await dbClient.query('COMMIT');
+    return c.json({ success: true, address: result.rows[0] });
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    console.error('Set primary address error:', error);
+    throw new Error();
+  } finally {
+    dbClient.release();
   }
 });
 
