@@ -275,7 +275,8 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
       `SELECT id::text AS client_id, municipality, province, full_address
        FROM clients
        WHERE id = ANY($1::uuid[])
-         AND deleted_at IS NULL`,
+         AND deleted_at IS NULL
+         AND psgc_id IS NULL`,
       [ids]
     );
 
@@ -519,7 +520,8 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
          VALUES ${valuesSql}
        ) AS updates(client_id, psgc_id, region, province, municipality, barangay)
        WHERE c.id = updates.client_id::uuid
-         AND c.deleted_at IS NULL`,
+         AND c.deleted_at IS NULL
+         AND c.psgc_id IS NULL`,
       params
     );
   }
