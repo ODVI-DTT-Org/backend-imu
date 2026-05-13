@@ -622,10 +622,10 @@ clients.get('/', authMiddleware, async (c) => {
           psg.barangay as psgc_barangay,
           COALESCE(addr.addresses_json, '[]') as addresses,
           COALESCE(phones.phones_json, '[]') as phone_numbers,
-          COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
+          GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) as completed_touchpoints,
           CASE
             WHEN c.next_touchpoint IS NULL THEN NULL
-            ELSE c.touchpoint_number + 1
+            ELSE GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) + 1
           END as next_touchpoint_number,
           c.next_touchpoint as next_touchpoint_type,
           (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
@@ -1016,12 +1016,12 @@ clients.get('/assigned', authMiddleware, async (c) => {
         COALESCE(
           phones.phones_json, '[]'
         ) as phone_numbers,
-        -- touchpoint_number already stores the actual count, not next number
-        COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
+        -- Use actual summary array length to handle legacy data where touchpoint_number column is stale
+        GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) as completed_touchpoints,
         -- Calculate next touchpoint number (unlimited, null if complete based on next_touchpoint)
         CASE
           WHEN c.next_touchpoint IS NULL THEN NULL
-          ELSE COALESCE(c.touchpoint_number, 0) + 1
+          ELSE GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) + 1
         END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
