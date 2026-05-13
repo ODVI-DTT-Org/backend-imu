@@ -50,8 +50,24 @@ export class LocationAssignmentsProcessor extends BaseProcessor<BulkJobData, Job
    * Process location assignment job
    */
   async process(job: Job<BulkJobData>): Promise<JobResult> {
-    const { type, userId, items, params } = job.data;
+    const { type, userId, params } = job.data;
     const startedAt = new Date();
+
+    // For psgc_matching the route handler intentionally sends items=[] to avoid
+    // storing thousands of UUIDs in Redis (OOM). Fetch them fresh from DB here.
+    let items: string[];
+    if (type === 'psgc_matching' && params?.fetchUnmatchedFromDb) {
+      const result = await pool.query<{ id: string }>(`
+        SELECT id FROM clients
+        WHERE psgc_id IS NULL AND deleted_at IS NULL
+          AND province IS NOT NULL AND municipality IS NOT NULL
+        ORDER BY created_at ASC
+      `);
+      items = result.rows.map((row) => row.id);
+      logger.info('PSGCMatching', `Job ${job.id} fetched ${items.length} unmatched clients from DB`);
+    } else {
+      items = job.data.items;
+    }
 
     // Validate job data
     if (!items || items.length === 0) {

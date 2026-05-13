@@ -101,44 +101,46 @@ jobs.post('/psgc/matching', requirePermission('clients', 'update'), async (c) =>
       `PSGC matching request received for user=${user.sub} dry_run=${validated.dry_run === true ? 'true' : 'false'}`
     );
 
-    const unmatchedClients = await pool.query<{ id: string }>(`
-      SELECT id
+    // COUNT only — do NOT load all IDs into memory here.
+    // Storing thousands of UUIDs in the BullMQ Redis payload causes OOM.
+    // The processor will query unmatched IDs fresh from DB when the job runs.
+    const countResult = await pool.query<{ count: string }>(`
+      SELECT COUNT(*) as count
       FROM clients
       WHERE psgc_id IS NULL
         AND deleted_at IS NULL
         AND province IS NOT NULL
         AND municipality IS NOT NULL
-      ORDER BY created_at ASC
     `);
 
-    const clientIds = unmatchedClients.rows.map((row) => row.id);
+    const totalClients = parseInt(countResult.rows[0].count);
 
     logger.info(
       'jobs/psgc/matching',
-      `PSGC matching candidate query returned count=${clientIds.length}`
+      `PSGC matching candidate count=${totalClients}`
     );
 
-    if (clientIds.length > 0) {
-      logger.info(
-        'jobs/psgc/matching',
-        `PSGC matching first candidates=${clientIds.slice(0, 5).join(',')}`
-      );
-    } else {
+    if (totalClients === 0) {
       logger.warn('jobs/psgc/matching', 'PSGC matching request found zero eligible unmatched clients');
     }
 
-    const job = await addLocationJob(LocationJobType.PSGC_MATCHING, user.sub, clientIds, validated);
+    const job = await addLocationJob(
+      LocationJobType.PSGC_MATCHING,
+      user.sub,
+      [],
+      { ...validated, fetchUnmatchedFromDb: true },
+    );
 
     logger.info(
       'jobs/psgc/matching',
-      `PSGC matching job enqueued job_id=${job.id} total_clients=${clientIds.length}`
+      `PSGC matching job enqueued job_id=${job.id} total_clients=${totalClients}`
     );
 
     return c.json({
       success: true,
       job_id: job.id,
       message: 'PSGC matching job started',
-      total_clients: clientIds.length,
+      total_clients: totalClients,
       status_url: `/api/jobs/queue/${job.id}`,
     }, 201);
   } catch (error: any) {
