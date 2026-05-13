@@ -345,7 +345,7 @@ jobs.post('/scheduler/trigger/:taskName', authMiddleware, requireRole('admin'), 
  * GET /api/jobs/queue/jobs
  * Get BullMQ jobs for the current user (admin sees all jobs)
  */
-jobs.get('/queue/jobs', async (c) => {
+jobs.get('/queue/jobs', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
     const queueManager = getQueueManager();
@@ -424,7 +424,7 @@ jobs.get('/queue/jobs', async (c) => {
  * GET /api/jobs/queue/:jobId
  * Get specific BullMQ job status (user must own the job or be admin)
  */
-jobs.get('/queue/:jobId', async (c) => {
+jobs.get('/queue/:jobId', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
     const jobId = c.req.param('jobId');
@@ -465,7 +465,7 @@ jobs.get('/queue/:jobId', async (c) => {
  * DELETE /api/jobs/queue/:jobId
  * Cancel a BullMQ job
  */
-jobs.delete('/queue/:jobId', async (c) => {
+jobs.delete('/queue/:jobId', authMiddleware, async (c) => {
   try {
     const jobId = c.req.param('jobId');
     const user = c.get('user');
