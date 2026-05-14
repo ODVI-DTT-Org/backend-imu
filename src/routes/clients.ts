@@ -316,7 +316,9 @@ function mapRowToClient(row: Record<string, any>) {
     loan_released_at: row.loan_released_at,
     // Touchpoint summary fields (denormalized from touchpoints table)
     touchpoint_summary: row.touchpoint_summary || [],
-    touchpoint_number: row.touchpoint_number || 0,
+    // Use summary length as the authoritative completed count — touchpoint_number column
+    // is stale for legacy-imported clients (stuck at 7 even with 70+ touchpoints).
+    touchpoint_number: summaryCount || row.touchpoint_number || 0,
     next_touchpoint: row.next_touchpoint || computedNextTouchpoint,
     next_touchpoint_number: row.next_touchpoint_number || null,
     // Legacy PCNICMS fields
