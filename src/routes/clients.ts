@@ -259,12 +259,24 @@ const phoneSchema = z.object({
 });
 
 // Helper to map DB row to Client type
+const _TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
+
 function mapRowToClient(row: Record<string, any>) {
   // Calculate display_name: "Surname, First Name MiddleName"
   // Only comma after surname, rest separated by spaces
   const middleName = row.middle_name || '';
   const nameParts = [row.first_name, middleName].filter((p: string) => p && p.trim().length > 0);
   const displayName = `${row.last_name}, ${nameParts.join(' ')}`;
+
+  // Compute next_touchpoint cyclically from summary length if the DB column is stale/null.
+  // Clients that hit the old 7-touchpoint cap had their next_touchpoint set to NULL in the
+  // DB; fall back to the cyclic pattern so they don't appear falsely "complete".
+  const summary = row.touchpoint_summary || [];
+  const summaryCount = Array.isArray(summary) ? summary.length : 0;
+  const loanReleased = row.loan_released || false;
+  const computedNextTouchpoint = loanReleased
+    ? null
+    : _TOUCHPOINT_SEQUENCE[summaryCount % _TOUCHPOINT_SEQUENCE.length];
 
   return {
     id: row.id,
@@ -305,7 +317,7 @@ function mapRowToClient(row: Record<string, any>) {
     // Touchpoint summary fields (denormalized from touchpoints table)
     touchpoint_summary: row.touchpoint_summary || [],
     touchpoint_number: row.touchpoint_number || 0,
-    next_touchpoint: row.next_touchpoint || null,
+    next_touchpoint: row.next_touchpoint || computedNextTouchpoint,
     next_touchpoint_number: row.next_touchpoint_number || null,
     // Legacy PCNICMS fields
     ext_name: row.ext_name,
@@ -622,10 +634,9 @@ clients.get('/', authMiddleware, async (c) => {
           psg.barangay as psgc_barangay,
           COALESCE(addr.addresses_json, '[]') as addresses,
           COALESCE(phones.phones_json, '[]') as phone_numbers,
-          GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) as completed_touchpoints,
-          CASE
-            WHEN c.next_touchpoint IS NULL THEN NULL
-            ELSE GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) + 1
+          COALESCE(jsonb_array_length(c.touchpoint_summary), 0) as completed_touchpoints,
+          CASE WHEN c.loan_released THEN NULL
+            ELSE COALESCE(jsonb_array_length(c.touchpoint_summary), 0) + 1
           END as next_touchpoint_number,
           c.next_touchpoint as next_touchpoint_type,
           (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
@@ -679,7 +690,9 @@ clients.get('/', authMiddleware, async (c) => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
       // Use next_touchpoint_number from SQL query instead of calculating
       const nextTouchpointNumber = row.next_touchpoint_number;
-      const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
+      const nextTouchpointType = nextTouchpointNumber
+        ? TOUCHPOINT_SEQUENCE[(nextTouchpointNumber - 1) % TOUCHPOINT_SEQUENCE.length]
+        : null;
       const loanReleased = row.loan_released || false;
 
       // Determine if current user can create the next touchpoint
@@ -720,8 +733,7 @@ clients.get('/', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: loanReleased, // Unlimited touchpoints: complete only when loan released
-          // is_complete: completedCount >= 7 || loanReleased, // REMOVED: No 7-touchpoint limit
+          is_complete: loanReleased,
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
@@ -1016,12 +1028,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
         COALESCE(
           phones.phones_json, '[]'
         ) as phone_numbers,
-        -- Use actual summary array length to handle legacy data where touchpoint_number column is stale
-        GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) as completed_touchpoints,
-        -- Calculate next touchpoint number (unlimited, null if complete based on next_touchpoint)
-        CASE
-          WHEN c.next_touchpoint IS NULL THEN NULL
-          ELSE GREATEST(COALESCE(jsonb_array_length(c.touchpoint_summary), 0), COALESCE(c.touchpoint_number, 0)) + 1
+        -- Use actual summary array length (authoritative; touchpoint_number may be stale)
+        COALESCE(jsonb_array_length(c.touchpoint_summary), 0) as completed_touchpoints,
+        -- next_touchpoint_number is always summary_length+1; null only when loan released
+        CASE WHEN c.loan_released THEN NULL
+          ELSE COALESCE(jsonb_array_length(c.touchpoint_summary), 0) + 1
         END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
@@ -1115,7 +1126,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
       const nextTouchpointNumber = row.next_touchpoint_number ?? null;
-      const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
+      const nextTouchpointType = nextTouchpointNumber
+        ? TOUCHPOINT_SEQUENCE[(nextTouchpointNumber - 1) % TOUCHPOINT_SEQUENCE.length]
+        : null;
       const loanReleased = row.loan_released || false;
 
       // Determine if current user can create the next touchpoint
@@ -1154,7 +1167,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
           next_touchpoint_type: nextTouchpointType,
           can_create_touchpoint: canCreateTouchpoint,
           expected_role: expectedRole,
-          is_complete: row.next_touchpoint === null || loanReleased,
+          is_complete: loanReleased,
           last_touchpoint_type: row.last_touchpoint_type,
           last_touchpoint_agent_name: row.last_touchpoint_first_name && row.last_touchpoint_last_name ? `${row.last_touchpoint_first_name} ${row.last_touchpoint_last_name}` : null,
           loan_released: loanReleased,
@@ -1219,11 +1232,11 @@ clients.get('/:id', authMiddleware, async (c) => {
     // Touchpoint status controls who can CREATE touchpoints
     // No role-based access check needed for viewing
 
-    // Calculate touchpoint status
+    // Calculate touchpoint status — unlimited touchpoints, cyclic sequence
     const completedTouchpoints = client.touchpoints ? client.touchpoints.length : 0;
-    const nextTouchpointNumber = completedTouchpoints >= 7 ? null : completedTouchpoints + 1;
+    const nextTouchpointNumber = completedTouchpoints + 1;
     const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-    const nextTouchpointType = nextTouchpointNumber ? TOUCHPOINT_SEQUENCE[nextTouchpointNumber - 1] : null;
+    const nextTouchpointType = TOUCHPOINT_SEQUENCE[(nextTouchpointNumber - 1) % TOUCHPOINT_SEQUENCE.length];
     const lastTouchpointType = completedTouchpoints > 0 ? client.touchpoints[completedTouchpoints - 1]?.type : null;
     const loanReleased = client.loan_released || false;
 
@@ -1234,13 +1247,11 @@ clients.get('/:id', authMiddleware, async (c) => {
     if (loanReleased) {
       canCreateTouchpoint = false;
       expectedRole = null;
-    } else if (nextTouchpointNumber) {
+    } else {
       if (user.role === 'caravan') {
         canCreateTouchpoint = nextTouchpointType === 'Visit' || completedTouchpoints === 0;
         expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
       } else if (user.role === 'tele') {
-        // Tele: Only Call types (2, 3, 5, 6)
-        // FIX: Cannot create touchpoint 1 (Visit) - that's for Caravan
         canCreateTouchpoint = nextTouchpointType === 'Call';
         expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
       } else {
@@ -1274,7 +1285,7 @@ clients.get('/:id', authMiddleware, async (c) => {
         next_touchpoint_type: nextTouchpointType,
         can_create_touchpoint: canCreateTouchpoint,
         expected_role: expectedRole,
-        is_complete: completedTouchpoints >= 7 || loanReleased,
+        is_complete: loanReleased,
         last_touchpoint_type: lastTouchpointType,
         loan_released: loanReleased,
         loan_released_at: client.loan_released_at,

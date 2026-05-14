@@ -51,16 +51,11 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
     const touchpoints: TouchpointSummaryItem[] = touchpointsResult.rows;
     const count = touchpoints.length;
 
-    // DEPRECATED: Pattern-based calculation (legacy code)
-    // Modern system uses backend-determined types (unlimited touchpoints)
-    let nextTouchpoint: 'Visit' | 'Call' | null = 'Visit';
-    if (count >= 7) {
-      nextTouchpoint = null;
-    } else if ([1, 2, 4, 5].includes(count)) {
-      nextTouchpoint = 'Call';
-    }
+    // Cyclic touchpoint sequence — repeats after 7 (unlimited touchpoints)
+    const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
+    const nextTouchpoint: 'Visit' | 'Call' = TOUCHPOINT_SEQUENCE[count % TOUCHPOINT_SEQUENCE.length];
 
-    // Update clients table
+    // Update clients table — touchpoint_number stores completed count
     await pool.query(
       `UPDATE clients
        SET touchpoint_summary = $1::jsonb,
@@ -68,7 +63,7 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
            next_touchpoint = $3,
            updated_at = NOW()
        WHERE id = $4`,
-      [JSON.stringify(touchpoints), count + 1, nextTouchpoint, clientId]
+      [JSON.stringify(touchpoints), count, nextTouchpoint, clientId]
     );
   } catch (error) {
     // Log error but don't throw - touchpoint creation should still succeed

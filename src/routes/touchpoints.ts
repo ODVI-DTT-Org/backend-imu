@@ -873,7 +873,7 @@ touchpoints.post('/bulk', authMiddleware, requirePermission('touchpoints', 'crea
     const bulkTouchpointSchema = z.object({
       touchpoints: z.array(z.object({
         client_id: z.string().uuid(),
-        touchpoint_number: z.number().int().min(1).max(7),
+        touchpoint_number: z.number().int().min(1),
         type: z.enum(['Visit', 'Call']),
         rejection_reason: z.string().max(1000).optional(),
         visit_id: z.string().uuid().optional(),
