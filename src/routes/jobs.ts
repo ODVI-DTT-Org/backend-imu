@@ -429,6 +429,10 @@ jobs.get('/queue/:jobId', authMiddleware, async (c) => {
     const user = c.get('user');
     const jobId = c.req.param('jobId');
 
+    if (!jobId) {
+      return c.json({ success: false, message: 'Job ID required' }, 400);
+    }
+
     const jobStatus = await getJobStatus(jobId);
 
     if (!jobStatus) {
@@ -469,6 +473,10 @@ jobs.delete('/queue/:jobId', authMiddleware, async (c) => {
   try {
     const jobId = c.req.param('jobId');
     const user = c.get('user');
+
+    if (!jobId) {
+      return c.json({ success: false, message: 'Job ID required' }, 400);
+    }
 
     const jobStatus = await getJobStatus(jobId);
 
