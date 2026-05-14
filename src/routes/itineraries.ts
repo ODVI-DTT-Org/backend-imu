@@ -352,15 +352,6 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     const validated = createItinerarySchema.parse(body);
     const { user_id, client_ids, scheduled_date, scheduled_time, status, priority, notes } = validated;
 
-    // Validate that scheduled_date is not in the past
-    const scheduledDate = new Date(scheduled_date);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    if (scheduledDate < today) {
-      throw new ValidationError('Scheduled date cannot be in the past');
-    }
-
     await client.query('BEGIN');
 
     const results = [];
