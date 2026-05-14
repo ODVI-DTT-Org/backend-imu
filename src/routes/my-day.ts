@@ -886,8 +886,8 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     }
 
     const touchpointNumber = parseInt(touchpointNumberStr);
-    if (isNaN(touchpointNumber) || touchpointNumber < 1 || touchpointNumber > 7) {
-      throw new ValidationError('Invalid touchpoint_number. Must be between 1 and 7')
+    if (isNaN(touchpointNumber) || touchpointNumber < 1) {
+      throw new ValidationError('Invalid touchpoint_number. Must be a positive integer')
         .addDetail('providedValue', touchpointNumberStr)
         .addDetail('requestId', requestId);
     }
@@ -1429,8 +1429,8 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     }
 
     const touchpointNumber = parseInt(touchpointNumberStr);
-    if (isNaN(touchpointNumber) || touchpointNumber < 1 || touchpointNumber > 7) {
-      throw new ValidationError('Invalid touchpoint_number. Must be between 1 and 7')
+    if (isNaN(touchpointNumber) || touchpointNumber < 1) {
+      throw new ValidationError('Invalid touchpoint_number. Must be a positive integer')
         .addDetail('providedValue', touchpointNumberStr)
         .addDetail('requestId', requestId);
     }
