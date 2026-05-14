@@ -703,6 +703,7 @@ myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints'
       photo_url: z.string().min(1, 'Photo is required'),
       notes: z.string().optional(),
       remarks: z.string().optional(),
+      visit_type: z.enum(['regular_visit', 'release_loan']).default('regular_visit'),
     });
 
     const validated = visitSchema.parse(await c.req.json());
@@ -721,16 +722,16 @@ myDay.post('/clients/:id/visit', authMiddleware, requirePermission('touchpoints'
     try {
       await dbClient.query('BEGIN');
 
-      // CREATE visits record (type='regular_visit')
+      // CREATE visits record
       const visitResult = await dbClient.query(`
         INSERT INTO visits (
           id, client_id, user_id, type, time_in, time_out,
           latitude, longitude, address, photo_url, remarks,
           barangay, municipality, province, region
         ) VALUES (
-          gen_random_uuid(), $1, $2, 'regular_visit', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
+          gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
         ) RETURNING id
-      `, [clientId, user.sub, validated.time_in, validated.time_out,
+      `, [clientId, user.sub, validated.visit_type, validated.time_in, validated.time_out,
           validated.latitude, validated.longitude, validated.address,
           validated.photo_url, validated.remarks ?? validated.notes ?? null,
           (validated as any).barangay ?? null,
@@ -870,6 +871,7 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
     const visitMunicipality = body['municipality'] as string | undefined;
     const visitProvince = body['province'] as string | undefined;
     const visitRegion = body['region'] as string | undefined;
+    const visitType = (body['visit_type'] as string | undefined) === 'release_loan' ? 'release_loan' : 'regular_visit';
 
     // Extract files
     const photoFile = body['photo'] as File | undefined;
@@ -1097,7 +1099,7 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
           ) RETURNING *`,
           [
-            clientId, user.sub, 'regular_visit',
+            clientId, user.sub, visitType,
             reason, status || 'Interested', remarks,
             address, latitude, longitude,
             uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
@@ -1129,6 +1131,7 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
       const touchpoint = result.rows[0];
 
       // Store file metadata in database (only for newly uploaded files, not duplicates)
+
       if (uploadedPhotoUrl && uploadedPhotoKey && photoFile) {
         // Check if this is a new upload (not a duplicate)
         const existingFile = await pool.query(
@@ -1406,6 +1409,7 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
     const odometerDeparture = body['odometer_departure'] as string | undefined;
     const nextVisitDate = body['next_visit_date'] as string | undefined;
     const remarks = (body['remarks'] || body['notes']) as string | undefined;
+    const visitType = (body['visit_type'] as string | undefined) === 'release_loan' ? 'release_loan' : 'regular_visit';
     const latitudeStr = body['latitude'] as string | undefined;
     const longitudeStr = body['longitude'] as string | undefined;
     const visitBarangay = body['barangay'] as string | undefined;
@@ -1635,7 +1639,7 @@ myDay.post('/complete-visit', authMiddleware, touchpointRateLimit, requirePermis
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
           ) RETURNING *`,
           [
-            clientId, user.sub, 'regular_visit',
+            clientId, user.sub, visitType,
             reason, status || 'Interested', remarks,
             address, latitude, longitude,
             uploadedPhotoUrl || '', // Use uploaded photo URL or empty string
