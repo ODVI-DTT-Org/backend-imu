@@ -329,6 +329,62 @@ approvals.get('/:id', authMiddleware, requirePermission('approvals', 'read'), as
   }
 });
 
+// GET /api/approvals/:id/duplicates - Find potential duplicate clients for a creation request
+approvals.get('/:id/duplicates', authMiddleware, requirePermission('approvals', 'read'), async (c) => {
+  const id = c.req.param('id');
+
+  const approvalResult = await pool.query(
+    `SELECT id, type, reason, notes FROM approvals WHERE id = $1`,
+    [id]
+  );
+  if (approvalResult.rows.length === 0) throw new NotFoundError('Approval');
+
+  const approval = approvalResult.rows[0];
+  if (approval.type !== 'client' || approval.reason !== 'Client Creation Request') {
+    return c.json({ duplicates: [] });
+  }
+
+  let clientData: Record<string, any> = {};
+  try { clientData = JSON.parse(approval.notes); } catch { return c.json({ duplicates: [] }); }
+
+  const { first_name, last_name, pan } = clientData;
+  if (!first_name && !last_name && !pan) return c.json({ duplicates: [] });
+
+  const params: any[] = [];
+  const conditions: string[] = [];
+
+  if (first_name && last_name) {
+    params.push(first_name.trim().toLowerCase(), last_name.trim().toLowerCase());
+    conditions.push(`(LOWER(TRIM(first_name)) = $${params.length - 1} AND LOWER(TRIM(last_name)) = $${params.length})`);
+  }
+  if (pan) {
+    params.push(pan.trim());
+    conditions.push(`TRIM(pan) = $${params.length}`);
+  }
+
+  if (conditions.length === 0) return c.json({ duplicates: [] });
+
+  const dupResult = await pool.query(
+    `SELECT id, first_name, last_name, middle_name, pension_type, product_type, pan, client_type
+     FROM clients
+     WHERE ${conditions.join(' OR ')}
+     ORDER BY last_name, first_name
+     LIMIT 10`,
+    params
+  );
+
+  return c.json({
+    duplicates: dupResult.rows.map(r => ({
+      id: r.id,
+      display_name: `${r.last_name}, ${r.first_name}${r.middle_name ? ' ' + r.middle_name : ''}`,
+      pension_type: r.pension_type,
+      product_type: r.product_type,
+      pan: r.pan,
+      client_type: r.client_type,
+    }))
+  });
+});
+
 // POST /api/approvals - Create new approval
 approvals.post('/', authMiddleware, requirePermission('approvals', 'create'), auditMiddleware('approval'), async (c) => {
   try {
