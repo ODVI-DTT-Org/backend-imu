@@ -20,7 +20,8 @@ import { createJobResult } from '../utils/job-helpers.js';
 import { logger } from '../../utils/logger.js';
 
 const BATCH_SIZE = 50;
-const MAPBOX_DELAY_MS = 300;
+const MAPBOX_DELAY_MS = 300; // 600 req/min free tier → 100ms min, use 300ms to be safe
+const HAIKU_DELAY_MS = 100;  // conservative delay when Haiku is the bottleneck
 const PH_BBOX = '116.9,4.6,126.6,21.1';
 const MIN_CONFIDENCE = 0.5;
 const MAPBOX_TIMEOUT_MS = 8000;
@@ -81,21 +82,27 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
 
     for (let i = 0; i < clients.length; i++) {
       const client = clients[i];
+      let step: 'psgc' | 'haiku' | 'mapbox' | 'skipped' | 'failed' = 'failed';
       try {
-        const geocoded = await this.geocodeClient(client);
-        if (geocoded) {
+        step = await this.geocodeClient(client);
+        // All outcomes (including 'failed' geocode_status) count as processed
+        if (step !== 'failed') {
           succeeded.push(client.id);
         } else {
-          // skipped counts as succeeded — status already written
-          succeeded.push(client.id);
+          failed.push({ id: client.id, error: 'all geocoding steps exhausted' });
         }
       } catch (err: any) {
+        // Unexpected exception (DB error, crash) — also write failed status
         failed.push({ id: client.id, error: err.message });
         logger.warn('GeocodeClients', `Client ${client.id} failed: ${err.message}`);
         await pool.query(`UPDATE clients SET geocode_status = 'failed' WHERE id = $1`, [client.id]);
       }
 
-      if (i < clients.length - 1) await this.delay(MAPBOX_DELAY_MS);
+      // Only rate-limit when an external API was actually called
+      if (i < clients.length - 1) {
+        if (step === 'mapbox') await this.delay(MAPBOX_DELAY_MS);
+        else if (step === 'haiku') await this.delay(HAIKU_DELAY_MS);
+      }
 
       await this.updateProgress(job, {
         progress: Math.floor(((i + 1) / clients.length) * 100),
@@ -144,13 +151,15 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
   // ── Main geocoding logic ───────────────────────────────────────────────
 
   /**
-   * Returns true if coordinates were saved, false if skipped.
-   * Throws on unrecoverable error (caller marks as failed).
+   * Returns which step resolved the client (or 'failed'/'skipped' if not geocoded).
+   * Throws only on unexpected errors (DB, network crash, etc.).
    */
-  private async geocodeClient(client: PendingClient): Promise<boolean> {
+  private async geocodeClient(
+    client: PendingClient
+  ): Promise<'psgc' | 'haiku' | 'mapbox' | 'skipped' | 'failed'> {
     if (!client.province && !client.municipality && !client.barangay && !client.psgc_id) {
       await pool.query(`UPDATE clients SET geocode_status = 'skipped' WHERE id = $1`, [client.id]);
-      return false;
+      return 'skipped';
     }
 
     // Step 1: Direct PSGC pin_location lookup (free, no API call)
@@ -159,7 +168,7 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
       if (coords) {
         await this.saveCoords(client.id, coords.lat, coords.lng);
         logger.info('GeocodeClients', `Client ${client.id} geocoded via PSGC (step 1)`);
-        return true;
+        return 'psgc';
       }
     }
 
@@ -172,7 +181,7 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
         await pool.query(`UPDATE clients SET psgc_id = $1 WHERE id = $2`, [haikuPsgcId, client.id]);
         await this.saveCoords(client.id, coords.lat, coords.lng);
         logger.info('GeocodeClients', `Client ${client.id} geocoded via Haiku+PSGC (step 2)`);
-        return true;
+        return 'haiku';
       }
     }
 
@@ -184,12 +193,12 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
       if (feature && this.isWithinPhilippines(feature.center[0], feature.center[1])) {
         await this.saveCoords(client.id, feature.center[1], feature.center[0]);
         logger.info('GeocodeClients', `Client ${client.id} geocoded via Mapbox (step 3)`);
-        return true;
+        return 'mapbox';
       }
     }
 
     await pool.query(`UPDATE clients SET geocode_status = 'failed' WHERE id = $1`, [client.id]);
-    return false;
+    return 'failed';
   }
 
   // ── Step 1: PSGC pin_location ──────────────────────────────────────────
