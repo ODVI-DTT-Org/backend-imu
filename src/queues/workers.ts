@@ -13,6 +13,7 @@ import { locationAssignmentsProcessor } from './processors/location-assignments-
 import { syncOperationsProcessor } from './processors/sync-operations-processor.js';
 import { excelReportsProcessor } from './processors/excel-reports-processor.js';
 import { bulkUploadProcessor } from './processors/bulk-upload-processor.js';
+import { geocodeClientsProcessor } from './processors/geocode-clients-processor.js';
 import { getQueueManager } from './queue-manager.js';
 import { logger } from '../utils/logger.js';
 
@@ -84,6 +85,13 @@ export async function startWorkers() {
       queueManager.registerWorker('bulk-upload', bulkUploadWorker);
     }
 
+    // Register geocoding processor
+    await geocodeClientsProcessor.start();
+    const geocodingWorker = geocodeClientsProcessor.getWorker();
+    if (geocodingWorker) {
+      queueManager.registerWorker('geocoding', geocodingWorker);
+    }
+
     logger.info('Workers', 'BullMQ workers started successfully');
   } catch (error) {
     logger.error('Workers', 'Failed to start workers', error);
@@ -119,6 +127,9 @@ export async function stopWorkers() {
 
     logger.info('Workers', 'Stopping bulk upload processor...');
     await bulkUploadProcessor.stop();
+
+    logger.info('Workers', 'Stopping geocoding processor...');
+    await geocodeClientsProcessor.stop();
 
     logger.info('Workers', 'All workers stopped successfully');
   } catch (error) {

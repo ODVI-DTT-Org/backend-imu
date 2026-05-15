@@ -17,6 +17,7 @@ export {
   ReportJobType,
   LocationJobType,
   SyncJobType,
+  GeocodingJobType,
   QUEUE_NAMES,
   JobStatus,
 } from './jobs/job-types.js';
@@ -28,6 +29,7 @@ export type {
   BulkJobData,
   ReportJobData,
   SyncJobData,
+  GeocodingJobData,
   JobResult,
   JobProgress,
 } from './jobs/job-types.js';
@@ -41,6 +43,7 @@ export {
   addReportJob,
   addLocationJob,
   addSyncJob,
+  addGeocodingJob,
   getJob,
   getJobStatus,
   cancelJob,

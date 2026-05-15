@@ -5,8 +5,8 @@
  */
 
 import { getQueueManager } from '../queue-manager.js';
-import type { BulkJobData, ReportJobData, SyncJobData, JobResult } from '../jobs/job-types.js';
-import { SyncJobType } from '../jobs/job-types.js';
+import type { BulkJobData, ReportJobData, SyncJobData, GeocodingJobData, JobResult } from '../jobs/job-types.js';
+import { SyncJobType, GeocodingJobType } from '../jobs/job-types.js';
 import type { JobsOptions } from 'bullmq';
 import { logger } from '../../utils/logger.js';
 
@@ -123,6 +123,27 @@ export async function addSyncJob(
   );
 
   return job;
+}
+
+/**
+ * Add a geocoding job to the geocoding queue.
+ * If clientId is provided, geocodes that single client.
+ * If clientId is omitted, the processor fetches all pending clients in a batch.
+ */
+export async function addGeocodingJob(
+  userId: string,
+  clientId?: string,
+  options?: JobsOptions
+) {
+  const queueManager = getQueueManager();
+
+  const data: GeocodingJobData = {
+    userId,
+    type: GeocodingJobType.GEOCODE_CLIENTS,
+    clientId,
+  };
+
+  return queueManager.addJob('geocoding', GeocodingJobType.GEOCODE_CLIENTS, data, options);
 }
 
 /**
