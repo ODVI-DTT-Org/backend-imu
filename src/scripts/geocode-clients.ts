@@ -2,14 +2,27 @@
  * Geocode Clients Script
  *
  * Geocodes all clients with geocode_status = 'pending' in batches of 50.
+ * Uses the 3-step pipeline: PSGC pin_location → Haiku AI matching → Mapbox.
  * Runs until no pending clients remain, then exits.
  *
- * Usage (reads DATABASE_URL and MAPBOX_ACCESS_TOKEN from .env by default):
+ * Required env vars:
+ *   DATABASE_URL           — Postgres connection string
+ *
+ * Optional (each step only activates when its key is present):
+ *   ANTHROPIC_API_KEY      — enables Claude Haiku PSGC matching (step 2)
+ *   MAPBOX_ACCESS_TOKEN    — enables Mapbox forward geocoding fallback (step 3)
+ *
+ * Usage:
+ *   # default .env
  *   pnpm exec tsx src/scripts/geocode-clients.ts
  *
- * To target a specific database, override DATABASE_URL inline:
- *   DATABASE_URL=<prod-url>  MAPBOX_ACCESS_TOKEN=<token> pnpm exec tsx src/scripts/geocode-clients.ts
- *   DATABASE_URL=<qa4-url>   MAPBOX_ACCESS_TOKEN=<token> pnpm exec tsx src/scripts/geocode-clients.ts
+ *   # production DB
+ *   DATABASE_URL=<prod-url> ANTHROPIC_API_KEY=<key> MAPBOX_ACCESS_TOKEN=<token> \
+ *     pnpm exec tsx src/scripts/geocode-clients.ts
+ *
+ *   # qa4 DB
+ *   DATABASE_URL=<qa4-url> ANTHROPIC_API_KEY=<key> MAPBOX_ACCESS_TOKEN=<token> \
+ *     pnpm exec tsx src/scripts/geocode-clients.ts
  */
 
 import 'dotenv/config';
@@ -26,10 +39,14 @@ const scriptJob = {
 } as any;
 
 async function main() {
-  if (!process.env.MAPBOX_ACCESS_TOKEN) {
-    console.error('❌ MAPBOX_ACCESS_TOKEN is not set');
-    process.exit(1);
-  }
+  const hasHaiku = !!process.env.ANTHROPIC_API_KEY;
+  const hasMapbox = !!process.env.MAPBOX_ACCESS_TOKEN;
+
+  console.log(
+    `🔧 Pipeline: PSGC lookup (always)` +
+    ` → Haiku AI matching (${hasHaiku ? 'enabled' : 'disabled — set ANTHROPIC_API_KEY'})` +
+    ` → Mapbox fallback (${hasMapbox ? 'enabled' : 'disabled — set MAPBOX_ACCESS_TOKEN'})`
+  );
 
   const { rows } = await pool.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM clients WHERE geocode_status = 'pending' AND deleted_at IS NULL`
