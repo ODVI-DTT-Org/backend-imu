@@ -17,7 +17,7 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getClientsCacheService } from '../services/cache/clients-cache.js';
-import { getQueueManager, QUEUE_NAMES, BulkJobType } from '../queues/index.js';
+import { getQueueManager, QUEUE_NAMES, BulkJobType, addGeocodingJob } from '../queues/index.js';
 import type { BulkUploadJobData } from '../queues/jobs/job-types.js';
 
 // Helper function to ensure loan_type is always returned as string
@@ -1366,6 +1366,12 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
     );
 
     await client.query('COMMIT');
+
+    // Queue geocoding for newly created client (fire and forget — non-blocking)
+    addGeocodingJob(user.sub, result.rows[0].id).catch((err: Error) =>
+      console.warn('GeocodeClients: Failed to enqueue geocoding for new client:', err.message)
+    );
+
     return c.json(mapRowToClient(result.rows[0]), 201);
   } catch (error) {
     await client.query('ROLLBACK');
