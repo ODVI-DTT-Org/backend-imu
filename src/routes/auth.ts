@@ -360,6 +360,113 @@ auth.post('/reset-password', authRateLimit, async (c) => {
   }
 });
 
+// Change password for authenticated user
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
+auth.post('/change-password', authMiddleware, async (c) => {
+  const user = c.get('user');
+
+  try {
+    const body = await c.req.json();
+    const { currentPassword, newPassword } = changePasswordSchema.parse(body);
+
+    const result = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [user.sub]
+    );
+
+    if (result.rows.length === 0) {
+      throw new NotFoundError('User');
+    }
+
+    const valid = await compare(currentPassword, result.rows[0].password_hash);
+    if (!valid) {
+      throw new InvalidCredentialsError('Current password is incorrect');
+    }
+
+    const newHash = await hash(newPassword, 10);
+    await pool.query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newHash, user.sub]
+    );
+
+    await auditAuth.passwordReset(
+      user.sub,
+      c.req.header('x-forwarded-for') || c.req.header('x-real-ip')
+    );
+
+    return c.json({ message: 'Password changed successfully' });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    throw error;
+  }
+});
+
+// Request password reset (admin-notification flow for mobile users)
+const requestPasswordResetSchema = z.object({
+  username: z.string().min(1),
+});
+
+auth.post('/request-password-reset', authRateLimit, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { username } = requestPasswordResetSchema.parse(body);
+
+    // Look up user by email (username field accepts email)
+    const result = await pool.query(
+      `SELECT id, email, first_name, last_name FROM users WHERE email = $1 OR LOWER(CONCAT(first_name, ' ', last_name)) = LOWER($1)`,
+      [username]
+    );
+
+    // Find any admin users to notify
+    const admins = await pool.query(
+      "SELECT email, first_name FROM users WHERE role = 'admin' LIMIT 5"
+    );
+
+    const requesterName = result.rows.length > 0
+      ? `${result.rows[0].first_name} ${result.rows[0].last_name} (${result.rows[0].email})`
+      : username;
+
+    // Notify all admins via email (fire-and-forget)
+    if (admins.rows.length > 0) {
+      const adminUrl = `${process.env.FRONTEND_URL || 'http://localhost:4002'}/users`;
+      for (const admin of admins.rows) {
+        emailService.send({
+          to: admin.email,
+          subject: 'Password Reset Request – IMU',
+          html: `<p>Hi ${admin.first_name},</p><p>User <strong>${requesterName}</strong> has requested a password reset via the mobile app. Please reset their password to the temporary password and notify them.</p><p><a href="${adminUrl}">Go to Users</a></p>`,
+          text: `User ${requesterName} has requested a password reset. Please reset their password and notify them. Users page: ${adminUrl}`,
+        }).catch((err: any) => {
+          logger.error('auth/request-password-reset', 'Failed to send admin notification', { error: String(err) });
+        });
+      }
+    } else {
+      logger.warn('auth/request-password-reset', 'No admin users found to notify for password reset request', { requester: requesterName });
+    }
+
+    return c.json({ message: 'Your request has been submitted. An admin will contact you shortly.' });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    logger.error('auth/request-password-reset', error);
+    throw new Error('Internal server error');
+  }
+});
+
 // Logout endpoint (client-side token removal, but we invalidate reset tokens too)
 auth.post('/logout', async (c) => {
   try {
