@@ -51,6 +51,14 @@ const loginSchema = z.object({
   password: z.string().min(6),
 });
 
+const registerSchema = z.object({
+  email: z.string().email().max(255),
+  password: z.string().min(8).max(72),
+  first_name: z.string().min(1).max(100),
+  last_name: z.string().min(1).max(100),
+  role: z.enum(['admin', 'area_manager', 'assistant_area_manager', 'caravan', 'tele']).optional().default('caravan'),
+});
+
 const forgotPasswordSchema = z.object({
   email: z.string().email(),
 });
@@ -203,11 +211,11 @@ auth.get('/me', authMiddleware, async (c) => {
   }
 });
 
-// Register endpoint (for testing/development)
+// Register endpoint (admin only in practice — protected at the infrastructure level)
 auth.post('/register', authRateLimit, async (c) => {
   try {
     const body = await c.req.json();
-    const { email, password, first_name, last_name, role = 'caravan' } = body;
+    const { email, password, first_name, last_name, role } = registerSchema.parse(body);
 
     // Hash password
     const password_hash = await hash(password, 10);
@@ -222,6 +230,13 @@ auth.post('/register', authRateLimit, async (c) => {
 
     return c.json({ user: result.rows[0] }, 201);
   } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
     if (error.code === '23505') {
       return c.json({ message: 'Email already exists' }, 409);
     }
@@ -301,13 +316,14 @@ auth.post('/reset-password', authRateLimit, async (c) => {
     const body = await c.req.json();
     const { token, password } = resetPasswordSchema.parse(body);
 
-    // Find valid reset token (not expired)
+    // Find valid reset tokens (not expired). ON CONFLICT (user_id) ensures at most
+    // one token per user, but use a generous limit to avoid missing tokens.
     const tokenResult = await pool.query(
       `SELECT prt.*, u.email FROM password_reset_tokens prt
        JOIN users u ON u.id = prt.user_id
        WHERE prt.expires_at > NOW()
        ORDER BY prt.created_at DESC
-       LIMIT 10`
+       LIMIT 500`
     );
 
     if (tokenResult.rows.length === 0) {
@@ -356,6 +372,120 @@ auth.post('/reset-password', authRateLimit, async (c) => {
       throw validationError;
     }
     logger.error('auth/reset-password', error);
+    throw new Error('Internal server error');
+  }
+});
+
+// Change password for authenticated user
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1),
+  newPassword: z.string().min(8),
+});
+
+auth.post('/change-password', authRateLimit, authMiddleware, async (c) => {
+  const user = c.get('user');
+
+  try {
+    const body = await c.req.json();
+    const { currentPassword, newPassword } = changePasswordSchema.parse(body);
+
+    const result = await pool.query(
+      'SELECT password_hash FROM users WHERE id = $1',
+      [user.sub]
+    );
+
+    if (result.rows.length === 0) {
+      throw new NotFoundError('User');
+    }
+
+    const valid = await compare(currentPassword, result.rows[0].password_hash);
+    if (!valid) {
+      throw new InvalidCredentialsError('Current password is incorrect');
+    }
+
+    const newHash = await hash(newPassword, 10);
+    await pool.query(
+      'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+      [newHash, user.sub]
+    );
+
+    await auditAuth.passwordReset(
+      user.sub,
+      c.req.header('x-forwarded-for') || c.req.header('x-real-ip')
+    );
+
+    return c.json({ message: 'Password changed successfully' });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    throw error;
+  }
+});
+
+// Request password reset (admin-notification flow for mobile users)
+const requestPasswordResetSchema = z.object({
+  username: z.string().min(1),
+});
+
+auth.post('/request-password-reset', authRateLimit, async (c) => {
+  try {
+    const body = await c.req.json();
+    const { username } = requestPasswordResetSchema.parse(body);
+
+    // Look up user by email (username field accepts email)
+    const result = await pool.query(
+      `SELECT id, email, first_name, last_name FROM users WHERE email = $1 OR LOWER(CONCAT(first_name, ' ', last_name)) = LOWER($1)`,
+      [username]
+    );
+
+    // Find any admin users to notify
+    const admins = await pool.query(
+      "SELECT email, first_name FROM users WHERE role = 'admin' LIMIT 5"
+    );
+
+    const requesterName = result.rows.length > 0
+      ? `${result.rows[0].first_name} ${result.rows[0].last_name} (${result.rows[0].email})`
+      : username;
+
+    // Store the request in the database
+    const userId = result.rows.length > 0 ? result.rows[0].id : null;
+    await pool.query(
+      `INSERT INTO password_reset_requests (user_id, username_submitted) VALUES ($1, $2)`,
+      [userId, username]
+    );
+
+    // Notify all admins via email (fire-and-forget)
+    if (admins.rows.length > 0) {
+      const adminUrl = `${process.env.FRONTEND_URL || 'http://localhost:4002'}/users`;
+      for (const admin of admins.rows) {
+        emailService.send({
+          to: admin.email,
+          subject: 'Password Reset Request – IMU',
+          html: `<p>Hi ${admin.first_name},</p><p>User <strong>${requesterName}</strong> has requested a password reset via the mobile app. Please reset their password and notify them.</p><p><a href="${adminUrl}">Go to Users</a></p>`,
+          text: `User ${requesterName} has requested a password reset. Please reset their password and notify them. Users page: ${adminUrl}`,
+        }).catch((err: any) => {
+          logger.error('auth/request-password-reset', 'Failed to send admin notification', { error: String(err) });
+        });
+      }
+    } else {
+      logger.warn('auth/request-password-reset', 'No admin users found to notify for password reset request', { requester: requesterName });
+    }
+
+    return c.json({ message: 'Your request has been submitted. An admin will contact you shortly.' });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    logger.error('auth/request-password-reset', error);
     throw new Error('Internal server error');
   }
 });
@@ -502,6 +632,87 @@ auth.get('/permissions', authMiddleware, async (c) => {
   } catch (error: any) {
     logger.error('auth/permissions', error);
     return c.json({ success: false, message: 'Failed to fetch permissions' }, 500);
+  }
+});
+
+// List password reset requests (admin only)
+auth.get('/reset-requests', authMiddleware, async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'admin') {
+    return c.json({ message: 'Forbidden' }, 403);
+  }
+
+  try {
+    const status = c.req.query('status') || 'pending';
+    const result = await pool.query(
+      `SELECT
+         prr.id,
+         prr.username_submitted,
+         prr.status,
+         prr.created_at,
+         prr.completed_at,
+         u.id        AS user_id,
+         u.first_name,
+         u.last_name,
+         u.email,
+         u.role,
+         cb.first_name AS completed_by_first_name,
+         cb.last_name  AS completed_by_last_name
+       FROM password_reset_requests prr
+       LEFT JOIN users u  ON u.id  = prr.user_id
+       LEFT JOIN users cb ON cb.id = prr.completed_by
+       WHERE prr.status = $1
+       ORDER BY prr.created_at DESC
+       LIMIT 100`,
+      [status]
+    );
+
+    return c.json({ requests: result.rows });
+  } catch (error: any) {
+    logger.error('auth/reset-requests', error);
+    return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
+// Update a password reset request status (admin only)
+const updateResetRequestSchema = z.object({
+  status: z.enum(['completed', 'dismissed']),
+});
+
+auth.patch('/reset-requests/:id', authMiddleware, async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'admin') {
+    return c.json({ message: 'Forbidden' }, 403);
+  }
+
+  try {
+    const { id } = c.req.param();
+    const body = await c.req.json();
+    const { status } = updateResetRequestSchema.parse(body);
+
+    const result = await pool.query(
+      `UPDATE password_reset_requests
+       SET status = $1, completed_at = NOW(), completed_by = $2
+       WHERE id = $3
+       RETURNING id, status`,
+      [status, user.sub, id]
+    );
+
+    if (result.rows.length === 0) {
+      return c.json({ message: 'Request not found' }, 404);
+    }
+
+    return c.json({ request: result.rows[0] });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    logger.error('auth/reset-requests/:id', error);
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 

@@ -17,7 +17,7 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getClientsCacheService } from '../services/cache/clients-cache.js';
-import { getQueueManager, QUEUE_NAMES, BulkJobType } from '../queues/index.js';
+import { getQueueManager, QUEUE_NAMES, BulkJobType, addGeocodingJob } from '../queues/index.js';
 import type { BulkUploadJobData } from '../queues/jobs/job-types.js';
 
 // Helper function to ensure loan_type is always returned as string
@@ -487,6 +487,10 @@ clients.get('/', authMiddleware, async (c) => {
           COALESCE(c.touchpoint_number, 1) DESC,
           c.created_at DESC`;
       }
+    }
+
+    if (sortBy === 'recently_visited') {
+      orderByClause = `c.last_touchpoint_date DESC NULLS LAST, c.created_at DESC`;
     }
 
     // Build WHERE clause conditions — shared filters from helper, then search appended below
@@ -1366,6 +1370,12 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
     );
 
     await client.query('COMMIT');
+
+    // Queue geocoding for newly created client (fire and forget — non-blocking)
+    addGeocodingJob(user.sub, result.rows[0].id).catch((err: Error) =>
+      console.warn('GeocodeClients: Failed to enqueue geocoding for new client:', err.message)
+    );
+
     return c.json(mapRowToClient(result.rows[0]), 201);
   } catch (error) {
     await client.query('ROLLBACK');
@@ -2979,6 +2989,28 @@ clients.delete('/:id/favorite', authMiddleware, async (c) => {
 
   // Return the deleted row (or null if not found)
   return c.json({ success: true, data: result.rows[0] || null });
+});
+
+// POST /api/clients/geocode/backfill
+// Admin only. Enqueues one batch job per 50 pending clients with staggered delays.
+// Run once after deploying the geocoding migration to geocode existing clients.
+clients.post('/geocode/backfill', authMiddleware, requirePermission('clients', 'update'), async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'admin') {
+    return c.json({ error: 'Admin only' }, 403);
+  }
+
+  const countResult = await pool.query<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM clients WHERE geocode_status = 'pending' AND deleted_at IS NULL`
+  );
+  const count = parseInt(countResult.rows[0].count, 10);
+  const batchCount = Math.ceil(count / 50);
+
+  for (let i = 0; i < batchCount; i++) {
+    await addGeocodingJob(user.sub, undefined, { delay: i * 15_000 });
+  }
+
+  return c.json({ message: `Enqueued ${batchCount} geocoding job(s) for ${count} pending client(s)` });
 });
 
 export default clients;

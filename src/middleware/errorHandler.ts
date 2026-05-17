@@ -64,7 +64,7 @@ export const errorHandler = async (c: Context, next: Next) => {
     c.header('Content-Type', 'application/json');
     const response = c.newResponse(JSON.stringify({
       success: false,
-      message: err.message,
+      message: err.message || 'Internal server error',
       statusCode,
       code: errorCode,
       requestId,

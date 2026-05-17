@@ -5,6 +5,7 @@ import { visitService, createVisitSchema, updateVisitSchema, type Visit } from '
 import { ValidationError } from '../errors/index.js';
 import { storageService } from '../services/storage.js';
 import { pool } from '../db/index.js';
+import { getCacheService, CACHE_TTL } from '../services/cache/redis-cache.js';
 
 const visits = new Hono();
 
@@ -203,6 +204,9 @@ visits.post('/', authMiddleware, async (c) => {
         [visit.client_id]
       ).catch((err: any) => console.error('[Visits] Failed to update itineraries:', err.message));
     }
+
+    // Invalidate missed visits cache for this user
+    getCacheService().del(`missed_visits:${user.sub}`).catch(() => {});
 
     return c.json(visit, 201);
   } catch (error: any) {
@@ -461,6 +465,136 @@ visits.get('/admin/export', authMiddleware, requireRole('admin'), async (c) => {
   } finally {
     client.release();
   }
+});
+
+// GET /missed — paginated missed visits with Redis cache
+// Returns missed itineraries (past-due scheduled visits) + overdue clients (no follow-up in 7+ days)
+visits.get('/missed', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const userId = user.sub;
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'));
+  const limit = Math.min(100, Math.max(1, parseInt(c.req.query('limit') || '20')));
+  const priority = c.req.query('priority'); // 'high' | 'medium' | 'low' | undefined
+
+  const cache = getCacheService();
+  const cacheKey = `missed_visits:${userId}`;
+
+  let allItems: any[] | null = await cache.get<any[]>(cacheKey);
+
+  if (!allItems) {
+    const client = await pool.connect();
+    try {
+      const result = await client.query(`
+        WITH missed_itineraries AS (
+          SELECT
+            i.id,
+            i.client_id,
+            (c.first_name || ' ' || COALESCE(NULLIF(c.middle_name, '') || ' ', '') || c.last_name) AS client_name,
+            COALESCE(c.touchpoint_number, 1) AS touchpoint_number,
+            COALESCE(c.next_touchpoint, 'Visit') AS touchpoint_type,
+            i.scheduled_date::text AS scheduled_date,
+            i.created_at,
+            c.phone AS primary_phone,
+            c.full_address AS primary_address,
+            'missedItinerary' AS source,
+            i.id AS itinerary_id,
+            (CURRENT_DATE - i.scheduled_date) AS days_overdue
+          FROM itineraries i
+          JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
+          WHERE i.user_id = $1
+            AND i.status = 'pending'
+            AND i.scheduled_date < CURRENT_DATE
+        ),
+        overdue_clients AS (
+          SELECT
+            c.id || '_overdue' AS id,
+            c.id AS client_id,
+            (c.first_name || ' ' || COALESCE(NULLIF(c.middle_name, '') || ' ', '') || c.last_name) AS client_name,
+            COALESCE(c.touchpoint_number, 1) + 1 AS touchpoint_number,
+            COALESCE(c.next_touchpoint, 'Visit') AS touchpoint_type,
+            (last_tp.max_date + INTERVAL '7 days')::date::text AS scheduled_date,
+            NOW() AS created_at,
+            c.phone AS primary_phone,
+            c.full_address AS primary_address,
+            'overdueClient' AS source,
+            NULL::text AS itinerary_id,
+            (CURRENT_DATE - (last_tp.max_date + INTERVAL '7 days')::date) AS days_overdue
+          FROM clients c
+          JOIN LATERAL (
+            SELECT MAX(tp.time_in) AS max_date
+            FROM touchpoints tp
+            WHERE tp.client_id = c.id AND tp.user_id = $1
+          ) last_tp ON last_tp.max_date IS NOT NULL
+          WHERE c.deleted_at IS NULL
+            AND COALESCE(c.loan_released, false) IS NOT TRUE
+            AND c.next_touchpoint IS NOT NULL
+            AND c.id NOT IN (SELECT client_id FROM missed_itineraries)
+            AND NOT EXISTS (
+              SELECT 1 FROM itineraries i
+              WHERE i.client_id = c.id AND i.user_id = $1
+                AND i.status IN ('pending', 'in_progress')
+                AND i.scheduled_date >= CURRENT_DATE
+            )
+            AND last_tp.max_date < NOW() - INTERVAL '7 days'
+        )
+        SELECT * FROM (
+          SELECT * FROM missed_itineraries
+          UNION ALL
+          SELECT * FROM overdue_clients
+        ) combined
+        ORDER BY days_overdue DESC
+      `, [userId]);
+
+      allItems = result.rows.map((row: any) => ({
+        id: row.id,
+        client_id: row.client_id,
+        client_name: row.client_name,
+        touchpoint_number: Number(row.touchpoint_number),
+        touchpoint_type: row.touchpoint_type,
+        scheduled_date: row.scheduled_date,
+        created_at: row.created_at,
+        primary_phone: row.primary_phone ?? null,
+        primary_address: row.primary_address ?? null,
+        source: row.source,
+        itinerary_id: row.itinerary_id ?? null,
+        days_overdue: Number(row.days_overdue),
+      }));
+
+      await cache.set(cacheKey, allItems, CACHE_TTL.SHORT);
+    } finally {
+      client.release();
+    }
+  }
+
+  const priorityOf = (daysOverdue: number) => {
+    if (daysOverdue >= 7) return 'high';
+    if (daysOverdue >= 3) return 'medium';
+    return 'low';
+  };
+
+  const filtered = priority
+    ? allItems.filter((item) => priorityOf(item.days_overdue) === priority)
+    : allItems;
+
+  const total = filtered.length;
+  const offset = (page - 1) * limit;
+  const items = filtered.slice(offset, offset + limit);
+
+  const counts = {
+    all: allItems.length,
+    high: allItems.filter((i) => priorityOf(i.days_overdue) === 'high').length,
+    medium: allItems.filter((i) => priorityOf(i.days_overdue) === 'medium').length,
+    low: allItems.filter((i) => priorityOf(i.days_overdue) === 'low').length,
+  };
+
+  return c.json({
+    items,
+    page,
+    limit,
+    total,
+    has_more: offset + items.length < total,
+    counts,
+  });
 });
 
 // Get visit by ID (must be after /admin and /admin/export to avoid route shadowing)

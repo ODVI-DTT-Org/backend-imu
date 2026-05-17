@@ -79,9 +79,17 @@ export enum SyncJobType {
 }
 
 /**
+ * Geocoding Queue Job Types
+ * For forward-geocoding client addresses to lat/lng
+ */
+export enum GeocodingJobType {
+  GEOCODE_CLIENTS = 'geocode_clients',
+}
+
+/**
  * All job types union
  */
-export type JobType = BulkJobType | ReportJobType | LocationJobType | SyncJobType;
+export type JobType = BulkJobType | ReportJobType | LocationJobType | SyncJobType | GeocodingJobType;
 
 /**
  * Queue Names
@@ -92,6 +100,7 @@ export const QUEUE_NAMES = {
   LOCATION_ASSIGNMENTS: 'location-assignments',
   SYNC_OPERATIONS: 'sync-operations',
   BULK_UPLOAD: 'bulk-upload',
+  GEOCODING: 'geocoding',
 } as const;
 
 export type QueueName = typeof QUEUE_NAMES[keyof typeof QUEUE_NAMES];
@@ -203,6 +212,14 @@ export interface BulkUploadJobData extends BaseJobData {
 export interface BulkUploadJobResult {
   successful: Array<BulkUploadClientRow & { id: string }>
   failed: Array<BulkUploadClientRow & { error: string }>
+}
+
+/**
+ * Geocoding job data interface
+ */
+export interface GeocodingJobData extends BaseJobData {
+  type: GeocodingJobType;
+  clientId?: string; // if set, geocode this single client; if absent, batch-process all pending
 }
 
 /**

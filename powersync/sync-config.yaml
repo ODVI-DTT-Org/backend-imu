@@ -107,7 +107,8 @@ streams:
         region, province, municipality, barangay, udi,
         loan_released, loan_released_at, created_at, updated_at,
         created_by, deleted_at, deleted_by,
-        touchpoint_summary, touchpoint_number, next_touchpoint
+        touchpoint_summary, touchpoint_number, next_touchpoint,
+        latitude, longitude
       FROM clients
       WHERE deleted_at IS NULL
         AND psgc_id IS NOT NULL
@@ -134,7 +135,8 @@ streams:
         region, province, municipality, barangay, udi,
         loan_released, loan_released_at, created_at, updated_at,
         created_by, deleted_at, deleted_by,
-        touchpoint_summary, touchpoint_number, next_touchpoint
+        touchpoint_summary, touchpoint_number, next_touchpoint,
+        latitude, longitude
       FROM clients
       WHERE deleted_at IS NULL
         AND id IN (
