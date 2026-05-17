@@ -108,13 +108,14 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         c.municipality,
         c.loan_released,
         (
-          SELECT tp->>'status'
+          SELECT tp->'visit'->>'reason'
           FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
-          WHERE ($1::date IS NULL OR (tp->>'date')::date >= $1)
+          WHERE tp->>'type' = 'Visit'
+            AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
             AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
           ORDER BY (tp->>'date')::date DESC
           LIMIT 1
-        ) AS recent_status,
+        ) AS recent_reason,
         EXISTS (
           SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
           WHERE tp->>'type' = 'Visit'
@@ -123,7 +124,8 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         ) AS has_visit,
         EXISTS (
           SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
-          WHERE tp->>'type' = 'Visit' AND tp->>'status' = 'Interested'
+          WHERE tp->>'type' = 'Visit'
+            AND LOWER(tp->'visit'->>'reason') = 'interested'
             AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
             AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
         ) AS has_interested_visit
@@ -137,9 +139,9 @@ marketSaturation.get('/', authMiddleware, async (c) => {
       SELECT
         municipality,
         CASE
-          WHEN recent_status = 'Interested'     THEN 'interested'
-          WHEN recent_status = 'Not Interested' THEN 'not_interested'
-          WHEN recent_status = 'Undecided'      THEN 'undecided'
+          WHEN LOWER(recent_reason) = 'not interested' THEN 'not_interested'
+          WHEN LOWER(recent_reason) = 'interested'     THEN 'interested'
+          WHEN LOWER(recent_reason) = 'undecided'      THEN 'undecided'
           ELSE 'untouched'
         END AS tp_status,
         CASE
@@ -292,17 +294,19 @@ marketSaturation.get('/', authMiddleware, async (c) => {
           c.client_type,
           c.loan_released,
           (
-            SELECT tp->>'status'
+            SELECT tp->'visit'->>'reason'
             FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
-            WHERE ($1::date IS NULL OR (tp->>'date')::date >= $1)
+            WHERE tp->>'type' = 'Visit'
+              AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
               AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
             ORDER BY (tp->>'date')::date DESC
             LIMIT 1
-          ) AS recent_status,
+          ) AS recent_reason,
           (
             SELECT tp->>'date'
             FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
-            WHERE ($1::date IS NULL OR (tp->>'date')::date >= $1)
+            WHERE tp->>'type' = 'Visit'
+              AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
               AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
             ORDER BY (tp->>'date')::date DESC
             LIMIT 1
@@ -315,7 +319,8 @@ marketSaturation.get('/', authMiddleware, async (c) => {
           ) AS has_visit,
           EXISTS (
             SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
-            WHERE tp->>'type' = 'Visit' AND tp->>'status' = 'Interested'
+            WHERE tp->>'type' = 'Visit'
+              AND LOWER(tp->'visit'->>'reason') = 'interested'
               AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
               AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
           ) AS has_interested_visit
@@ -328,11 +333,11 @@ marketSaturation.get('/', authMiddleware, async (c) => {
       client_data AS (
         SELECT
           id, full_name, municipality, client_type, last_touchpoint_date,
-          recent_status AS last_touchpoint_status,
+          recent_reason AS last_touchpoint_status,
           CASE
-            WHEN recent_status = 'Interested'     THEN 'interested'
-            WHEN recent_status = 'Not Interested' THEN 'not_interested'
-            WHEN recent_status = 'Undecided'      THEN 'undecided'
+            WHEN LOWER(recent_reason) = 'not interested' THEN 'not_interested'
+            WHEN LOWER(recent_reason) = 'interested'     THEN 'interested'
+            WHEN LOWER(recent_reason) = 'undecided'      THEN 'undecided'
             ELSE 'untouched'
           END AS tp_status,
           CASE
