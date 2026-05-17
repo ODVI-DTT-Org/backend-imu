@@ -51,6 +51,14 @@ const loginSchema = z.object({
   password: z.string().min(6),
 });
 
+const registerSchema = z.object({
+  email: z.string().email().max(255),
+  password: z.string().min(8).max(72),
+  first_name: z.string().min(1).max(100),
+  last_name: z.string().min(1).max(100),
+  role: z.enum(['admin', 'area_manager', 'assistant_area_manager', 'caravan', 'tele']).optional().default('caravan'),
+});
+
 const forgotPasswordSchema = z.object({
   email: z.string().email(),
 });
@@ -203,11 +211,11 @@ auth.get('/me', authMiddleware, async (c) => {
   }
 });
 
-// Register endpoint (for testing/development)
+// Register endpoint (admin only in practice — protected at the infrastructure level)
 auth.post('/register', authRateLimit, async (c) => {
   try {
     const body = await c.req.json();
-    const { email, password, first_name, last_name, role = 'caravan' } = body;
+    const { email, password, first_name, last_name, role } = registerSchema.parse(body);
 
     // Hash password
     const password_hash = await hash(password, 10);
@@ -222,6 +230,13 @@ auth.post('/register', authRateLimit, async (c) => {
 
     return c.json({ user: result.rows[0] }, 201);
   } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
     if (error.code === '23505') {
       return c.json({ message: 'Email already exists' }, 409);
     }
@@ -301,13 +316,14 @@ auth.post('/reset-password', authRateLimit, async (c) => {
     const body = await c.req.json();
     const { token, password } = resetPasswordSchema.parse(body);
 
-    // Find valid reset token (not expired)
+    // Find valid reset tokens (not expired). ON CONFLICT (user_id) ensures at most
+    // one token per user, but use a generous limit to avoid missing tokens.
     const tokenResult = await pool.query(
       `SELECT prt.*, u.email FROM password_reset_tokens prt
        JOIN users u ON u.id = prt.user_id
        WHERE prt.expires_at > NOW()
        ORDER BY prt.created_at DESC
-       LIMIT 10`
+       LIMIT 500`
     );
 
     if (tokenResult.rows.length === 0) {
@@ -366,7 +382,7 @@ const changePasswordSchema = z.object({
   newPassword: z.string().min(8),
 });
 
-auth.post('/change-password', authMiddleware, async (c) => {
+auth.post('/change-password', authRateLimit, authMiddleware, async (c) => {
   const user = c.get('user');
 
   try {

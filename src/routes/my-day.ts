@@ -1276,9 +1276,6 @@ myDay.post('/visits', authMiddleware, touchpointRateLimit, requirePermission('to
       message: 'An error occurred while submitting your touchpoint. Please try again.',
       code: 'INTERNAL_ERROR',
       requestId,
-      // FOR DEBUGGING: Include actual error message
-      debugMessage: error.message,
-      debugName: error.name,
     }, 500);
   }
 });

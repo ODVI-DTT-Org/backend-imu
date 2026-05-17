@@ -80,15 +80,17 @@ app.use('*', cors({
       ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
       : [];
 
-    // Allow all localhost ports, local network IPs, and mobile app origins
+    // Build allowed patterns — local/dev patterns excluded from production
     const allowedPatterns = [
-      /^http:\/\/localhost(:\d+)?$/,
-      /^http:\/\/127\.0\.0\.1(:\d+)?$/,
-      /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}(:\d+)?$/,
-      /^http:\/\/10\.0\.\d{1,3}\.\d{1,3}(:\d+)?$/,
-      /^capacitor:\/\/localhost$/,
+      ...(process.env.NODE_ENV !== 'production' ? [
+        /^http:\/\/localhost(:\d+)?$/,
+        /^http:\/\/127\.0\.0\.1(:\d+)?$/,
+        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}(:\d+)?$/,
+        /^http:\/\/10\.0\.\d{1,3}\.\d{1,3}(:\d+)?$/,
+        /^https?:\/\/.*\.preview\.app\.github\.dev$/, // GitHub Codespaces
+      ] : []),
+      /^capacitor:\/\/localhost$/,  // Capacitor/Ionic mobile hybrid apps
       /^ionic:\/\/localhost$/,
-      /^https?:\/\/.*\.preview\.app\.github\.dev$/, // GitHub Codespaces
       /^https:\/\/imu\.cfbtools\.app$/, // Production frontend
     ];
 
