@@ -68,22 +68,21 @@ marketSaturation.get('/', authMiddleware, async (c) => {
       SELECT DISTINCT ON (t.client_id)
         t.client_id, t.status
       FROM touchpoints t
-      WHERE t.deleted_at IS NULL
-        AND ($1::date IS NULL OR t.date::date >= $1)
+      WHERE ($1::date IS NULL OR t.date::date >= $1)
         AND ($2::date IS NULL OR t.date::date <= $2)
       ORDER BY t.client_id, t.date DESC, t.created_at DESC
     ),
     has_visit AS (
       SELECT DISTINCT client_id
       FROM touchpoints
-      WHERE type = 'Visit' AND deleted_at IS NULL
+      WHERE type = 'Visit'
         AND ($1::date IS NULL OR date::date >= $1)
         AND ($2::date IS NULL OR date::date <= $2)
     ),
     has_interested_visit AS (
       SELECT DISTINCT client_id
       FROM touchpoints
-      WHERE type = 'Visit' AND status = 'Interested' AND deleted_at IS NULL
+      WHERE type = 'Visit' AND status = 'Interested'
         AND ($1::date IS NULL OR date::date >= $1)
         AND ($2::date IS NULL OR date::date <= $2)
     ),
@@ -169,20 +168,19 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         SELECT DISTINCT ON (t.client_id)
           t.client_id, t.status, t.date AS last_date
         FROM touchpoints t
-        WHERE t.deleted_at IS NULL
-          AND ($1::date IS NULL OR t.date::date >= $1)
+        WHERE ($1::date IS NULL OR t.date::date >= $1)
           AND ($2::date IS NULL OR t.date::date <= $2)
         ORDER BY t.client_id, t.date DESC, t.created_at DESC
       ),
       has_visit AS (
         SELECT DISTINCT client_id FROM touchpoints
-        WHERE type = 'Visit' AND deleted_at IS NULL
+        WHERE type = 'Visit'
           AND ($1::date IS NULL OR date::date >= $1)
           AND ($2::date IS NULL OR date::date <= $2)
       ),
       has_interested_visit AS (
         SELECT DISTINCT client_id FROM touchpoints
-        WHERE type = 'Visit' AND status = 'Interested' AND deleted_at IS NULL
+        WHERE type = 'Visit' AND status = 'Interested'
           AND ($1::date IS NULL OR date::date >= $1)
           AND ($2::date IS NULL OR date::date <= $2)
       ),
