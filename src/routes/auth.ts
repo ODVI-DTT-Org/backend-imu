@@ -452,6 +452,13 @@ auth.post('/request-password-reset', authRateLimit, async (c) => {
       ? `${result.rows[0].first_name} ${result.rows[0].last_name} (${result.rows[0].email})`
       : username;
 
+    // Store the request in the database
+    const userId = result.rows.length > 0 ? result.rows[0].id : null;
+    await pool.query(
+      `INSERT INTO password_reset_requests (user_id, username_submitted) VALUES ($1, $2)`,
+      [userId, username]
+    );
+
     // Notify all admins via email (fire-and-forget)
     if (admins.rows.length > 0) {
       const adminUrl = `${process.env.FRONTEND_URL || 'http://localhost:4002'}/users`;
@@ -459,7 +466,7 @@ auth.post('/request-password-reset', authRateLimit, async (c) => {
         emailService.send({
           to: admin.email,
           subject: 'Password Reset Request – IMU',
-          html: `<p>Hi ${admin.first_name},</p><p>User <strong>${requesterName}</strong> has requested a password reset via the mobile app. Please reset their password to the temporary password and notify them.</p><p><a href="${adminUrl}">Go to Users</a></p>`,
+          html: `<p>Hi ${admin.first_name},</p><p>User <strong>${requesterName}</strong> has requested a password reset via the mobile app. Please reset their password and notify them.</p><p><a href="${adminUrl}">Go to Users</a></p>`,
           text: `User ${requesterName} has requested a password reset. Please reset their password and notify them. Users page: ${adminUrl}`,
         }).catch((err: any) => {
           logger.error('auth/request-password-reset', 'Failed to send admin notification', { error: String(err) });
@@ -625,6 +632,87 @@ auth.get('/permissions', authMiddleware, async (c) => {
   } catch (error: any) {
     logger.error('auth/permissions', error);
     return c.json({ success: false, message: 'Failed to fetch permissions' }, 500);
+  }
+});
+
+// List password reset requests (admin only)
+auth.get('/reset-requests', authMiddleware, async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'admin') {
+    return c.json({ message: 'Forbidden' }, 403);
+  }
+
+  try {
+    const status = c.req.query('status') || 'pending';
+    const result = await pool.query(
+      `SELECT
+         prr.id,
+         prr.username_submitted,
+         prr.status,
+         prr.created_at,
+         prr.completed_at,
+         u.id        AS user_id,
+         u.first_name,
+         u.last_name,
+         u.email,
+         u.role,
+         cb.first_name AS completed_by_first_name,
+         cb.last_name  AS completed_by_last_name
+       FROM password_reset_requests prr
+       LEFT JOIN users u  ON u.id  = prr.user_id
+       LEFT JOIN users cb ON cb.id = prr.completed_by
+       WHERE prr.status = $1
+       ORDER BY prr.created_at DESC
+       LIMIT 100`,
+      [status]
+    );
+
+    return c.json({ requests: result.rows });
+  } catch (error: any) {
+    logger.error('auth/reset-requests', error);
+    return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
+// Update a password reset request status (admin only)
+const updateResetRequestSchema = z.object({
+  status: z.enum(['completed', 'dismissed']),
+});
+
+auth.patch('/reset-requests/:id', authMiddleware, async (c) => {
+  const user = c.get('user');
+  if (user.role !== 'admin') {
+    return c.json({ message: 'Forbidden' }, 403);
+  }
+
+  try {
+    const { id } = c.req.param();
+    const body = await c.req.json();
+    const { status } = updateResetRequestSchema.parse(body);
+
+    const result = await pool.query(
+      `UPDATE password_reset_requests
+       SET status = $1, completed_at = NOW(), completed_by = $2
+       WHERE id = $3
+       RETURNING id, status`,
+      [status, user.sub, id]
+    );
+
+    if (result.rows.length === 0) {
+      return c.json({ message: 'Request not found' }, 404);
+    }
+
+    return c.json({ request: result.rows[0] });
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    logger.error('auth/reset-requests/:id', error);
+    return c.json({ message: 'Internal server error' }, 500);
   }
 });
 
