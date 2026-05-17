@@ -264,7 +264,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
     const muniTotalItems = parseInt(muniCountResult.rows[0]?.count ?? '0');
     mainData = buildMainData(totalResult.rows[0], muniDataResult.rows, muniTotalItems);
 
-    await cache.set(cacheKey, mainData, CACHE_TTL.SHORT);
+    await cache.set(cacheKey, mainData, CACHE_TTL.DAY);
   }
 
   // Client drill list — only when segment is specified (never cached)
