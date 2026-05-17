@@ -521,7 +521,7 @@ visits.get('/missed', authMiddleware, async (c) => {
             (CURRENT_DATE - (last_tp.max_date + INTERVAL '7 days')::date) AS days_overdue
           FROM clients c
           JOIN LATERAL (
-            SELECT MAX(tp.time_in) AS max_date
+            SELECT MAX(tp.date) AS max_date
             FROM touchpoints tp
             WHERE tp.client_id = c.id AND tp.user_id = $1
           ) last_tp ON last_tp.max_date IS NOT NULL
