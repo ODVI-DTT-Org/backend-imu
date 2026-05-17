@@ -1,15 +1,27 @@
 import { Hono } from 'hono';
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/index.js';
+import { getCacheService, CACHE_TTL } from '../services/cache/redis-cache.js';
 
 const marketSaturation = new Hono();
 
-interface BreakdownRow {
-  municipality: string | null;
+const VALID_MUNI_FILTERS = [
+  'interested', 'not_interested', 'undecided', 'untouched',
+  'virgin', 'favorable', 'others', 'existing',
+] as const;
+type MuniFilter = typeof VALID_MUNI_FILTERS[number];
+
+interface TotalRow {
   interested: string; not_interested: string; undecided: string; untouched: string;
   tp_total: string;
   virgin: string; favorable: string; others: string; existing: string;
   cat_total: string;
+}
+
+interface MunicipalityRow {
+  municipality: string;
+  interested: string; not_interested: string; undecided: string; untouched: string;
+  virgin: string; favorable: string; others: string; existing: string;
 }
 
 interface ClientRow {
@@ -27,9 +39,21 @@ function emptyResponse() {
   return {
     status_breakdown: { interested: zero, not_interested: zero, undecided: zero, untouched: zero },
     category_breakdown: { virgin: zero, favorable: zero, others: zero, existing: zero },
-    by_municipality: [],
+    by_municipality: { items: [], page: 1, per_page: 20, total_items: 0, total_pages: 0 },
     clients: null,
   };
+}
+
+// Builds a HAVING clause from whitelisted filter names — no user input reaches the SQL.
+function buildHavingClause(filters: MuniFilter[]): string {
+  if (filters.length === 0) return '';
+  const statusSet = new Set(['interested', 'not_interested', 'undecided', 'untouched']);
+  const conditions = filters.map(f =>
+    statusSet.has(f)
+      ? `COUNT(*) FILTER (WHERE tp_status = '${f}') > 0`
+      : `COUNT(*) FILTER (WHERE market_category = '${f}') > 0`
+  );
+  return `HAVING (${conditions.join(' OR ')})`;
 }
 
 marketSaturation.get('/', authMiddleware, async (c) => {
@@ -44,8 +68,17 @@ marketSaturation.get('/', authMiddleware, async (c) => {
   const municipality = c.req.query('municipality') || null;
   const clientType = c.req.query('client_type') || null;
   const segment = c.req.query('segment') || null;
-  const page = Math.max(1, parseInt(c.req.query('page') || '1', 10));
-  const perPage = 20;
+
+  const muniPage = Math.max(1, parseInt(c.req.query('muni_page') || '1', 10));
+  const muniPerPage = Math.min(100, Math.max(1, parseInt(c.req.query('muni_per_page') || '20', 10)));
+  const muniFiltersRaw = c.req.query('muni_filters') || '';
+  const muniFilters = muniFiltersRaw
+    .split(',')
+    .map(f => f.trim())
+    .filter((f): f is MuniFilter => (VALID_MUNI_FILTERS as readonly string[]).includes(f));
+
+  const clientPage = Math.max(1, parseInt(c.req.query('page') || '1', 10));
+  const clientPerPage = 20;
 
   // Territory scoping: area_manager → their assigned municipalities only
   let territoryMunicipalities: string[] | null = null;
@@ -60,10 +93,16 @@ marketSaturation.get('/', authMiddleware, async (c) => {
     }
   }
 
-  // Params: $1=date_from, $2=date_to, $3=territory[], $4=municipality, $5=client_type
-  const params: any[] = [dateFrom, dateTo, territoryMunicipalities, municipality, clientType];
+  // Cache key scoped per user to avoid area_manager cache collisions
+  const scope = user.role === 'area_manager' ? user.sub : 'all';
+  const cacheKey = `msat:${scope}:${dateFrom}:${dateTo}:${municipality}:${clientType}:${muniFilters.join(',')}:${muniPage}:${muniPerPage}`;
 
-  const mainSql = `
+  const cache = getCacheService();
+
+  // Params: $1=date_from, $2=date_to, $3=territory[], $4=municipality, $5=client_type
+  const baseParams: any[] = [dateFrom, dateTo, territoryMunicipalities, municipality, clientType];
+
+  const baseCte = `
     WITH base AS (
       SELECT
         c.municipality,
@@ -111,43 +150,124 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         END AS market_category
       FROM base
     )
-    SELECT
-      municipality,
-      COUNT(*) FILTER (WHERE tp_status = 'interested')      AS interested,
-      COUNT(*) FILTER (WHERE tp_status = 'not_interested')  AS not_interested,
-      COUNT(*) FILTER (WHERE tp_status = 'undecided')       AS undecided,
-      COUNT(*) FILTER (WHERE tp_status = 'untouched')       AS untouched,
-      COUNT(*)                                              AS tp_total,
-      COUNT(*) FILTER (WHERE market_category = 'virgin')    AS virgin,
-      COUNT(*) FILTER (WHERE market_category = 'favorable') AS favorable,
-      COUNT(*) FILTER (WHERE market_category = 'others')    AS others,
-      COUNT(*) FILTER (WHERE market_category = 'existing')  AS existing,
-      COUNT(*)                                              AS cat_total
-    FROM client_data
-    GROUP BY ROLLUP(municipality)
-    ORDER BY municipality NULLS LAST
   `;
 
-  const result = await pool.query<BreakdownRow>(mainSql, params);
-  const rows = result.rows;
+  const havingClause = buildHavingClause(muniFilters);
 
-  // ROLLUP produces a NULL-municipality row as the grand total
-  const totalRow = rows.find(r => r.municipality === null);
-  const municipalityRows = rows.filter(r => r.municipality !== null);
+  // Municipality aggregation CTE — shared between count and data queries
+  const muniAggCte = `
+    ${baseCte},
+    muni_agg AS (
+      SELECT
+        municipality,
+        COUNT(*) FILTER (WHERE tp_status = 'interested')      AS interested,
+        COUNT(*) FILTER (WHERE tp_status = 'not_interested')  AS not_interested,
+        COUNT(*) FILTER (WHERE tp_status = 'undecided')       AS undecided,
+        COUNT(*) FILTER (WHERE tp_status = 'untouched')       AS untouched,
+        COUNT(*) FILTER (WHERE market_category = 'virgin')    AS virgin,
+        COUNT(*) FILTER (WHERE market_category = 'favorable') AS favorable,
+        COUNT(*) FILTER (WHERE market_category = 'others')    AS others,
+        COUNT(*) FILTER (WHERE market_category = 'existing')  AS existing
+      FROM client_data
+      GROUP BY municipality
+      ${havingClause}
+    )
+  `;
 
-  const interested    = parseInt(totalRow?.interested    ?? '0');
-  const notInterested = parseInt(totalRow?.not_interested ?? '0');
-  const undecided     = parseInt(totalRow?.undecided     ?? '0');
-  const untouched     = parseInt(totalRow?.untouched     ?? '0');
-  const tpTotal       = parseInt(totalRow?.tp_total      ?? '0');
+  type MainData = ReturnType<typeof buildMainData>;
+  function buildMainData(
+    t: TotalRow | undefined,
+    muniItems: MunicipalityRow[],
+    muniTotalItems: number
+  ) {
+    const interested    = parseInt(t?.interested    ?? '0');
+    const notInterested = parseInt(t?.not_interested ?? '0');
+    const undecided     = parseInt(t?.undecided     ?? '0');
+    const untouched     = parseInt(t?.untouched     ?? '0');
+    const tpTotal       = parseInt(t?.tp_total      ?? '0');
+    const virgin        = parseInt(t?.virgin        ?? '0');
+    const favorable     = parseInt(t?.favorable     ?? '0');
+    const others        = parseInt(t?.others        ?? '0');
+    const existing      = parseInt(t?.existing      ?? '0');
+    const catTotal      = parseInt(t?.cat_total     ?? '0');
+    const totalPages    = Math.ceil(muniTotalItems / muniPerPage) || 1;
 
-  const virgin   = parseInt(totalRow?.virgin   ?? '0');
-  const favorable = parseInt(totalRow?.favorable ?? '0');
-  const others   = parseInt(totalRow?.others   ?? '0');
-  const existing = parseInt(totalRow?.existing ?? '0');
-  const catTotal = parseInt(totalRow?.cat_total ?? '0');
+    return {
+      status_breakdown: {
+        interested:     { count: interested,    pct: pct(interested,    tpTotal) },
+        not_interested: { count: notInterested, pct: pct(notInterested, tpTotal) },
+        undecided:      { count: undecided,     pct: pct(undecided,     tpTotal) },
+        untouched:      { count: untouched,     pct: pct(untouched,     tpTotal) },
+      },
+      category_breakdown: {
+        virgin:   { count: virgin,    pct: pct(virgin,    catTotal) },
+        favorable: { count: favorable, pct: pct(favorable, catTotal) },
+        others:   { count: others,    pct: pct(others,    catTotal) },
+        existing: { count: existing,  pct: pct(existing,  catTotal) },
+      },
+      by_municipality: {
+        items: muniItems.map(r => ({
+          municipality:   r.municipality,
+          interested:     parseInt(r.interested),
+          not_interested: parseInt(r.not_interested),
+          undecided:      parseInt(r.undecided),
+          untouched:      parseInt(r.untouched),
+          virgin:         parseInt(r.virgin),
+          favorable:      parseInt(r.favorable),
+          others:         parseInt(r.others),
+          existing:       parseInt(r.existing),
+        })),
+        page: muniPage,
+        per_page: muniPerPage,
+        total_items: muniTotalItems,
+        total_pages: totalPages,
+      },
+    };
+  }
 
-  // Client drill list — only when segment is specified
+  // Attempt cache hit for the main (non-drill) portion
+  let mainData = await cache.get<MainData>(cacheKey);
+
+  if (!mainData) {
+    const totalSql = `
+      ${baseCte}
+      SELECT
+        COUNT(*) FILTER (WHERE tp_status = 'interested')      AS interested,
+        COUNT(*) FILTER (WHERE tp_status = 'not_interested')  AS not_interested,
+        COUNT(*) FILTER (WHERE tp_status = 'undecided')       AS undecided,
+        COUNT(*) FILTER (WHERE tp_status = 'untouched')       AS untouched,
+        COUNT(*)                                              AS tp_total,
+        COUNT(*) FILTER (WHERE market_category = 'virgin')    AS virgin,
+        COUNT(*) FILTER (WHERE market_category = 'favorable') AS favorable,
+        COUNT(*) FILTER (WHERE market_category = 'others')    AS others,
+        COUNT(*) FILTER (WHERE market_category = 'existing')  AS existing,
+        COUNT(*)                                              AS cat_total
+      FROM client_data
+    `;
+
+    const muniCountSql = `${muniAggCte} SELECT COUNT(*) AS count FROM muni_agg`;
+
+    const muniOffset = (muniPage - 1) * muniPerPage;
+    const muniDataSql = `
+      ${muniAggCte}
+      SELECT * FROM muni_agg
+      ORDER BY municipality
+      LIMIT $6 OFFSET $7
+    `;
+
+    const [totalResult, muniCountResult, muniDataResult] = await Promise.all([
+      pool.query<TotalRow>(totalSql, baseParams),
+      pool.query<{ count: string }>(muniCountSql, baseParams),
+      pool.query<MunicipalityRow>(muniDataSql, [...baseParams, muniPerPage, muniOffset]),
+    ]);
+
+    const muniTotalItems = parseInt(muniCountResult.rows[0]?.count ?? '0');
+    mainData = buildMainData(totalResult.rows[0], muniDataResult.rows, muniTotalItems);
+
+    await cache.set(cacheKey, mainData, CACHE_TTL.SHORT);
+  }
+
+  // Client drill list — only when segment is specified (never cached)
   let clientsPayload = null;
   if (segment) {
     const [segType, segValue] = segment.split(':');
@@ -231,15 +351,15 @@ marketSaturation.get('/', authMiddleware, async (c) => {
 
     const countResult = await pool.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM (${clientSql}) sub`,
-      params
+      baseParams
     );
     const totalItems = parseInt(countResult.rows[0].count);
-    const totalPages = Math.ceil(totalItems / perPage) || 1;
-    const offset = (page - 1) * perPage;
+    const totalPages = Math.ceil(totalItems / clientPerPage) || 1;
+    const offset = (clientPage - 1) * clientPerPage;
 
     const clientResult = await pool.query<ClientRow>(
-      `${clientSql} LIMIT ${perPage} OFFSET ${offset}`,
-      params
+      `${clientSql} LIMIT ${clientPerPage} OFFSET ${offset}`,
+      baseParams
     );
 
     clientsPayload = {
@@ -251,39 +371,14 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         last_touchpoint_date:   r.last_touchpoint_date   ?? null,
         last_touchpoint_status: r.last_touchpoint_status ?? null,
       })),
-      page,
-      per_page: perPage,
+      page: clientPage,
+      per_page: clientPerPage,
       total_items: totalItems,
       total_pages: totalPages,
     };
   }
 
-  return c.json({
-    status_breakdown: {
-      interested:    { count: interested,    pct: pct(interested,    tpTotal) },
-      not_interested: { count: notInterested, pct: pct(notInterested, tpTotal) },
-      undecided:     { count: undecided,     pct: pct(undecided,     tpTotal) },
-      untouched:     { count: untouched,     pct: pct(untouched,     tpTotal) },
-    },
-    category_breakdown: {
-      virgin:   { count: virgin,   pct: pct(virgin,   catTotal) },
-      favorable: { count: favorable, pct: pct(favorable, catTotal) },
-      others:   { count: others,   pct: pct(others,   catTotal) },
-      existing: { count: existing, pct: pct(existing, catTotal) },
-    },
-    by_municipality: municipalityRows.map(r => ({
-      municipality:   r.municipality!,
-      interested:     parseInt(r.interested),
-      not_interested: parseInt(r.not_interested),
-      undecided:      parseInt(r.undecided),
-      untouched:      parseInt(r.untouched),
-      virgin:         parseInt(r.virgin),
-      favorable:      parseInt(r.favorable),
-      others:         parseInt(r.others),
-      existing:       parseInt(r.existing),
-    })),
-    clients: clientsPayload,
-  });
+  return c.json({ ...mainData, clients: clientsPayload });
 });
 
 export default marketSaturation;
