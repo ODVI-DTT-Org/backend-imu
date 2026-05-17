@@ -109,7 +109,6 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
          SELECT group_id,
                 array_agg(DISTINCT province ORDER BY province) as provinces
          FROM group_municipalities
-         WHERE deleted_at IS NULL
          GROUP BY group_id
        ) gp ON gp.group_id = g.id
        ${whereClause}
