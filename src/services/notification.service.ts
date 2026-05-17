@@ -1,0 +1,78 @@
+import { pool } from '../db/index.js';
+import { logger } from '../utils/logger.js';
+
+export type NotificationType =
+  | 'approval_approved'
+  | 'approval_rejected'
+  | 'announcement'
+  | 'missed_visit'
+  | 'touchpoint_recorded'
+  | 'loan_released'
+  | 'geofence_alert';
+
+export async function createNotification(
+  userId: string,
+  type: NotificationType,
+  title: string,
+  body: string,
+  data: Record<string, unknown> = {},
+): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO notifications (user_id, type, title, body, data)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [userId, type, title, body, JSON.stringify(data)],
+    );
+  } catch (e) {
+    logger.error('notifications', 'Failed to create notification', { userId, type, error: e });
+  }
+}
+
+export async function createAnnouncementNotifications(
+  announcementId: string,
+  title: string,
+  body: string,
+  targetRoles: string[],
+): Promise<void> {
+  try {
+    // Fan-out: insert one notification per user matching the target roles
+    await pool.query(
+      `INSERT INTO notifications (user_id, type, title, body, data)
+       SELECT u.id, 'announcement', $1, $2, jsonb_build_object('announcement_id', $3::text)
+       FROM users u
+       JOIN user_profiles up ON up.user_id = u.id
+       WHERE up.role = ANY($4::text[])
+         AND u.deleted_at IS NULL`,
+      [title, body, announcementId, targetRoles],
+    );
+  } catch (e) {
+    logger.error('notifications', 'Failed to fan-out announcement notifications', {
+      announcementId,
+      error: e,
+    });
+  }
+}
+
+export async function markNotificationRead(
+  notificationId: string,
+  userId: string,
+): Promise<boolean> {
+  const result = await pool.query(
+    `UPDATE notifications
+     SET read_at = NOW()
+     WHERE id = $1 AND user_id = $2 AND read_at IS NULL
+     RETURNING id`,
+    [notificationId, userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+export async function markAllNotificationsRead(userId: string): Promise<number> {
+  const result = await pool.query(
+    `UPDATE notifications
+     SET read_at = NOW()
+     WHERE user_id = $1 AND read_at IS NULL`,
+    [userId],
+  );
+  return result.rowCount ?? 0;
+}
