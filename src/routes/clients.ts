@@ -550,22 +550,42 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     // visit_status: per-touchpoint interest level (INTERESTED, NOT_INTERESTED,
-    // UNDECIDED, COMPLETED, FOLLOW_UP_NEEDED). Independent of touchpoint_status
-    // (lifecycle) — those have separate semantics. Filters using the
-    // denormalized clients.touchpoint_summary JSONB array maintained by the
-    // trigger in migrations/073, so no JOIN against touchpoints is needed.
+    // UNDECIDED, etc.). Two data sources must both be checked:
+    //   1. clients.touchpoint_summary JSONB — legacy/imported records store the
+    //      interest level in elem->'visit'->>'reason' (title-case with spaces,
+    //      e.g. "Not Interested"). No touchpoints rows exist for these clients.
+    //   2. touchpoints.status — new app-recorded touchpoints will store the
+    //      interest level here (e.g. "NOT_INTERESTED").
+    // Both sides are normalised (LOWER + replace underscores with spaces) so
+    // "NOT_INTERESTED", "Not Interested", and "NOT INTERESTED" all match.
+    // EXISTS on both legs prevents client-level duplicates without a DISTINCT.
     const visitStatusQuery = c.req.queries('visit_status');
     const visitStatusValues = visitStatusQuery?.length
       ? visitStatusQuery.flatMap(v => v.split(',')).map(s => s.trim()).filter(Boolean)
       : [];
     if (visitStatusValues.length > 0) {
+      // Normalise filter values: lowercase + underscores → spaces
+      const normalisedVisitStatus = visitStatusValues.map(s => s.toLowerCase().replace(/_/g, ' '));
       baseWhereConditions.push(
-        `EXISTS (
-          SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
-          WHERE elem->>'status' = ANY($${baseParamIndex}::text[])
+        `(
+          EXISTS (
+            SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
+            WHERE LOWER(REPLACE(
+              COALESCE(elem->'visit'->>'reason', elem->'call'->>'reason', ''),
+              '_', ' '
+            )) = ANY($${baseParamIndex}::text[])
+          )
+          OR EXISTS (
+            SELECT 1 FROM touchpoints tp
+            LEFT JOIN visits v  ON v.id  = tp.visit_id
+            LEFT JOIN calls  ca ON ca.id = tp.call_id
+            WHERE tp.client_id = c.id
+            AND LOWER(REPLACE(COALESCE(v.status, ca.status, tp.status, ''), '_', ' '))
+              = ANY($${baseParamIndex}::text[])
+          )
         )`
       );
-      baseParams.push(visitStatusValues);
+      baseParams.push(normalisedVisitStatus);
       baseParamIndex++;
     }
 
@@ -943,21 +963,35 @@ clients.get('/assigned', authMiddleware, async (c) => {
       }
     }
 
-    // visit_status: per-touchpoint interest level (INTERESTED, NOT_INTERESTED,
-    // UNDECIDED, COMPLETED, FOLLOW_UP_NEEDED). See /api/clients above for the
-    // rationale; same EXISTS-on-touchpoint_summary trick avoids a JOIN.
+    // visit_status: per-touchpoint interest level. Same dual-source logic as
+    // /api/clients above — checks both touchpoint_summary JSONB (legacy) and
+    // touchpoints.status (new records) with normalised case comparison.
     const visitStatusQueryAssigned = c.req.queries('visit_status');
     const visitStatusValuesAssigned = visitStatusQueryAssigned?.length
       ? visitStatusQueryAssigned.flatMap(v => v.split(',')).map(s => s.trim()).filter(Boolean)
       : [];
     if (visitStatusValuesAssigned.length > 0) {
+      const normalisedVisitStatusAssigned = visitStatusValuesAssigned.map(s => s.toLowerCase().replace(/_/g, ' '));
       baseWhereConditions.push(
-        `EXISTS (
-          SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
-          WHERE elem->>'status' = ANY($${baseParamIndex}::text[])
+        `(
+          EXISTS (
+            SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
+            WHERE LOWER(REPLACE(
+              COALESCE(elem->'visit'->>'reason', elem->'call'->>'reason', ''),
+              '_', ' '
+            )) = ANY($${baseParamIndex}::text[])
+          )
+          OR EXISTS (
+            SELECT 1 FROM touchpoints tp
+            LEFT JOIN visits v  ON v.id  = tp.visit_id
+            LEFT JOIN calls  ca ON ca.id = tp.call_id
+            WHERE tp.client_id = c.id
+            AND LOWER(REPLACE(COALESCE(v.status, ca.status, tp.status, ''), '_', ' '))
+              = ANY($${baseParamIndex}::text[])
+          )
         )`
       );
-      baseParams.push(visitStatusValuesAssigned);
+      baseParams.push(normalisedVisitStatusAssigned);
       baseParamIndex++;
     }
 
