@@ -80,7 +80,9 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
               CONCAT(ah.first_name, ' ', ah.last_name) as area_manager_name,
               CONCAT(aah.first_name, ' ', aah.last_name) as assistant_area_manager_name,
               COALESCE(gm.member_count, 0) as member_count,
-              COALESCE(tl.names, ARRAY[]::text[]) as team_leader_names
+              COALESCE(tl.names, ARRAY[]::text[]) as team_leader_names,
+              COALESCE(all_members.names, ARRAY[]::text[]) as member_names,
+              COALESCE(gp.provinces, ARRAY[]::text[]) as provinces
        FROM groups g
        LEFT JOIN users ah ON ah.id = g.area_manager_id
        LEFT JOIN users aah ON aah.id = g.assistant_area_manager_id
@@ -96,6 +98,20 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
          JOIN users u ON u.id = gm2.client_id AND u.role = 'team_leader'
          GROUP BY gm2.group_id
        ) tl ON tl.group_id = g.id
+       LEFT JOIN (
+         SELECT gm3.group_id,
+                array_agg(CONCAT(u.first_name, ' ', u.last_name) ORDER BY u.first_name) as names
+         FROM group_members gm3
+         JOIN users u ON u.id = gm3.client_id
+         GROUP BY gm3.group_id
+       ) all_members ON all_members.group_id = g.id
+       LEFT JOIN (
+         SELECT group_id,
+                array_agg(DISTINCT province ORDER BY province) as provinces
+         FROM group_municipalities
+         WHERE deleted_at IS NULL
+         GROUP BY group_id
+       ) gp ON gp.group_id = g.id
        ${whereClause}
        ORDER BY g.name ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -112,6 +128,8 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
         assistant_area_manager_id: row.assistant_area_manager_id,
         assistant_area_manager_name: row.assistant_area_manager_name || null,
         team_leader_names: row.team_leader_names || [],
+        member_names: row.member_names || [],
+        provinces: row.provinces || [],
         member_count: parseInt(row.member_count) || 0,
         created: row.created_at,
       })),
