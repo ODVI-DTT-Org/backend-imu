@@ -64,52 +64,52 @@ marketSaturation.get('/', authMiddleware, async (c) => {
   const params: any[] = [dateFrom, dateTo, territoryMunicipalities, municipality, clientType];
 
   const mainSql = `
-    WITH recent_tp AS (
-      SELECT DISTINCT ON (t.client_id)
-        t.client_id, t.status
-      FROM touchpoints t
-      WHERE ($1::date IS NULL OR t.date::date >= $1)
-        AND ($2::date IS NULL OR t.date::date <= $2)
-      ORDER BY t.client_id, t.date DESC, t.created_at DESC
-    ),
-    has_visit AS (
-      SELECT DISTINCT client_id
-      FROM touchpoints
-      WHERE type = 'Visit'
-        AND ($1::date IS NULL OR date::date >= $1)
-        AND ($2::date IS NULL OR date::date <= $2)
-    ),
-    has_interested_visit AS (
-      SELECT DISTINCT client_id
-      FROM touchpoints
-      WHERE type = 'Visit' AND status = 'Interested'
-        AND ($1::date IS NULL OR date::date >= $1)
-        AND ($2::date IS NULL OR date::date <= $2)
-    ),
-    client_data AS (
+    WITH base AS (
       SELECT
-        c.id,
         c.municipality,
-        CASE
-          WHEN rt.status = 'Interested'     THEN 'interested'
-          WHEN rt.status = 'Not Interested' THEN 'not_interested'
-          WHEN rt.status = 'Undecided'      THEN 'undecided'
-          ELSE 'untouched'
-        END AS tp_status,
-        CASE
-          WHEN c.loan_released = true    THEN 'existing'
-          WHEN hiv.client_id IS NOT NULL THEN 'favorable'
-          WHEN hv.client_id  IS NOT NULL THEN 'others'
-          ELSE 'virgin'
-        END AS market_category
+        c.loan_released,
+        (
+          SELECT tp->>'status'
+          FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+          WHERE ($1::date IS NULL OR (tp->>'date')::date >= $1)
+            AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+          ORDER BY (tp->>'date')::date DESC
+          LIMIT 1
+        ) AS recent_status,
+        EXISTS (
+          SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+          WHERE tp->>'type' = 'Visit'
+            AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
+            AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+        ) AS has_visit,
+        EXISTS (
+          SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+          WHERE tp->>'type' = 'Visit' AND tp->>'status' = 'Interested'
+            AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
+            AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+        ) AS has_interested_visit
       FROM clients c
-      LEFT JOIN recent_tp            rt  ON rt.client_id  = c.id
-      LEFT JOIN has_visit            hv  ON hv.client_id  = c.id
-      LEFT JOIN has_interested_visit hiv ON hiv.client_id = c.id
       WHERE c.deleted_at IS NULL
         AND ($3::text[] IS NULL OR c.municipality = ANY($3))
         AND ($4::text   IS NULL OR c.municipality = $4)
         AND ($5::text   IS NULL OR c.client_type  = $5)
+    ),
+    client_data AS (
+      SELECT
+        municipality,
+        CASE
+          WHEN recent_status = 'Interested'     THEN 'interested'
+          WHEN recent_status = 'Not Interested' THEN 'not_interested'
+          WHEN recent_status = 'Undecided'      THEN 'undecided'
+          ELSE 'untouched'
+        END AS tp_status,
+        CASE
+          WHEN loan_released        THEN 'existing'
+          WHEN has_interested_visit THEN 'favorable'
+          WHEN has_visit            THEN 'others'
+          ELSE                           'virgin'
+        END AS market_category
+      FROM base
     )
     SELECT
       municipality,
@@ -164,54 +164,64 @@ marketSaturation.get('/', authMiddleware, async (c) => {
     }
 
     const clientSql = `
-      WITH recent_tp AS (
-        SELECT DISTINCT ON (t.client_id)
-          t.client_id, t.status, t.date AS last_date
-        FROM touchpoints t
-        WHERE ($1::date IS NULL OR t.date::date >= $1)
-          AND ($2::date IS NULL OR t.date::date <= $2)
-        ORDER BY t.client_id, t.date DESC, t.created_at DESC
-      ),
-      has_visit AS (
-        SELECT DISTINCT client_id FROM touchpoints
-        WHERE type = 'Visit'
-          AND ($1::date IS NULL OR date::date >= $1)
-          AND ($2::date IS NULL OR date::date <= $2)
-      ),
-      has_interested_visit AS (
-        SELECT DISTINCT client_id FROM touchpoints
-        WHERE type = 'Visit' AND status = 'Interested'
-          AND ($1::date IS NULL OR date::date >= $1)
-          AND ($2::date IS NULL OR date::date <= $2)
-      ),
-      client_data AS (
+      WITH base AS (
         SELECT
           c.id,
           c.first_name || ' ' || c.last_name AS full_name,
           c.municipality,
           c.client_type,
-          rt.last_date  AS last_touchpoint_date,
-          rt.status     AS last_touchpoint_status,
-          CASE
-            WHEN rt.status = 'Interested'     THEN 'interested'
-            WHEN rt.status = 'Not Interested' THEN 'not_interested'
-            WHEN rt.status = 'Undecided'      THEN 'undecided'
-            ELSE 'untouched'
-          END AS tp_status,
-          CASE
-            WHEN c.loan_released = true    THEN 'existing'
-            WHEN hiv.client_id IS NOT NULL THEN 'favorable'
-            WHEN hv.client_id  IS NOT NULL THEN 'others'
-            ELSE 'virgin'
-          END AS market_category
+          c.loan_released,
+          (
+            SELECT tp->>'status'
+            FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+            WHERE ($1::date IS NULL OR (tp->>'date')::date >= $1)
+              AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+            ORDER BY (tp->>'date')::date DESC
+            LIMIT 1
+          ) AS recent_status,
+          (
+            SELECT tp->>'date'
+            FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+            WHERE ($1::date IS NULL OR (tp->>'date')::date >= $1)
+              AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+            ORDER BY (tp->>'date')::date DESC
+            LIMIT 1
+          ) AS last_touchpoint_date,
+          EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+            WHERE tp->>'type' = 'Visit'
+              AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
+              AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+          ) AS has_visit,
+          EXISTS (
+            SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
+            WHERE tp->>'type' = 'Visit' AND tp->>'status' = 'Interested'
+              AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
+              AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
+          ) AS has_interested_visit
         FROM clients c
-        LEFT JOIN recent_tp            rt  ON rt.client_id  = c.id
-        LEFT JOIN has_visit            hv  ON hv.client_id  = c.id
-        LEFT JOIN has_interested_visit hiv ON hiv.client_id = c.id
         WHERE c.deleted_at IS NULL
           AND ($3::text[] IS NULL OR c.municipality = ANY($3))
           AND ($4::text   IS NULL OR c.municipality = $4)
           AND ($5::text   IS NULL OR c.client_type  = $5)
+      ),
+      client_data AS (
+        SELECT
+          id, full_name, municipality, client_type, last_touchpoint_date,
+          recent_status AS last_touchpoint_status,
+          CASE
+            WHEN recent_status = 'Interested'     THEN 'interested'
+            WHEN recent_status = 'Not Interested' THEN 'not_interested'
+            WHEN recent_status = 'Undecided'      THEN 'undecided'
+            ELSE 'untouched'
+          END AS tp_status,
+          CASE
+            WHEN loan_released        THEN 'existing'
+            WHEN has_interested_visit THEN 'favorable'
+            WHEN has_visit            THEN 'others'
+            ELSE                           'virgin'
+          END AS market_category
+        FROM base
       )
       SELECT cd.*
       FROM client_data cd
