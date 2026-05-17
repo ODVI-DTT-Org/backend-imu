@@ -43,14 +43,18 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
     const params: any[] = [];
     let paramIndex = 1;
 
-    if (user.role === 'caravan') {
-      // Filter by caravan_id (caravan/team member)
-      conditions.push(`g.caravan_id = $${paramIndex}`);
+    if (user.role === 'caravan' || user.role === 'team_leader') {
+      conditions.push(`EXISTS (
+        SELECT 1 FROM group_members gm
+        WHERE gm.group_id = g.id AND gm.client_id = $${paramIndex}
+      )`);
       params.push(user.sub);
       paramIndex++;
     } else if (userId) {
-      // Managers can filter by user_id
-      conditions.push(`g.caravan_id = $${paramIndex}`);
+      conditions.push(`EXISTS (
+        SELECT 1 FROM group_members gm
+        WHERE gm.group_id = g.id AND gm.client_id = $${paramIndex}
+      )`);
       params.push(userId);
       paramIndex++;
     }
@@ -73,15 +77,25 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
 
     const result = await pool.query(
       `SELECT g.*,
-              CONCAT(c.first_name, ' ', c.last_name) as caravan_name,
-              COALESCE(gm.member_count, 0) as member_count
+              CONCAT(ah.first_name, ' ', ah.last_name) as area_manager_name,
+              CONCAT(aah.first_name, ' ', aah.last_name) as assistant_area_manager_name,
+              COALESCE(gm.member_count, 0) as member_count,
+              COALESCE(tl.names, ARRAY[]::text[]) as team_leader_names
        FROM groups g
-       LEFT JOIN users c ON c.id = g.caravan_id
+       LEFT JOIN users ah ON ah.id = g.area_manager_id
+       LEFT JOIN users aah ON aah.id = g.assistant_area_manager_id
        LEFT JOIN (
          SELECT group_id, COUNT(*) as member_count
          FROM group_members
          GROUP BY group_id
        ) gm ON gm.group_id = g.id
+       LEFT JOIN (
+         SELECT gm2.group_id,
+                array_agg(CONCAT(u.first_name, ' ', u.last_name) ORDER BY u.first_name) as names
+         FROM group_members gm2
+         JOIN users u ON u.id = gm2.client_id AND u.role = 'team_leader'
+         GROUP BY gm2.group_id
+       ) tl ON tl.group_id = g.id
        ${whereClause}
        ORDER BY g.name ASC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -93,9 +107,12 @@ groups.get('/', authMiddleware, requirePermission('groups', 'read'), async (c) =
         id: row.id,
         name: row.name,
         description: row.description,
-        caravan_id: row.caravan_id,
-        caravan_name: row.caravan_name || null,
-        member_count: row.member_count || 0,
+        area_manager_id: row.area_manager_id,
+        area_manager_name: row.area_manager_name || null,
+        assistant_area_manager_id: row.assistant_area_manager_id,
+        assistant_area_manager_name: row.assistant_area_manager_name || null,
+        team_leader_names: row.team_leader_names || [],
+        member_count: parseInt(row.member_count) || 0,
         created: row.created_at,
       })),
       page, perPage, totalItems,
@@ -147,8 +164,11 @@ groups.get('/:id', authMiddleware, requirePermission('groups', 'read'), async (c
     let whereClause = 'WHERE g.id = $1';
     const params: any[] = [id];
 
-    if (user.role === 'caravan') {
-      whereClause += ' AND g.caravan_id = $2';
+    if (user.role === 'caravan' || user.role === 'team_leader') {
+      whereClause += ` AND EXISTS (
+        SELECT 1 FROM group_members gm
+        WHERE gm.group_id = g.id AND gm.client_id = $2
+      )`;
       params.push(user.sub);
     }
 
