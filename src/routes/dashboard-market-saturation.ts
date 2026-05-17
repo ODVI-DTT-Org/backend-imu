@@ -44,6 +44,30 @@ function emptyResponse() {
   };
 }
 
+// Visit reason → tp_status classification (all comparisons done with LOWER())
+const INTERESTED_REASONS = [
+  'interested', 'loan inquiry',
+  'for processing / approval / request', 'for processing/approval/request',
+  'for verification', 'for update',
+  'for ada authentication', 'apply for pusu membership', 'ci/bi',
+].map(r => `'${r}'`).join(', ');
+
+const NOT_INTERESTED_REASONS = [
+  'not interested', 'deceased', 'overaged',
+  'not amenable to our product criteria', 'disapproved', 'backed out',
+  'with existing loan in other lis', "with existing loan to other li's",
+  'poor health condition',
+].map(r => `'${r.replace(/'/g, "''")}'`).join(', ');
+
+// tp_status CASE block — reused in both main and drill CTEs
+const TP_STATUS_CASE = `
+  CASE
+    WHEN recent_reason IS NULL                                THEN 'untouched'
+    WHEN LOWER(recent_reason) IN (${INTERESTED_REASONS})     THEN 'interested'
+    WHEN LOWER(recent_reason) IN (${NOT_INTERESTED_REASONS}) THEN 'not_interested'
+    ELSE                                                           'undecided'
+  END`;
+
 // Builds a HAVING clause from whitelisted filter names — no user input reaches the SQL.
 function buildHavingClause(filters: MuniFilter[]): string {
   if (filters.length === 0) return '';
@@ -125,7 +149,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         EXISTS (
           SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
           WHERE tp->>'type' = 'Visit'
-            AND LOWER(tp->'visit'->>'reason') = 'interested'
+            AND LOWER(tp->'visit'->>'reason') IN (${INTERESTED_REASONS})
             AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
             AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
         ) AS has_interested_visit
@@ -138,12 +162,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
     client_data AS (
       SELECT
         municipality,
-        CASE
-          WHEN LOWER(recent_reason) = 'not interested' THEN 'not_interested'
-          WHEN LOWER(recent_reason) = 'interested'     THEN 'interested'
-          WHEN LOWER(recent_reason) = 'undecided'      THEN 'undecided'
-          ELSE 'untouched'
-        END AS tp_status,
+        ${TP_STATUS_CASE} AS tp_status,
         CASE
           WHEN loan_released        THEN 'existing'
           WHEN has_interested_visit THEN 'favorable'
@@ -320,7 +339,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
           EXISTS (
             SELECT 1 FROM jsonb_array_elements(COALESCE(c.touchpoint_summary, '[]'::jsonb)) tp
             WHERE tp->>'type' = 'Visit'
-              AND LOWER(tp->'visit'->>'reason') = 'interested'
+              AND LOWER(tp->'visit'->>'reason') IN (${INTERESTED_REASONS})
               AND ($1::date IS NULL OR (tp->>'date')::date >= $1)
               AND ($2::date IS NULL OR (tp->>'date')::date <= $2)
           ) AS has_interested_visit
@@ -334,12 +353,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         SELECT
           id, full_name, municipality, client_type, last_touchpoint_date,
           recent_reason AS last_touchpoint_status,
-          CASE
-            WHEN LOWER(recent_reason) = 'not interested' THEN 'not_interested'
-            WHEN LOWER(recent_reason) = 'interested'     THEN 'interested'
-            WHEN LOWER(recent_reason) = 'undecided'      THEN 'undecided'
-            ELSE 'untouched'
-          END AS tp_status,
+          ${TP_STATUS_CASE} AS tp_status,
           CASE
             WHEN loan_released        THEN 'existing'
             WHEN has_interested_visit THEN 'favorable'
