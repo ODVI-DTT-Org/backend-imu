@@ -453,7 +453,11 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               COALESCE(v.reason, ca.reason) AS reason,
               -- Get status and remarks from visits/calls tables, fallback to touchpoints table
               COALESCE(v.status, ca.status, t.status) AS status,
-              COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks
+              COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks,
+              ca.phone_number,
+              v.address as visit_address,
+              v.municipality as visit_municipality,
+              v.province as visit_province
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
