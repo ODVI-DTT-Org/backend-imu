@@ -1510,16 +1510,90 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
   }
 });
 
-// POST /api/approvals/loan-release-v2 - Submit loan release (all roles require approval)
+// POST /api/approvals/loan-release-v2 - Submit loan release with role-based processing
 approvals.post('/loan-release-v2', authMiddleware, async (c) => {
   const user = c.get('user');
 
   // Validate user role
-  if (!['admin', 'caravan', 'tele'].includes(user.role)) {
-    return c.json({ message: 'Loan release is only available for Admin, Caravan and Tele users' }, 403);
+  if (!['admin', 'caravan', 'tele', 'area_manager', 'assistant_area_manager', 'team_leader'].includes(user.role)) {
+    return c.json({ message: 'Loan release is only available for field agents and managers' }, 403);
   }
 
-  {
+  // Admin bypass: Direct release without approval
+  if (user.role === 'admin') {
+    const schema = z.object({
+      client_id: z.string().uuid(),
+      udi_number: z.string().min(1).max(50),
+      product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']),
+      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+      latitude: z.number().optional(),
+      longitude: z.number().optional(),
+      address: z.string().optional(),
+      barangay: z.string().max(200).optional(),
+      municipality: z.string().max(200).optional(),
+      province: z.string().max(200).optional(),
+      region: z.string().max(200).optional(),
+      source: z.string().max(200).optional(),
+      photo_url: z.string().optional(),
+      remarks: z.string().optional(),
+    });
+
+    const validated = schema.parse(await c.req.json());
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const clientCheck = await client.query(
+        'SELECT id, loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL',
+        [validated.client_id]
+      );
+
+      if (clientCheck.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return c.json({ message: 'Client not found' }, 404);
+      }
+
+      await client.query(`
+        INSERT INTO releases (
+          id, client_id, user_id, visit_id, call_id, product_type, loan_type,
+          udi_number, approval_notes, status
+        ) VALUES (
+          gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
+        )
+      `, [validated.client_id, user.sub, validated.product_type,
+          validated.loan_type, validated.udi_number, validated.remarks]);
+
+      await client.query(`
+        UPDATE clients
+        SET loan_released = TRUE, loan_released_at = NOW(),
+          product_type = COALESCE($2, product_type),
+          loan_type = COALESCE($3, loan_type)
+        WHERE id = $1
+      `, [validated.client_id, validated.product_type ?? null, validated.loan_type ?? null]);
+
+      await client.query('COMMIT');
+
+      return c.json({
+        message: 'Loan release processed successfully',
+        client_id: validated.client_id,
+        loan_released: true,
+        loan_released_at: new Date().toISOString()
+      });
+    } catch (error: any) {
+      await client.query('ROLLBACK');
+      if (error instanceof z.ZodError) {
+        return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+      }
+      console.error('Admin loan release error:', error);
+      return c.json({ message: 'Internal server error' }, 500);
+    } finally {
+      client.release();
+    }
+  }
+
+  // Caravan/Tele/AM/AAM/TL: Create approval request
+  else {
     const schema = z.object({
       client_id: z.string().uuid(),
       udi_number: z.string().min(1).max(50),
@@ -1579,8 +1653,8 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
 
       let activityId: string | undefined;
 
-      // Caravan: CREATE visits record
-      if (user.role === 'caravan') {
+      // Caravan/AM/AAM/TL: CREATE visits record
+      if (['caravan', 'area_manager', 'assistant_area_manager', 'team_leader'].includes(user.role)) {
         if (!validated.photo_url) {
           await dbClient.query('ROLLBACK');
           return c.json({ error: 'Photo is required for loan release', errorCode: 'PHOTO_REQUIRED' }, 400);
@@ -1635,8 +1709,8 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         product_type: validated.product_type,
         loan_type: validated.loan_type,
       };
-      if (user.role === 'caravan' && activityId) notesData.visit_id = activityId;
-      else if (user.role === 'tele' && activityId) notesData.call_id = activityId;
+      if (user.role === 'tele' && activityId) notesData.call_id = activityId;
+      else if (activityId) notesData.visit_id = activityId;
 
       const approvalResult = await dbClient.query(`
         INSERT INTO approvals (
