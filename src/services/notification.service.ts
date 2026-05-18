@@ -24,8 +24,8 @@ export async function createNotification(
        VALUES ($1, $2, $3, $4, $5)`,
       [userId, type, title, body, JSON.stringify(data)],
     );
-    // Non-blocking FCM wake-up — PowerSync will pull the new row on next sync
-    sendFcmPushToUser(userId).catch(() => {});
+    // Non-blocking FCM push — wakes PowerSync and shows system notification
+    sendFcmPushToUser(userId, { title, body }).catch(() => {});
   } catch (e) {
     logger.error('notifications', 'Failed to create notification', { userId, type, error: e });
   }
@@ -50,10 +50,10 @@ export async function createAnnouncementNotifications(
       [title, body, announcementId, targetRoles],
     );
 
-    // Fire FCM wake-up to each recipient so PowerSync syncs the new row immediately.
+    // Fire FCM push to each recipient — wakes PowerSync and shows system notification
     const userIds: string[] = result.rows.map((r: { user_id: string }) => r.user_id);
     for (const userId of userIds) {
-      sendFcmPushToUser(userId).catch(() => {});
+      sendFcmPushToUser(userId, { title, body }).catch(() => {});
     }
   } catch (e) {
     logger.error('notifications', 'Failed to fan-out announcement notifications', {

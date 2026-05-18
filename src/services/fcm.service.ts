@@ -45,10 +45,16 @@ function initFirebase(): void {
 }
 
 /**
- * Send a data-only FCM push to all registered device tokens for a user.
+ * Send an FCM push to all registered device tokens for a user.
+ * Always includes a data payload for PowerSync wake-up.
+ * When title/body are provided, also includes a notification payload so the
+ * OS can display a heads-up banner when the app is in the background/terminated.
  * Silently no-ops when Firebase is not configured.
  */
-export async function sendFcmPushToUser(userId: string): Promise<void> {
+export async function sendFcmPushToUser(
+  userId: string,
+  options?: { title?: string; body?: string },
+): Promise<void> {
   initFirebase();
   if (!_initialized) return;
 
@@ -66,15 +72,29 @@ export async function sendFcmPushToUser(userId: string): Promise<void> {
 
   if (tokens.length === 0) return;
 
+  const hasNotification = !!(options?.title);
   const message: admin.messaging.MulticastMessage = {
     tokens,
     data: { type: 'sync' },
+    ...(hasNotification && {
+      notification: { title: options!.title, body: options!.body },
+    }),
     android: {
       priority: 'high',
+      ...(hasNotification && {
+        notification: { channelId: 'imu_notifications', sound: 'default' },
+      }),
     },
     apns: {
-      headers: { 'apns-priority': '10', 'apns-push-type': 'background' },
-      payload: { aps: { 'content-available': 1 } },
+      headers: {
+        'apns-priority': '10',
+        'apns-push-type': hasNotification ? 'alert' : 'background',
+      },
+      payload: {
+        aps: hasNotification
+          ? { alert: { title: options!.title, body: options!.body }, sound: 'default' }
+          : { 'content-available': 1 },
+      },
     },
   };
 
