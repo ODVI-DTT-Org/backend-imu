@@ -38,16 +38,23 @@ export async function createAnnouncementNotifications(
   targetRoles: string[],
 ): Promise<void> {
   try {
-    // Fan-out: insert one notification per user matching the target roles
-    await pool.query(
+    // Fan-out: insert one notification per active user matching the target roles.
+    // Query users.role directly — user_profiles table was removed in migration 019.
+    const result = await pool.query(
       `INSERT INTO notifications (user_id, type, title, body, data)
        SELECT u.id, 'announcement', $1, $2, jsonb_build_object('announcement_id', $3::text)
        FROM users u
-       JOIN user_profiles up ON up.user_id = u.id
-       WHERE up.role = ANY($4::text[])
-         AND u.is_active = true`,
+       WHERE u.role = ANY($4::text[])
+         AND u.is_active = true
+       RETURNING user_id`,
       [title, body, announcementId, targetRoles],
     );
+
+    // Fire FCM wake-up to each recipient so PowerSync syncs the new row immediately.
+    const userIds: string[] = result.rows.map((r: { user_id: string }) => r.user_id);
+    for (const userId of userIds) {
+      sendFcmPushToUser(userId).catch(() => {});
+    }
   } catch (e) {
     logger.error('notifications', 'Failed to fan-out announcement notifications', {
       announcementId,
