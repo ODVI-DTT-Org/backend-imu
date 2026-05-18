@@ -36,11 +36,11 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
         v.address,
         ca.phone_number,
         CASE
-          WHEN COALESCE(v.latitude, t.latitude) IS NOT NULL THEN
+          WHEN v.latitude IS NOT NULL THEN
             jsonb_build_object(
-              'latitude', COALESCE(v.latitude, t.latitude),
-              'longitude', COALESCE(v.longitude, t.longitude),
-              'address', COALESCE(v.address, t.address)
+              'latitude', v.latitude,
+              'longitude', v.longitude,
+              'address', v.address
             )
           ELSE NULL
         END as location
