@@ -42,6 +42,7 @@ export enum ReportJobType {
   REPORT_CONVERSION = 'report_conversion',
   REPORT_AREA_COVERAGE = 'report_area_coverage',
   REPORT_MARKET_SATURATION = 'report_market_saturation',
+  REPORT_ITINERARY_ANALYSIS = 'report_itinerary_analysis',
 
   // CSV Exports
   EXPORT_TOUCHPOINTS_CSV = 'export_touchpoints_csv',

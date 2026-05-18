@@ -71,7 +71,7 @@ const createPSGCJobSchema = z.object({
 });
 
 export const createReportJobSchema = z.object({
-  report_type: z.enum(['agent_performance', 'client_activity', 'touchpoint_summary', 'market_saturation']),
+  report_type: z.enum(['agent_performance', 'client_activity', 'touchpoint_summary', 'market_saturation', 'itinerary_analysis']),
   start_date: z.string().optional(),
   end_date: z.string().optional(),
   user_id: z.string().optional(),
@@ -171,6 +171,7 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
       client_activity: ReportJobType.REPORT_CLIENT_ACTIVITY,
       touchpoint_summary: ReportJobType.REPORT_TOUCHPOINT_SUMMARY,
       market_saturation: ReportJobType.REPORT_MARKET_SATURATION,
+      itinerary_analysis: ReportJobType.REPORT_ITINERARY_ANALYSIS,
     };
     const jobType = reportTypeMap[validated.report_type] ?? ReportJobType.REPORT_AGENT_PERFORMANCE;
 
