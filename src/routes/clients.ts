@@ -270,6 +270,9 @@ function mapRowToClient(row: Record<string, any>) {
   // next_touchpoint: use the DB value; fall back to 'Visit' if stale/null and not released.
   // Pattern-based sequencing (Visit-Call-Call-Visit...) has been removed.
   const computedNextTouchpoint = loanReleased ? null : 'Visit';
+  // Use summary array length as authoritative touchpoint count — touchpoint_number is stale
+  // for legacy-imported clients (stuck at 7 even with 70+ touchpoints).
+  const summaryCount = Array.isArray(row.touchpoint_summary) ? row.touchpoint_summary.length : 0;
 
   return {
     id: row.id,
