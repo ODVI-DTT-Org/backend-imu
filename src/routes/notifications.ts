@@ -101,7 +101,6 @@ notifications.post(
     const nameResult = await pool.query(
       `SELECT COALESCE(
          NULLIF(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')), ''),
-         name,
          email
        ) AS display_name
        FROM users WHERE id = $1`,
