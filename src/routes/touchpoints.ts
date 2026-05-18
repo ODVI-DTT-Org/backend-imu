@@ -697,68 +697,74 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       validated.user_id = user.sub as string;
     }
 
-    // Auto-create visit record if neither visit_id nor call_id is provided
-    // This handles the case where mobile apps create touchpoints directly
+    // Auto-create the associated record (visit or call) when no ID is provided.
+    // This is the unified entry point for both caravan (Visit) and tele (Call).
     let visitId = validated.visit_id;
     let callId = validated.call_id;
 
     if (!visitId && !callId) {
-      console.log('[Touchpoints] No visit_id or call_id provided, auto-creating visit record');
+      if (validated.type === 'Call') {
+        // Tele path: auto-create call record from body fields
+        const today = new Date().toISOString().split('T')[0];
+        const dialTime = body.time_in ? `${today}T${body.time_in}:00` : null;
+        let duration: number | null = null;
+        if (body.time_in && body.time_out) {
+          const [inH, inM] = (body.time_in as string).split(':').map(Number);
+          const [outH, outM] = (body.time_out as string).split(':').map(Number);
+          duration = Math.max(0, (outH * 60 + outM) - (inH * 60 + inM)) * 60;
+        }
 
-      // Access raw request body for visit data fields (not in touchpoint schema)
-      const visitData = {
-        time_in: body.time_in || null,
-        time_out: body.time_out || null,
-        odometer_arrival: body.odometer_arrival || null,
-        odometer_departure: body.odometer_departure || null,
-        photo_url: body.photo_url || '',
-        remarks: body.remarks || body.notes || null,
-        reason: body.reason || null,
-        status: body.status || null,
-        address: body.address || null,
-        latitude: body.latitude || null,
-        longitude: body.longitude || null,
-        barangay: body.barangay || null,
-        municipality: body.municipality || null,
-        province: body.province || null,
-        region: body.region || null,
-      };
-
-      // Create a visit record from the touchpoint data
-      const visitResult = await pool.query(
-        `INSERT INTO visits (
-          client_id, user_id, type, time_in, time_out,
-          odometer_arrival, odometer_departure, photo_url, remarks,
-          reason, status, address, latitude, longitude, source,
-          barangay, municipality, province, region
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
-        ) RETURNING *`,
-        [
-          validated.client_id,
-          validated.user_id,
-          'regular_visit',
-          visitData.time_in,
-          visitData.time_out,
-          visitData.odometer_arrival,
-          visitData.odometer_departure,
-          visitData.photo_url,
-          visitData.remarks ?? null,
-          visitData.reason,
-          visitData.status,
-          visitData.address,
-          visitData.latitude,
-          visitData.longitude,
-          'IMU',
-          visitData.barangay,
-          visitData.municipality,
-          visitData.province,
-          visitData.region,
-        ]
-      );
-
-      visitId = visitResult.rows[0].id;
-      console.log('[Touchpoints] Auto-created visit record:', visitId);
+        const callResult = await pool.query(
+          `INSERT INTO calls (client_id, user_id, phone_number, dial_time, duration, remarks, reason, status, photo_url, source)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'IMU') RETURNING *`,
+          [
+            validated.client_id,
+            validated.user_id,
+            body.phone_number || null,
+            dialTime,
+            duration,
+            body.remarks || body.notes || null,
+            body.reason || null,
+            body.status || null,
+            body.photo_url || body.photo_path || null,
+          ]
+        );
+        callId = callResult.rows[0].id;
+      } else {
+        // Caravan path: auto-create visit record from body fields
+        const visitResult = await pool.query(
+          `INSERT INTO visits (
+            client_id, user_id, type, time_in, time_out,
+            odometer_arrival, odometer_departure, photo_url, remarks,
+            reason, status, address, latitude, longitude, source,
+            barangay, municipality, province, region
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+          ) RETURNING *`,
+          [
+            validated.client_id,
+            validated.user_id,
+            'regular_visit',
+            body.time_in || null,
+            body.time_out || null,
+            body.odometer_arrival || null,
+            body.odometer_departure || null,
+            body.photo_url || '',
+            body.remarks || body.notes || null,
+            body.reason || null,
+            body.status || null,
+            body.address || null,
+            body.latitude || null,
+            body.longitude || null,
+            'IMU',
+            body.barangay || null,
+            body.municipality || null,
+            body.province || null,
+            body.region || null,
+          ]
+        );
+        visitId = visitResult.rows[0].id;
+      }
     }
 
     const result = await pool.query(
@@ -766,9 +772,10 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
       ) VALUES (
         COALESCE($1, uuid_generate_v4()), $2, $3,
-        (SELECT COALESCE(MAX(t.touchpoint_number), 0) + 1
-         FROM touchpoints t
-         WHERE t.client_id = $2),  -- Atomic calculation within INSERT
+        (SELECT GREATEST(
+           COALESCE((SELECT MAX(t2.touchpoint_number) FROM touchpoints t2 WHERE t2.client_id = $2), 0),
+           COALESCE((SELECT MAX((e->>'touchpoint_number')::int) FROM clients c2, jsonb_array_elements(c2.touchpoint_summary) e WHERE c2.id = $2), 0)
+         ) + 1),  -- Atomic: max of DB rows and legacy JSONB entries
         $4, $5, $6, $7
       ) ON CONFLICT (id) DO UPDATE SET updated_at = touchpoints.updated_at
       RETURNING *`,

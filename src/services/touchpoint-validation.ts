@@ -109,10 +109,21 @@ export async function getNextTouchpointNumber(
   db: any,
   clientId: string
 ): Promise<number> {
+  // Take the max from both the touchpoints table AND the touchpoint_summary JSONB
+  // (PCNICMS-imported clients have history only in JSONB with no touchpoints table rows)
   const result = await db.query(`
-    SELECT COALESCE(MAX(touchpoint_number), 0) + 1 as next_number
-    FROM touchpoints
-    WHERE client_id = $1
+    SELECT GREATEST(
+      COALESCE(
+        (SELECT MAX(touchpoint_number) FROM touchpoints WHERE client_id = $1),
+        0
+      ),
+      COALESCE(
+        (SELECT MAX((entry->>'touchpoint_number')::int)
+         FROM clients c, jsonb_array_elements(c.touchpoint_summary) AS entry
+         WHERE c.id = $1),
+        0
+      )
+    ) + 1 AS next_number
   `, [clientId]);
-  return result[0]?.next_number || 1;
+  return result.rows[0]?.next_number || 1;
 }
