@@ -11,6 +11,8 @@ import { refreshActionItemsView } from './actionItemsRefreshService.js';
 import { warmAllAssignedClientsCache } from './cache-warming.js';
 import { refreshTouchpointSummaryMV, refreshAllMaterializedViews } from './touchpoint-mv-refresh.js';
 import { logger } from '../utils/logger.js';
+import { pool } from '../db/index.js';
+import { createNotification } from './notification.service.js';
 
 /**
  * Scheduled tasks configuration
@@ -33,6 +35,12 @@ const SCHEDULED_TASKS = {
     schedule: '0 6 * * *', // Daily at 6:00 AM
     description: 'Warm assigned clients cache for all Caravan/Tele users',
     task: 'cacheWarming',
+  },
+  // Missed visit notifications daily at 8 AM
+  missedVisitNotifications: {
+    schedule: '0 8 * * *', // Daily at 8:00 AM
+    description: 'Notify users with overdue pending itineraries',
+    task: 'missedVisitNotifications',
   },
 };
 
@@ -58,6 +66,9 @@ export function startScheduler(): void {
 
   // Start cache warming job
   startCacheWarmingJob();
+
+  // Start missed visit notifications job
+  startMissedVisitNotificationsJob();
 
   logger.info('scheduler', 'Cron job scheduler started successfully', {
     activeJobs: Array.from(activeJobs.keys()),
@@ -196,6 +207,50 @@ function startCacheWarmingJob(): void {
   });
 }
 
+async function notifyMissedVisits(): Promise<number> {
+  const result = await pool.query(`
+    SELECT user_id, COUNT(*) AS overdue_count, MIN(scheduled_date)::text AS earliest_date
+    FROM itineraries
+    WHERE status = 'pending'
+      AND scheduled_date < CURRENT_DATE
+    GROUP BY user_id
+  `);
+
+  for (const row of result.rows) {
+    await createNotification(
+      row.user_id,
+      'missed_visit',
+      'Missed Visit Reminder',
+      `You have ${row.overdue_count} overdue visit(s) since ${row.earliest_date}. Please follow up.`,
+      { overdue_count: Number(row.overdue_count), earliest_date: row.earliest_date },
+    );
+  }
+
+  return result.rows.length;
+}
+
+/**
+ * Notify users with overdue pending itineraries (runs at 8 AM daily)
+ */
+function startMissedVisitNotificationsJob(): void {
+  const task = SCHEDULED_TASKS.missedVisitNotifications;
+
+  const job = cron.schedule(task.schedule, async () => {
+    try {
+      logger.info('scheduler', `Executing scheduled task: ${task.task}`);
+      const notified = await notifyMissedVisits();
+      logger.info('scheduler', `${task.task}: notified ${notified} user(s) of overdue visits`);
+    } catch (error: any) {
+      logger.error('scheduler', `Failed to execute scheduled task: ${task.task}`, {
+        error: error.message,
+      });
+    }
+  });
+
+  activeJobs.set(task.task, job);
+  logger.info('scheduler', `Started cron job: ${task.task}`, { schedule: task.schedule });
+}
+
 /**
  * Get scheduler status
  *
@@ -238,6 +293,9 @@ export async function triggerTask(taskName: string): Promise<{
         break;
       case 'cacheWarming':
         result = await warmAllAssignedClientsCache();
+        break;
+      case 'missedVisitNotifications':
+        result = await notifyMissedVisits();
         break;
       default:
         throw new Error(`Unknown task: ${taskName}`);

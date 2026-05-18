@@ -4,6 +4,7 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { releaseService, createReleaseSchema, updateReleaseSchema } from '../services/release.service.js';
 import { ValidationError } from '../errors/index.js';
 import { pool } from '../db/index.js';
+import { createNotification } from '../services/notification.service.js';
 
 const releases = new Hono();
 
@@ -242,6 +243,15 @@ releases.post('/:id/approve', authMiddleware, async (c) => {
   const notes = body?.notes;
   const release = await releaseService.approve(id, user.sub, notes);
   if (!release) return c.json({ error: 'Release not found' }, 404);
+
+  createNotification(
+    release.user_id,
+    'loan_released',
+    'Loan Released',
+    'Your loan release request has been approved.',
+    { release_id: release.id, client_id: release.client_id },
+  ).catch(() => {});
+
   return c.json(release);
 });
 

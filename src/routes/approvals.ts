@@ -5,6 +5,7 @@ import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
+import { createNotification } from '../services/notification.service.js';
 import {
   ValidationError,
   NotFoundError,
@@ -879,6 +880,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
     await client.query('COMMIT');
 
+    createNotification(
+      approval.user_id,
+      'approval_approved',
+      'Request Approved',
+      `Your ${approval.reason || approval.type} request has been approved.`,
+      { approval_id: id, client_id: approval.client_id },
+    ).catch(() => {});
+
     // Audit log the approval action
     await auditLog({
       userId: user.sub,
@@ -961,6 +970,14 @@ approvals.post('/:id/reject', authMiddleware, requirePermission('approvals', 'up
     );
 
     await client.query('COMMIT');
+
+    createNotification(
+      approval.user_id,
+      'approval_rejected',
+      'Request Rejected',
+      `Your ${approval.reason || approval.type} request has been rejected${validated.rejection_reason ? ': ' + validated.rejection_reason : '.'}`,
+      { approval_id: id, client_id: approval.client_id },
+    ).catch(() => {});
 
     // Audit log the rejection action
     await auditLog({
@@ -1072,6 +1089,24 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
 
     await client.query('COMMIT');
 
+    // Notify each submitter non-blocking (fetch user_id per approval)
+    if (succeeded.length > 0) {
+      pool.query(
+        `SELECT id, user_id, type, reason, client_id FROM approvals WHERE id = ANY($1::uuid[])`,
+        [succeeded],
+      ).then((rows) => {
+        rows.rows.forEach((a) => {
+          createNotification(
+            a.user_id,
+            'approval_approved',
+            'Request Approved',
+            `Your ${a.reason || a.type} request has been approved.`,
+            { approval_id: a.id, client_id: a.client_id },
+          ).catch(() => {});
+        });
+      }).catch(() => {});
+    }
+
     return c.json({ success: succeeded, failed, message: `${succeeded.length} approval(s) approved` });
   } catch (error: any) {
     await client.query('ROLLBACK');
@@ -1126,6 +1161,23 @@ approvals.post('/bulk-reject', authMiddleware, requirePermission('approvals', 'u
     }
 
     await client.query('COMMIT');
+
+    if (succeeded.length > 0) {
+      pool.query(
+        `SELECT id, user_id, type, reason, client_id FROM approvals WHERE id = ANY($1::uuid[])`,
+        [succeeded],
+      ).then((rows) => {
+        rows.rows.forEach((a) => {
+          createNotification(
+            a.user_id,
+            'approval_rejected',
+            'Request Rejected',
+            `Your ${a.reason || a.type} request has been rejected${reason ? ': ' + reason : '.'}`,
+            { approval_id: a.id, client_id: a.client_id },
+          ).catch(() => {});
+        });
+      }).catch(() => {});
+    }
 
     return c.json({ success: succeeded, failed, message: `${succeeded.length} approval(s) rejected` });
   } catch (error: any) {
