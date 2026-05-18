@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
+import { getDashboardDateRange, calcChangePct } from '../utils/dashboard-helpers.js';
 import {
   ValidationError,
   AuthorizationError,
@@ -69,6 +70,187 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
 
   return { startDate, endDate };
 }
+
+// GET /api/reports/dashboard?period=week|month|quarter|year
+reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  const raw = c.req.query('period') ?? 'month'
+  const period = ['week', 'month', 'quarter', 'year'].includes(raw) ? raw : 'month'
+
+  const { from, to, prevFrom, prevTo } = getDashboardDateRange(period)
+
+  const fromStr     = from.toISOString().split('T')[0]
+  const toStr       = to.toISOString().split('T')[0]
+  const prevFromStr = prevFrom.toISOString().split('T')[0]
+  const prevToStr   = prevTo.toISOString().split('T')[0]
+
+  const bucketMap: Record<string, string> = {
+    week: 'day', month: 'day', quarter: 'week', year: 'month',
+  }
+  const truncFn = bucketMap[period] === 'day' ? 'day' : bucketMap[period] === 'week' ? 'week' : 'month'
+
+  const [releasesResult, touchpointsResult, funnelResult, timelineResult, agentsResult] =
+    await Promise.all([
+      pool.query<{
+        releases_current: string
+        releases_prev: string
+      }>(`
+        SELECT
+          COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
+            AND status IN ('approved','released'))  AS releases_current,
+          COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
+            AND status IN ('approved','released'))  AS releases_prev
+        FROM releases
+      `, [fromStr, toStr, prevFromStr, prevToStr]),
+
+      pool.query<{
+        visits_current: string; visits_prev: string
+        calls_current: string;  calls_prev: string
+      }>(`
+        SELECT
+          COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
+            AND type = 'Visit')  AS visits_current,
+          COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
+            AND type = 'Visit')  AS visits_prev,
+          COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
+            AND type = 'Call')   AS calls_current,
+          COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
+            AND type = 'Call')   AS calls_prev
+        FROM touchpoints
+      `, [fromStr, toStr, prevFromStr, prevToStr]),
+
+      pool.query<{ category: string; count: string }>(`
+        WITH latest_release AS (
+          SELECT DISTINCT ON (client_id)
+            client_id, status, created_at
+          FROM releases
+          ORDER BY client_id, created_at DESC
+        ),
+        latest_visit AS (
+          SELECT DISTINCT ON (client_id)
+            client_id, created_at
+          FROM visits
+          ORDER BY client_id, created_at DESC
+        ),
+        categorized AS (
+          SELECT
+            c.id,
+            CASE
+              WHEN lr.status IN ('approved','released') THEN 'EXISTING'
+              WHEN lv.client_id IS NOT NULL
+                AND (NOW() - lv.created_at) <= INTERVAL '6 months' THEN 'FAVORABLE'
+              WHEN lv.client_id IS NOT NULL THEN 'OTHERS'
+              ELSE 'VIRGIN'
+            END AS category
+          FROM clients c
+          LEFT JOIN latest_release lr ON lr.client_id = c.id
+          LEFT JOIN latest_visit   lv ON lv.client_id = c.id
+          WHERE c.deleted_at IS NULL
+        )
+        SELECT category, COUNT(*) AS count
+        FROM categorized
+        GROUP BY category
+        ORDER BY CASE category
+          WHEN 'VIRGIN' THEN 1 WHEN 'FAVORABLE' THEN 2
+          WHEN 'OTHERS' THEN 3 WHEN 'EXISTING'  THEN 4
+        END
+      `),
+
+      pool.query<{ bucket: string; count: string }>(`
+        SELECT
+          DATE_TRUNC('${truncFn}', created_at)::date AS bucket,
+          COUNT(*) AS count
+        FROM releases
+        WHERE created_at::date BETWEEN $1 AND $2
+          AND status IN ('approved','released')
+        GROUP BY bucket
+        ORDER BY bucket ASC
+      `, [fromStr, toStr]),
+
+      pool.query<{ agent_name: string; releases: string; visits: string }>(`
+        SELECT
+          u.first_name || ' ' || u.last_name AS agent_name,
+          COUNT(DISTINCT r.id) AS releases,
+          COUNT(DISTINCT v.id) AS visits
+        FROM users u
+        LEFT JOIN releases r ON r.user_id = u.id
+          AND r.created_at::date BETWEEN $1 AND $2
+          AND r.status IN ('approved','released')
+        LEFT JOIN visits v ON v.user_id = u.id
+          AND v.created_at::date BETWEEN $1 AND $2
+        WHERE u.role = 'Caravan'
+        GROUP BY u.id, u.first_name, u.last_name
+        ORDER BY releases DESC, visits DESC
+        LIMIT 5
+      `, [fromStr, toStr]),
+    ])
+
+  const rCurr = parseInt(releasesResult.rows[0]?.releases_current ?? '0')
+  const rPrev = parseInt(releasesResult.rows[0]?.releases_prev ?? '0')
+  const vCurr = parseInt(touchpointsResult.rows[0]?.visits_current ?? '0')
+  const vPrev = parseInt(touchpointsResult.rows[0]?.visits_prev ?? '0')
+  const cCurr = parseInt(touchpointsResult.rows[0]?.calls_current ?? '0')
+  const cPrev = parseInt(touchpointsResult.rows[0]?.calls_prev ?? '0')
+
+  const [conversionResult, activeClientsResult] = await Promise.all([
+    pool.query<{ count: string }>(`
+      SELECT COUNT(*) AS count FROM (
+        SELECT DISTINCT ON (client_id) client_id
+        FROM releases
+        WHERE created_at::date BETWEEN $1 AND $2
+          AND status IN ('approved','released')
+        ORDER BY client_id, created_at ASC
+      ) first_releases
+    `, [fromStr, toStr]),
+    pool.query<{ count: string }>(`
+      SELECT COUNT(*) AS count FROM clients WHERE deleted_at IS NULL
+    `),
+  ])
+
+  const [prevConvResult] = await Promise.all([
+    pool.query<{ count: string }>(`
+      SELECT COUNT(*) AS count FROM (
+        SELECT DISTINCT ON (client_id) client_id
+        FROM releases
+        WHERE created_at::date BETWEEN $1 AND $2
+          AND status IN ('approved','released')
+        ORDER BY client_id, created_at ASC
+      ) first_releases
+    `, [prevFromStr, prevToStr]),
+  ])
+
+  const convCurr = parseInt(conversionResult.rows[0]?.count ?? '0')
+  const totalActive = parseInt(activeClientsResult.rows[0]?.count ?? '1') || 1
+  const convRateCurr = parseFloat((convCurr / totalActive * 100).toFixed(1))
+  const convPrev = parseInt(prevConvResult.rows[0]?.count ?? '0')
+  const convRatePrev = parseFloat((convPrev / totalActive * 100).toFixed(1))
+
+  const categoryMap: Record<string, number> = { VIRGIN: 0, FAVORABLE: 0, OTHERS: 0, EXISTING: 0 }
+  for (const row of funnelResult.rows) {
+    categoryMap[row.category] = parseInt(row.count)
+  }
+
+  return c.json({
+    period,
+    date_range: { from: fromStr, to: toStr },
+    kpis: {
+      releases:        { current: rCurr, previous: rPrev, change_pct: calcChangePct(rCurr, rPrev) },
+      visits:          { current: vCurr, previous: vPrev, change_pct: calcChangePct(vCurr, vPrev) },
+      calls:           { current: cCurr, previous: cPrev, change_pct: calcChangePct(cCurr, cPrev) },
+      conversion_rate: { current: convRateCurr, previous: convRatePrev, change_pct: calcChangePct(convRateCurr, convRatePrev) },
+    },
+    funnel: (['VIRGIN', 'FAVORABLE', 'OTHERS', 'EXISTING'] as const).map(cat => ({
+      category: cat, count: categoryMap[cat],
+    })),
+    releases_over_time: timelineResult.rows.map(r => ({
+      bucket: r.bucket, count: parseInt(r.count),
+    })),
+    top_agents: agentsResult.rows.map(r => ({
+      agent_name: r.agent_name,
+      releases: parseInt(r.releases),
+      visits: parseInt(r.visits),
+    })),
+  })
+})
 
 // GET /api/reports/agent-performance - Field agent performance report
 reports.get('/agent-performance', authMiddleware, requirePermission('reports', 'read'), async (c) => {
