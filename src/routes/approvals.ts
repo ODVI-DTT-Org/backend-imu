@@ -601,6 +601,10 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
     await client.query('BEGIN');
 
     const user = c.get('user');
+    if (user.role !== 'admin') {
+      await client.query('ROLLBACK');
+      return c.json({ message: 'Only admin can approve approvals' }, 403);
+    }
     const id = c.req.param('id');
     const body = await c.req.json().catch(() => ({}));
     const validated = approveSchema.optional().parse(body);
@@ -631,7 +635,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         try { parsedNotes = JSON.parse(approval.notes); } catch (_) {}
 
         if (parsedNotes && (parsedNotes.visit_id || parsedNotes.call_id)) {
-          // Loan release approval: create release record and mark client released
+          // Caravan/Tele loan release approval: create release record linked to visit/call
           udiNumber = approval.udi_number || parsedNotes.udi_number || null;
 
           await client.query(`
@@ -661,6 +665,28 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
               WHERE client_id = $1 AND user_id = $2
             `, [approval.client_id, approval.user_id]);
           }
+        } else if (parsedNotes && (parsedNotes.product_type || parsedNotes.loan_type)) {
+          // Admin loan release approval: no visit/call, create release directly
+          udiNumber = approval.udi_number || parsedNotes.udi_number || null;
+
+          await client.query(`
+            INSERT INTO releases (
+              id, client_id, user_id, visit_id, call_id, product_type, loan_type,
+              udi_number, approval_notes, status
+            ) VALUES (
+              gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
+            )
+          `, [approval.client_id, approval.user_id,
+              parsedNotes.product_type, parsedNotes.loan_type,
+              udiNumber, 'Approved by admin']);
+
+          await client.query(
+            `UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(),
+              product_type = COALESCE($2, product_type),
+              loan_type = COALESCE($3, loan_type)
+            WHERE id = $1`,
+            [approval.client_id, parsedNotes.product_type ?? null, parsedNotes.loan_type ?? null]
+          );
         } else {
           // Legacy UDI-only update: parse from notes text or udi_number column
           udiNumber = approval.udi_number
@@ -1023,6 +1049,10 @@ approvals.post('/:id/reject', authMiddleware, requirePermission('approvals', 'up
     await client.query('BEGIN');
 
     const user = c.get('user');
+    if (user.role !== 'admin') {
+      await client.query('ROLLBACK');
+      return c.json({ message: 'Only admin can reject approvals' }, 403);
+    }
     const id = c.req.param('id');
     const body = await c.req.json();
     const validated = rejectSchema.parse(body);
@@ -1110,6 +1140,9 @@ approvals.post('/:id/reject', authMiddleware, requirePermission('approvals', 'up
 approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval', 'bulk_approve'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
+  if (user.role !== 'admin') {
+    return c.json({ message: 'Only admin can approve approvals' }, 403);
+  }
 
   const client = await pool.connect();
   try {
@@ -1216,6 +1249,9 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
 approvals.post('/bulk-reject', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval', 'bulk_reject'), async (c) => {
   const user = c.get('user');
   if (!user) throw new AuthenticationError('Unauthorized');
+  if (user.role !== 'admin') {
+    return c.json({ message: 'Only admin can reject approvals' }, 403);
+  }
 
   const client = await pool.connect();
   try {
@@ -1474,7 +1510,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
   }
 });
 
-// POST /api/approvals/loan-release-v2 - Submit loan release with role-based processing
+// POST /api/approvals/loan-release-v2 - Submit loan release (all roles require approval)
 approvals.post('/loan-release-v2', authMiddleware, async (c) => {
   const user = c.get('user');
 
@@ -1483,85 +1519,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
     return c.json({ message: 'Loan release is only available for Admin, Caravan and Tele users' }, 403);
   }
 
-  // Admin bypass: Direct release
-  if (user.role === 'admin') {
-    const schema = z.object({
-      client_id: z.string().uuid(),
-      udi_number: z.string().min(1).max(50),
-      product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']),
-      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
-      latitude: z.number().optional(),
-      longitude: z.number().optional(),
-      address: z.string().optional(),
-      // Structured location fields
-      barangay: z.string().max(200).optional(),
-      municipality: z.string().max(200).optional(),
-      province: z.string().max(200).optional(),
-      region: z.string().max(200).optional(),
-      source: z.string().max(200).optional(),
-      photo_url: z.string().optional(),
-      remarks: z.string().optional(),
-    });
-
-    const validated = schema.parse(await c.req.json());
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      // Check if client exists
-      const clientCheck = await client.query(
-        'SELECT id, loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL',
-        [validated.client_id]
-      );
-
-      if (clientCheck.rows.length === 0) {
-        await client.query('ROLLBACK');
-        return c.json({ message: 'Client not found' }, 404);
-      }
-
-      // CREATE releases record (no visit_id, no call_id)
-      await client.query(`
-        INSERT INTO releases (
-          id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-          udi_number, approval_notes, status
-        ) VALUES (
-          gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
-        )
-      `, [validated.client_id, user.sub, validated.product_type,
-          validated.loan_type, validated.udi_number, validated.remarks]);
-
-      // UPDATE clients
-      await client.query(`
-        UPDATE clients
-        SET loan_released = TRUE, loan_released_at = NOW(),
-          product_type = COALESCE($2, product_type),
-          loan_type = COALESCE($3, loan_type)
-        WHERE id = $1
-      `, [validated.client_id, validated.product_type ?? null, validated.loan_type ?? null]);
-
-      await client.query('COMMIT');
-
-      return c.json({
-        message: 'Loan release processed successfully',
-        client_id: validated.client_id,
-        loan_released: true,
-        loan_released_at: new Date().toISOString()
-      });
-    } catch (error: any) {
-      await client.query('ROLLBACK');
-      if (error instanceof z.ZodError) {
-        return c.json({ message: 'Invalid input', errors: error.errors }, 400);
-      }
-      console.error('Admin loan release error:', error);
-      return c.json({ message: 'Internal server error' }, 500);
-    } finally {
-      client.release();
-    }
-  }
-
-  // Caravan/Tele: Create approval request
-  else {
+  {
     const schema = z.object({
       client_id: z.string().uuid(),
       udi_number: z.string().min(1).max(50),
@@ -1594,7 +1552,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       province: z.string().max(200).optional(),
       region: z.string().max(200).optional(),
       source: z.string().max(200).optional(),
-      photo_url: z.string().url('photo_url must be a valid URL'),
+      photo_url: z.string().url('photo_url must be a valid URL').optional(),
       // Tele-specific fields
       phone_number: z.string().regex(/^09\d{9}$/).optional(),
       duration: z.number().int().positive().optional(),
@@ -1672,6 +1630,14 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       }
 
       // CREATE approval request
+      const notesData: Record<string, any> = {
+        udi_number: validated.udi_number,
+        product_type: validated.product_type,
+        loan_type: validated.loan_type,
+      };
+      if (user.role === 'caravan' && activityId) notesData.visit_id = activityId;
+      else if (user.role === 'tele' && activityId) notesData.call_id = activityId;
+
       const approvalResult = await dbClient.query(`
         INSERT INTO approvals (
           id, type, client_id, user_id, role, reason, notes, udi_number, status
@@ -1680,12 +1646,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         ) RETURNING id
       `, [validated.client_id, user.sub, user.role,
           user.role === 'tele' ? 'Loan Release Request (Tele)' : 'Loan Release Request',
-          JSON.stringify({
-            [user.role === 'caravan' ? 'visit_id' : 'call_id']: activityId,
-            udi_number: validated.udi_number,
-            product_type: validated.product_type,
-            loan_type: validated.loan_type,
-          }),
+          JSON.stringify(notesData),
           validated.udi_number]);
 
       await dbClient.query('COMMIT');
