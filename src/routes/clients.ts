@@ -401,10 +401,6 @@ clients.get('/', authMiddleware, async (c) => {
 
     const offset = (page - 1) * perPage;
 
-    // Touchpoint sequence: Visit → Call → Call → Visit → Call → Call → Visit
-    // Declared once at the top level to avoid duplicate declarations
-    const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-
     // IMPORTANT: This endpoint returns ALL clients (no area filter)
     // Use /api/clients/assigned for area-filtered clients
 
@@ -683,34 +679,22 @@ clients.get('/', authMiddleware, async (c) => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
       // Use next_touchpoint_number from SQL query instead of calculating
       const nextTouchpointNumber = row.next_touchpoint_number;
+      // Touchpoint type is determined by the requesting user's role, not a cyclic sequence
       const nextTouchpointType = nextTouchpointNumber
-        ? TOUCHPOINT_SEQUENCE[(nextTouchpointNumber - 1) % TOUCHPOINT_SEQUENCE.length]
+        ? (user.role === 'tele' ? 'Call' : 'Visit')
         : null;
       const loanReleased = row.loan_released || false;
 
       // Determine if current user can create the next touchpoint
       let canCreateTouchpoint = false;
-      let expectedRole = null;
+      let expectedRole: string | null = null;
 
-      // IMPORTANT: Cannot create touchpoints if loan is released
       if (loanReleased) {
         canCreateTouchpoint = false;
         expectedRole = null;
       } else if (nextTouchpointNumber) {
-        if (user.role === 'caravan') {
-          // Caravan: Only Visit types (1, 4, 7)
-          canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
-          expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
-        } else if (user.role === 'tele') {
-          // Tele: Only Call types (2, 3, 5, 6)
-          // FIX: Cannot create touchpoint 1 (Visit) - that's for Caravan
-          canCreateTouchpoint = nextTouchpointType === 'Call';
-          expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
-        } else {
-          // Admin/Manager: Can create any touchpoint
-          canCreateTouchpoint = true;
-          expectedRole = nextTouchpointType === 'Visit' ? 'caravan' : 'tele';
-        }
+        canCreateTouchpoint = true;
+        expectedRole = user.role === 'tele' ? 'tele' : 'caravan';
       }
 
       return {
@@ -803,10 +787,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
     }
 
     const offset = (page - 1) * perPage;
-
-    // Touchpoint sequence: Visit → Call → Call → Visit → Call → Call → Visit
-    // Declared once at the top level to avoid duplicate declarations
-    const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
 
     // Role level mapping for area-based filtering
     const ROLE_LEVELS: Record<string, number> = {
@@ -1133,31 +1113,30 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const clientsList = result.rows.map(row => {
       const completedCount = parseInt(row.completed_touchpoints) || 0;
       const nextTouchpointNumber = row.next_touchpoint_number ?? null;
-      const nextTouchpointType = nextTouchpointNumber
-        ? TOUCHPOINT_SEQUENCE[(nextTouchpointNumber - 1) % TOUCHPOINT_SEQUENCE.length]
-        : null;
       const loanReleased = row.loan_released || false;
+
+      // Touchpoint type is determined by the requesting user's role, not a cyclic sequence
+      const nextTouchpointType = nextTouchpointNumber
+        ? (user.role === 'tele' ? 'Call' : 'Visit')
+        : null;
 
       // Determine if current user can create the next touchpoint
       let canCreateTouchpoint = false;
-      let expectedRole = null;
+      let expectedRole: string | null = null;
 
-      // IMPORTANT: Cannot create touchpoints if loan is released
       if (loanReleased) {
         canCreateTouchpoint = false;
         expectedRole = null;
       } else if (nextTouchpointNumber) {
         if (user.role === 'caravan') {
-          canCreateTouchpoint = nextTouchpointType === 'Visit' || completedCount === 0;
-          expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
+          canCreateTouchpoint = true;
+          expectedRole = 'caravan';
         } else if (user.role === 'tele') {
-          // Tele: Only Call types (2, 3, 5, 6)
-          // FIX: Cannot create touchpoint 1 (Visit) - that's for Caravan
-          canCreateTouchpoint = nextTouchpointType === 'Call';
-          expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
+          canCreateTouchpoint = true;
+          expectedRole = 'tele';
         } else {
           canCreateTouchpoint = true;
-          expectedRole = nextTouchpointType === 'Visit' ? 'caravan' : 'tele';
+          expectedRole = user.role === 'tele' ? 'tele' : 'caravan';
         }
       }
 
@@ -1239,32 +1218,23 @@ clients.get('/:id', authMiddleware, async (c) => {
     // Touchpoint status controls who can CREATE touchpoints
     // No role-based access check needed for viewing
 
-    // Calculate touchpoint status — unlimited touchpoints, cyclic sequence
+    // Calculate touchpoint status
     const completedTouchpoints = client.touchpoints ? client.touchpoints.length : 0;
     const nextTouchpointNumber = completedTouchpoints + 1;
-    const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-    const nextTouchpointType = TOUCHPOINT_SEQUENCE[(nextTouchpointNumber - 1) % TOUCHPOINT_SEQUENCE.length];
+    // Touchpoint type is determined by the requesting user's role, not a cyclic sequence
+    const nextTouchpointType = user.role === 'tele' ? 'Call' : 'Visit';
     const lastTouchpointType = completedTouchpoints > 0 ? client.touchpoints[completedTouchpoints - 1]?.type : null;
     const loanReleased = client.loan_released || false;
 
     let canCreateTouchpoint = false;
-    let expectedRole = null;
+    let expectedRole: string | null = null;
 
-    // IMPORTANT: Cannot create touchpoints if loan is released
     if (loanReleased) {
       canCreateTouchpoint = false;
       expectedRole = null;
     } else {
-      if (user.role === 'caravan') {
-        canCreateTouchpoint = nextTouchpointType === 'Visit' || completedTouchpoints === 0;
-        expectedRole = canCreateTouchpoint ? 'caravan' : 'tele';
-      } else if (user.role === 'tele') {
-        canCreateTouchpoint = nextTouchpointType === 'Call';
-        expectedRole = canCreateTouchpoint ? 'tele' : 'caravan';
-      } else {
-        canCreateTouchpoint = true;
-        expectedRole = nextTouchpointType === 'Visit' ? 'caravan' : 'tele';
-      }
+      canCreateTouchpoint = true;
+      expectedRole = user.role === 'tele' ? 'tele' : 'caravan';
     }
 
     // Fetch visits for this client
