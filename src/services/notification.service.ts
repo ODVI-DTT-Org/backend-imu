@@ -1,5 +1,6 @@
 import { pool } from '../db/index.js';
 import { logger } from '../utils/logger.js';
+import { sendFcmPushToUser } from './fcm.service.js';
 
 export type NotificationType =
   | 'approval_approved'
@@ -23,6 +24,8 @@ export async function createNotification(
        VALUES ($1, $2, $3, $4, $5)`,
       [userId, type, title, body, JSON.stringify(data)],
     );
+    // Non-blocking FCM wake-up — PowerSync will pull the new row on next sync
+    sendFcmPushToUser(userId).catch(() => {});
   } catch (e) {
     logger.error('notifications', 'Failed to create notification', { userId, type, error: e });
   }

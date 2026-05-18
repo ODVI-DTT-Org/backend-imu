@@ -108,4 +108,40 @@ notifications.post(
   },
 );
 
+// POST /api/notifications/device-token — register or refresh FCM token
+notifications.post('/device-token', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{ token: string; platform: 'ios' | 'android' | 'web' }>();
+
+  if (!body.token || !body.platform) {
+    return c.json({ success: false, error: 'token and platform are required' }, 400);
+  }
+
+  await pool.query(
+    `INSERT INTO device_tokens (user_id, token, platform)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, token) DO UPDATE SET updated_at = NOW()`,
+    [user.sub, body.token, body.platform],
+  );
+
+  return c.json({ success: true });
+});
+
+// DELETE /api/notifications/device-token — unregister token on logout
+notifications.delete('/device-token', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json<{ token: string }>();
+
+  if (!body.token) {
+    return c.json({ success: false, error: 'token is required' }, 400);
+  }
+
+  await pool.query(
+    'DELETE FROM device_tokens WHERE user_id = $1 AND token = $2',
+    [user.sub, body.token],
+  );
+
+  return c.json({ success: true });
+});
+
 export default notifications;
