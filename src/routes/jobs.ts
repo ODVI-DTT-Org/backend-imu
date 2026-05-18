@@ -521,4 +521,51 @@ jobs.delete('/queue/:jobId', authMiddleware, async (c) => {
   }
 });
 
+/**
+ * DELETE /api/jobs/queue?state=completed|failed
+ * Remove all completed or failed BullMQ jobs belonging to the current user.
+ * Admin users can clear jobs across all users.
+ */
+jobs.delete('/queue', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const state = c.req.query('state') as 'completed' | 'failed' | undefined;
+
+    if (!state || (state !== 'completed' && state !== 'failed')) {
+      return c.json({ success: false, message: 'Query param "state" must be "completed" or "failed"' }, 400);
+    }
+
+    const queueManager = getQueueManager();
+    const queues = ['bulk-operations', 'reports', 'location-assignments', 'sync-operations'] as const;
+
+    let removed = 0;
+
+    for (const queueName of queues) {
+      try {
+        const queue = queueManager.getQueue({ name: queueName });
+        const queueJobs = await queue.getJobs([state], 0, 500);
+
+        for (const job of queueJobs) {
+          const jobUserId = job.data?.userId;
+          if (user.role !== 'admin' && jobUserId !== user.sub) continue;
+
+          try {
+            await job.remove();
+            removed++;
+          } catch {
+            // Job may have already been removed — skip
+          }
+        }
+      } catch (error) {
+        logger.error('jobs/queue/clear', `Failed to clear ${state} jobs from queue ${queueName}`, error);
+      }
+    }
+
+    return c.json({ success: true, removed });
+  } catch (error: any) {
+    logger.error('jobs/queue/clear', error);
+    return c.json({ success: false, message: 'Failed to clear jobs', error: error.message }, 500);
+  }
+});
+
 export default jobs;
