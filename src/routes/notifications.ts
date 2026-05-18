@@ -97,10 +97,23 @@ notifications.post(
     );
 
     const announcementId = result.rows[0].id as string;
+
+    const nameResult = await pool.query(
+      `SELECT COALESCE(
+         NULLIF(TRIM(COALESCE(first_name, '') || ' ' || COALESCE(last_name, '')), ''),
+         name,
+         email
+       ) AS display_name
+       FROM users WHERE id = $1`,
+      [user.sub],
+    );
+    const announcerName: string = (nameResult.rows[0]?.display_name as string | null) ?? 'Admin';
+    const bodyWithAnnouncer = `${body.body}\n\nAnnounced by: ${announcerName}`;
+
     await createAnnouncementNotifications(
       announcementId,
       body.title,
-      body.body,
+      bodyWithAnnouncer,
       body.target_roles,
     );
 
