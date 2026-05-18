@@ -259,8 +259,6 @@ const phoneSchema = z.object({
 });
 
 // Helper to map DB row to Client type
-const _TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
-
 function mapRowToClient(row: Record<string, any>) {
   // Calculate display_name: "Surname, First Name MiddleName"
   // Only comma after surname, rest separated by spaces
@@ -268,15 +266,10 @@ function mapRowToClient(row: Record<string, any>) {
   const nameParts = [row.first_name, middleName].filter((p: string) => p && p.trim().length > 0);
   const displayName = `${row.last_name}, ${nameParts.join(' ')}`;
 
-  // Compute next_touchpoint cyclically from summary length if the DB column is stale/null.
-  // Clients that hit the old 7-touchpoint cap had their next_touchpoint set to NULL in the
-  // DB; fall back to the cyclic pattern so they don't appear falsely "complete".
-  const summary = row.touchpoint_summary || [];
-  const summaryCount = Array.isArray(summary) ? summary.length : 0;
   const loanReleased = row.loan_released || false;
-  const computedNextTouchpoint = loanReleased
-    ? null
-    : _TOUCHPOINT_SEQUENCE[summaryCount % _TOUCHPOINT_SEQUENCE.length];
+  // next_touchpoint: use the DB value; fall back to 'Visit' if stale/null and not released.
+  // Pattern-based sequencing (Visit-Call-Call-Visit...) has been removed.
+  const computedNextTouchpoint = loanReleased ? null : 'Visit';
 
   return {
     id: row.id,
@@ -417,39 +410,13 @@ clients.get('/', authMiddleware, async (c) => {
 
     // 4-tier ORDER BY: favorites → role-based callable → loan released → default
     let orderByClause: string;
-    if (user.role === 'tele') {
-      // Tele: prioritize Call touchpoints with specific ordering
-      orderByClause = `
-        (cf.client_id IS NOT NULL) DESC,
-        CASE WHEN c.next_touchpoint = 'Call' THEN
-          CASE COALESCE(c.touchpoint_number, 0) + 1
-            WHEN 6 THEN 1 WHEN 5 THEN 2 WHEN 3 THEN 3 WHEN 2 THEN 4 ELSE 5
-          END ELSE 99 END ASC,
-        c.loan_released DESC,
-        c.last_touchpoint_date DESC NULLS LAST,
-        COALESCE(c.touchpoint_number, 0) DESC,
-        c.created_at DESC`;
-    } else if (user.role === 'caravan') {
-      // Caravan: prioritize Visit touchpoints with specific ordering
-      orderByClause = `
-        (cf.client_id IS NOT NULL) DESC,
-        CASE WHEN c.next_touchpoint = 'Visit' THEN
-          CASE COALESCE(c.touchpoint_number, 0) + 1
-            WHEN 7 THEN 1 WHEN 4 THEN 2 WHEN 1 THEN 3 ELSE 4
-          END ELSE 99 END ASC,
-        c.loan_released DESC,
-        c.last_touchpoint_date DESC NULLS LAST,
-        COALESCE(c.touchpoint_number, 0) DESC,
-        c.created_at DESC`;
-    } else {
-      // Admin/Area Manager: no tier 2 role-based sorting
-      orderByClause = `
-        (cf.client_id IS NOT NULL) DESC,
-        c.loan_released DESC,
-        c.last_touchpoint_date DESC NULLS LAST,
-        COALESCE(c.touchpoint_number, 0) DESC,
-        c.created_at DESC`;
-    }
+    // All roles: favorites first, then by last touchpoint date
+    orderByClause = `
+      (cf.client_id IS NOT NULL) DESC,
+      c.loan_released DESC,
+      c.last_touchpoint_date DESC NULLS LAST,
+      COALESCE(c.touchpoint_number, 0) DESC,
+      c.created_at DESC`;
 
     if (sortBy === 'touchpoint_status') {
       // For Tele role: use group scoring directly

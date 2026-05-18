@@ -53,22 +53,6 @@ const touchpoints = new Hono();
 // Manager roles for authorization
 const MANAGER_ROLES = ['admin', 'area_manager', 'assistant_area_manager'] as const;
 
-// DEPRECATED: Touchpoint sequence pattern (legacy code)
-// Modern system uses backend-determined types (unlimited touchpoints)
-const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
-
-/**
- * DEPRECATED: Get the expected touchpoint type for a given touchpoint number
- * Modern system uses backend-determined types (unlimited touchpoints)
- * @param touchpointNumber - The touchpoint number (1-7)
- * @returns The expected type ('Visit' or 'Call')
- */
-function getExpectedTouchpointType(touchpointNumber: number): 'Visit' | 'Call' {
-  if (touchpointNumber < 1 || touchpointNumber > 7) {
-    throw new Error('Touchpoint number must be between 1 and 7');
-  }
-  return TOUCHPOINT_SEQUENCE[touchpointNumber - 1];
-}
 
 /**
  * Get the next touchpoint number for a client
@@ -362,34 +346,12 @@ touchpoints.get('/next/:clientId', authMiddleware, requirePermission('touchpoint
         message: 'All touchpoints have been completed',
         completedTouchpoints: nextTouchpointNumber,
         nextTouchpoint: null,
-        sequence: TOUCHPOINT_SEQUENCE,
       });
     }
 
-    // Get the expected type for this touchpoint
-    const expectedType = getExpectedTouchpointType(nextTouchpointNumber);
-
-    // Get existing touchpoints for this client
-    const existingResult = await pool.query(
-      `SELECT touchpoint_number, type, created_at
-       FROM touchpoints
-       WHERE client_id = $1
-       ORDER BY touchpoint_number ASC`,
-      [clientId]
-    );
-
-    const existingTouchpoints = existingResult.rows.map(row => ({
-      touchpointNumber: row.touchpoint_number,
-      type: row.type,
-      created_at: row.created_at,
-    }));
-
     return c.json({
       nextTouchpointNumber,
-      nextTouchpointType: expectedType,
       completedTouchpoints: nextTouchpointNumber - 1,
-      sequence: TOUCHPOINT_SEQUENCE,
-      existingTouchpoints,
       canCreate: true,
     });
   } catch (error) {
