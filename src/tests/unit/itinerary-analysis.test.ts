@@ -1,38 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { LocationJobType, ReportJobType } from '../../queues/jobs/job-types.js'
-
-/**
- * Helper stubs — extracted here so we can test them without spinning up
- * a real queue or DB connection.
- */
-function countWorkingDays(from: Date, to: Date): number {
-  let count = 0
-  const cursor = new Date(from)
-  cursor.setHours(0, 0, 0, 0)
-  const end = new Date(to)
-  end.setHours(23, 59, 59, 999)
-  while (cursor <= end) {
-    const dow = cursor.getDay()
-    if (dow !== 0 && dow !== 6) count++
-    cursor.setDate(cursor.getDate() + 1)
-  }
-  return count
-}
-
-function calcConversionPct(releases: number, visits: number): number | null {
-  if (visits === 0) return null
-  return parseFloat(((releases / visits) * 100).toFixed(1))
-}
-
-function calcAchievementPct(actual: number, target: number): number | null {
-  if (target === 0) return null
-  return parseFloat(((actual / target) * 100).toFixed(1))
-}
-
-function calcAvgQualityVisit(qualityVisits: number, workingDays: number): number | null {
-  if (workingDays === 0) return null
-  return parseFloat((qualityVisits / workingDays).toFixed(2))
-}
+import { ReportJobType } from '../../queues/jobs/job-types.js'
+import {
+  countWorkingDays,
+  calcConversionPct,
+  calcAchievementPct,
+  calcAvgQualityVisit,
+} from '../../queues/processors/handlers/itinerary-analysis-handler.js'
 
 describe('Itinerary Analysis job type registration', () => {
   it('REPORT_ITINERARY_ANALYSIS is defined in ReportJobType enum', () => {
@@ -41,6 +14,12 @@ describe('Itinerary Analysis job type registration', () => {
 })
 
 describe('countWorkingDays', () => {
+  it('March 2026 has 22 working days', () => {
+    const from = new Date('2026-03-01')
+    const to   = new Date('2026-03-31')
+    expect(countWorkingDays(from, to)).toBe(22)
+  })
+
   it('counts Mon-Fri in a full ISO week', () => {
     // 2026-05-11 (Mon) to 2026-05-17 (Sun) = 5 working days
     const from = new Date('2026-05-11')
@@ -48,12 +27,12 @@ describe('countWorkingDays', () => {
     expect(countWorkingDays(from, to)).toBe(5)
   })
 
-  it('returns 1 for a single weekday', () => {
-    const d = new Date('2026-05-13') // Wednesday
+  it('single Monday is 1 working day', () => {
+    const d = new Date('2026-05-18') // Monday
     expect(countWorkingDays(d, d)).toBe(1)
   })
 
-  it('returns 0 for a weekend-only range', () => {
+  it('Saturday/Sunday are not counted', () => {
     const from = new Date('2026-05-16') // Saturday
     const to   = new Date('2026-05-17') // Sunday
     expect(countWorkingDays(from, to)).toBe(0)
@@ -61,18 +40,26 @@ describe('countWorkingDays', () => {
 })
 
 describe('calcConversionPct', () => {
-  it('returns null when visits is 0', () => {
-    expect(calcConversionPct(5, 0)).toBeNull()
+  it('returns 0 when visits is 0', () => {
+    expect(calcConversionPct(5, 0)).toBe(0)
   })
 
-  it('calculates percentage correctly', () => {
+  it('calculates releases / visits × 100', () => {
+    expect(calcConversionPct(5, 20)).toBe(25)
+  })
+
+  it('calculates correctly for non-round numbers', () => {
     expect(calcConversionPct(3, 10)).toBe(30.0)
   })
 })
 
 describe('calcAchievementPct', () => {
-  it('returns null when target is 0', () => {
-    expect(calcAchievementPct(5, 0)).toBeNull()
+  it('returns 0 when target is 0', () => {
+    expect(calcAchievementPct(5, 0)).toBe(0)
+  })
+
+  it('calculates actual / target × 100', () => {
+    expect(calcAchievementPct(8, 10)).toBe(80)
   })
 
   it('calculates over-achievement correctly', () => {
@@ -81,8 +68,12 @@ describe('calcAchievementPct', () => {
 })
 
 describe('calcAvgQualityVisit', () => {
-  it('returns null when workingDays is 0', () => {
-    expect(calcAvgQualityVisit(10, 0)).toBeNull()
+  it('returns 0 when workingDays is 0', () => {
+    expect(calcAvgQualityVisit(10, 0)).toBe(0)
+  })
+
+  it('calculates quality / workingDays', () => {
+    expect(calcAvgQualityVisit(11, 22)).toBe(0.5)
   })
 
   it('calculates average correctly', () => {
