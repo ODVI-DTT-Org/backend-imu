@@ -10,6 +10,8 @@ export interface TouchpointSummaryItem {
   user_id: string;
   time_in: string | null;
   time_out: string | null;
+  address: string | null;
+  phone_number: string | null;
   location: {
     latitude: number | null;
     longitude: number | null;
@@ -31,6 +33,8 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
         t.user_id,
         v.time_in,
         v.time_out,
+        v.address,
+        ca.phone_number,
         CASE
           WHEN COALESCE(v.latitude, t.latitude) IS NOT NULL THEN
             jsonb_build_object(
