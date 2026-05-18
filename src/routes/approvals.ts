@@ -472,6 +472,64 @@ approvals.post('/', authMiddleware, requirePermission('approvals', 'create'), au
   }
 });
 
+// PATCH /api/approvals/:id/owner-edit - Owner self-edit for pending loan release (within 24 hours)
+approvals.patch('/:id/owner-edit', authMiddleware, async (c) => {
+  try {
+    const user = c.get('user');
+    const id = c.req.param('id');
+    const body = await c.req.json();
+
+    const schema = z.object({
+      udi_number: z.string().min(1).max(50).optional(),
+      remarks: z.string().max(500).optional(),
+    });
+    const validated = schema.parse(body);
+
+    if (!validated.udi_number && validated.remarks === undefined) {
+      return c.json({ message: 'No fields to update' }, 400);
+    }
+
+    const existing = await pool.query(
+      `SELECT id, notes, udi_number FROM approvals
+       WHERE id = $1 AND user_id = $2 AND type = 'udi' AND status = 'pending'
+         AND created_at > NOW() - INTERVAL '24 hours'`,
+      [id, user.sub]
+    );
+
+    if (existing.rows.length === 0) {
+      return c.json({ message: 'Approval not found or no longer editable' }, 404);
+    }
+
+    const existingNotes = existing.rows[0].notes
+      ? JSON.parse(existing.rows[0].notes)
+      : {};
+    const updatedNotes = { ...existingNotes };
+    if (validated.udi_number) updatedNotes.udi_number = validated.udi_number;
+    if (validated.remarks !== undefined) updatedNotes.remarks = validated.remarks;
+
+    let result;
+    if (validated.udi_number) {
+      result = await pool.query(
+        `UPDATE approvals SET notes = $1, udi_number = $2, updated_at = NOW() WHERE id = $3 RETURNING id`,
+        [JSON.stringify(updatedNotes), validated.udi_number, id]
+      );
+    } else {
+      result = await pool.query(
+        `UPDATE approvals SET notes = $1, updated_at = NOW() WHERE id = $2 RETURNING id`,
+        [JSON.stringify(updatedNotes), id]
+      );
+    }
+
+    return c.json({ message: 'Updated', id: result.rows[0].id });
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      return c.json({ message: 'Invalid input', errors: error.errors }, 400);
+    }
+    console.error('Owner edit approval error:', error);
+    return c.json({ message: 'Internal server error' }, 500);
+  }
+});
+
 // PUT /api/approvals/:id - Update approval
 approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval'), async (c) => {
   try {
