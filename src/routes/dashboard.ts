@@ -59,7 +59,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
                   COUNT(*) FILTER (WHERE type = 'Visit') as visits,
                   COUNT(*) FILTER (WHERE type = 'Call') as calls
            FROM touchpoints
-           WHERE date::date >= $1 AND date::date <= $2 AND user_id = $3`,
+           WHERE created_at::date >= $1 AND created_at::date <= $2 AND user_id = $3`,
           [start, end, user.sub]
         ),
       ]);
@@ -96,7 +96,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
                 COUNT(*) FILTER (WHERE type = 'Visit') as visits,
                 COUNT(*) FILTER (WHERE type = 'Call') as calls
          FROM touchpoints
-         WHERE date::date >= $1 AND date::date <= $2`,
+         WHERE created_at::date >= $1 AND created_at::date <= $2`,
         [start, end]
       ),
       pool.query(
@@ -106,7 +106,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
          JOIN users u ON u.id = t.user_id
          WHERE u.role = 'caravan'
            AND t.type = 'Visit'
-           AND t.date::date >= $1 AND t.date::date <= $2
+           AND t.created_at::date >= $1 AND t.created_at::date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY visits DESC
          LIMIT 3`,
@@ -119,7 +119,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
          JOIN users u ON u.id = t.user_id
          WHERE u.role = 'tele'
            AND t.type = 'Call'
-           AND t.date::date >= $1 AND t.date::date <= $2
+           AND t.created_at::date >= $1 AND t.created_at::date <= $2
          GROUP BY u.id, u.first_name, u.last_name
          ORDER BY calls DESC
          LIMIT 3`,
@@ -133,7 +133,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
          JOIN group_members gm ON gm.group_id = g.id
          JOIN touchpoints t ON t.client_id = gm.client_id
          LEFT JOIN users u ON u.id = g.caravan_id
-         WHERE t.date::date >= $1 AND t.date::date <= $2
+         WHERE t.created_at::date >= $1 AND t.created_at::date <= $2
          GROUP BY g.id, g.name, u.first_name, u.last_name
          ORDER BY total_touchpoints DESC
          LIMIT 3`,
@@ -184,10 +184,10 @@ dashboard.get('/debug', authMiddleware, async (c) => {
   const results: Record<string, string> = {};
 
   const queries: [string, string, any[]][] = [
-    ['touchpoints_summary', `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits, COUNT(*) FILTER (WHERE tp.type = 'Call') as calls FROM touchpoints tp WHERE tp.date >= $1 AND tp.date <= $2`, [start, end]],
-    ['caravan_leaderboard', `SELECT u.id as user_id FROM touchpoints t JOIN users u ON u.id = t.user_id WHERE u.role = 'caravan' AND t.type = 'Visit' AND t.date >= $1 AND t.date <= $2 GROUP BY u.id LIMIT 3`, [start, end]],
-    ['tele_leaderboard', `SELECT u.id as user_id FROM touchpoints t JOIN users u ON u.id = t.user_id WHERE u.role = 'tele' AND t.type = 'Call' AND t.date >= $1 AND t.date <= $2 GROUP BY u.id LIMIT 3`, [start, end]],
-    ['group_leaderboard', `SELECT g.id as group_id FROM groups g JOIN group_members gm ON gm.group_id = g.id JOIN touchpoints t ON t.client_id = gm.client_id LEFT JOIN users u ON u.id = g.caravan_id WHERE t.date >= $1 AND t.date <= $2 GROUP BY g.id LIMIT 3`, [start, end]],
+    ['touchpoints_summary', `SELECT COUNT(*) as total, COUNT(*) FILTER (WHERE tp.type = 'Visit') as visits, COUNT(*) FILTER (WHERE tp.type = 'Call') as calls FROM touchpoints tp WHERE tp.created_at::date >= $1 AND tp.created_at::date <= $2`, [start, end]],
+    ['caravan_leaderboard', `SELECT u.id as user_id FROM touchpoints t JOIN users u ON u.id = t.user_id WHERE u.role = 'caravan' AND t.type = 'Visit' AND t.created_at::date >= $1 AND t.created_at::date <= $2 GROUP BY u.id LIMIT 3`, [start, end]],
+    ['tele_leaderboard', `SELECT u.id as user_id FROM touchpoints t JOIN users u ON u.id = t.user_id WHERE u.role = 'tele' AND t.type = 'Call' AND t.created_at::date >= $1 AND t.created_at::date <= $2 GROUP BY u.id LIMIT 3`, [start, end]],
+    ['group_leaderboard', `SELECT g.id as group_id FROM groups g JOIN group_members gm ON gm.group_id = g.id JOIN touchpoints t ON t.client_id = gm.client_id LEFT JOIN users u ON u.id = g.caravan_id WHERE t.created_at::date >= $1 AND t.created_at::date <= $2 GROUP BY g.id LIMIT 3`, [start, end]],
   ];
 
   for (const [name, sql, params] of queries) {
@@ -214,11 +214,11 @@ dashboard.get('/performance', authMiddleware, requirePermission('dashboard', 're
 
     // Get daily touchpoints for last 30 days
     const dailyTouchpoints = await pool.query(
-      `SELECT date, COUNT(*) as count
+      `SELECT created_at::date as date, COUNT(*) as count
        FROM touchpoints
        WHERE user_id = $1
-         AND date >= CURRENT_DATE - INTERVAL '30 days'
-       GROUP BY date
+         AND created_at::date >= CURRENT_DATE - INTERVAL '30 days'
+       GROUP BY created_at::date
        ORDER BY date DESC`,
       [caravanId]
     );
@@ -228,7 +228,7 @@ dashboard.get('/performance', authMiddleware, requirePermission('dashboard', 're
       `SELECT type, COUNT(*) as count
        FROM touchpoints
        WHERE user_id = $1
-         AND date >= CURRENT_DATE - INTERVAL '30 days'
+         AND created_at::date >= CURRENT_DATE - INTERVAL '30 days'
        GROUP BY type`,
       [caravanId]
     );
@@ -741,7 +741,7 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
         COUNT(*) FILTER (WHERE type = 'Visit') as visits,
         COUNT(*) FILTER (WHERE type = 'Call') as calls
       FROM touchpoints
-      WHERE date >= $1 AND date <= $2
+      WHERE created_at::date >= $1 AND created_at::date <= $2
       GROUP BY DATE(created_at)
       ORDER BY date
       `,
@@ -770,9 +770,9 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
           u.id,
           u.first_name || ' ' || u.last_name as name,
           u.role,
-          COUNT(t.id) FILTER (WHERE t.type = 'Visit' AND t.date >= $1 AND t.date <= $2) as visits,
-          COUNT(t.id) FILTER (WHERE t.type = 'Call' AND t.date >= $1 AND t.date <= $2) as calls,
-          COUNT(t.id) FILTER (WHERE t.date >= $1 AND t.date <= $2) as total_touchpoints
+          COUNT(t.id) FILTER (WHERE t.type = 'Visit' AND t.created_at::date >= $1 AND t.created_at::date <= $2) as visits,
+          COUNT(t.id) FILTER (WHERE t.type = 'Call' AND t.created_at::date >= $1 AND t.created_at::date <= $2) as calls,
+          COUNT(t.id) FILTER (WHERE t.created_at::date >= $1 AND t.created_at::date <= $2) as total_touchpoints
         FROM users u
         LEFT JOIN touchpoints t ON t.user_id = u.id
         WHERE u.role IN ('caravan', 'tele') AND u.is_active = true
@@ -842,7 +842,7 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
         end: endDateStr,
       },
       totalClients: parseInt((await pool.query('SELECT COUNT(*) as count FROM clients WHERE created_at >= $1 AND created_at <= $2 AND deleted_at IS NULL', [startDateStr, endDateStr])).rows[0].count),
-      totalTouchpoints: parseInt((await pool.query('SELECT COUNT(*) as count FROM touchpoints WHERE date >= $1 AND date <= $2', [startDateStr, endDateStr])).rows[0].count),
+      totalTouchpoints: parseInt((await pool.query('SELECT COUNT(*) as count FROM touchpoints WHERE created_at::date >= $1 AND created_at::date <= $2', [startDateStr, endDateStr])).rows[0].count),
       conversionRate: conversionRate.rate,
       averageResponseTime,
     };
