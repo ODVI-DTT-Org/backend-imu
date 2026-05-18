@@ -105,6 +105,10 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     next_visit_date: row.next_visit_date ?? null,
     reason: row.reason ?? null,
     photo_url: row.photo_url ?? null,
+    phone_number: row.phone_number ?? null,
+    visit_address: row.visit_address ?? null,
+    visit_municipality: row.visit_municipality ?? null,
+    visit_province: row.visit_province ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     expand: row.expand,
@@ -250,7 +254,11 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
               COALESCE(v.reason, ca.reason) AS reason,
               -- Get status and remarks from visits/calls tables, fallback to touchpoints table
               COALESCE(v.status, ca.status, t.status) AS status,
-              COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks
+              COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks,
+              ca.phone_number,
+              v.address as visit_address,
+              v.municipality as visit_municipality,
+              v.province as visit_province
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
