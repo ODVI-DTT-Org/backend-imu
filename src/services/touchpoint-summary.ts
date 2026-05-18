@@ -19,7 +19,7 @@ export interface TouchpointSummaryItem {
 
 export async function updateClientTouchpointSummary(clientId: string): Promise<void> {
   try {
-    // Fetch all touchpoints for this client
+    // Fetch touchpoints from the touchpoints table for this client
     const touchpointsResult = await pool.query(
       `SELECT
         t.id,
@@ -48,14 +48,35 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
       [clientId]
     );
 
-    const touchpoints: TouchpointSummaryItem[] = touchpointsResult.rows;
-    const count = touchpoints.length;
+    const dbTouchpoints: TouchpointSummaryItem[] = touchpointsResult.rows;
+    const dbIds = new Set(dbTouchpoints.map((t) => t.id));
+
+    // Fetch existing touchpoint_summary to preserve legacy JSONB entries that have
+    // no corresponding row in the touchpoints table (imported from PCNICMS/legacy systems).
+    // Without this merge, recording any new touchpoint would wipe all legacy history.
+    const existingResult = await pool.query(
+      `SELECT touchpoint_summary FROM clients WHERE id = $1`,
+      [clientId]
+    );
+    const existingRaw = existingResult.rows[0]?.touchpoint_summary ?? [];
+    const existing: TouchpointSummaryItem[] = Array.isArray(existingRaw)
+      ? existingRaw
+      : (typeof existingRaw === 'string' ? JSON.parse(existingRaw) : []);
+
+    // Keep only legacy entries whose IDs are not in the touchpoints table
+    const legacyEntries = existing.filter((t: any) => t.id && !dbIds.has(t.id));
+
+    // Merge legacy entries with live touchpoints table rows, sorted by date
+    const allTouchpoints = [...legacyEntries, ...dbTouchpoints].sort((a: any, b: any) => {
+      return new Date(a.date).getTime() - new Date(b.date).getTime();
+    });
+
+    const count = allTouchpoints.length;
 
     // Cyclic touchpoint sequence — repeats after 7 (unlimited touchpoints)
     const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
     const nextTouchpoint: 'Visit' | 'Call' = TOUCHPOINT_SEQUENCE[count % TOUCHPOINT_SEQUENCE.length];
 
-    // Update clients table — touchpoint_number stores completed count
     await pool.query(
       `UPDATE clients
        SET touchpoint_summary = $1::jsonb,
@@ -63,11 +84,9 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
            next_touchpoint = $3,
            updated_at = NOW()
        WHERE id = $4`,
-      [JSON.stringify(touchpoints), count, nextTouchpoint, clientId]
+      [JSON.stringify(allTouchpoints), count, nextTouchpoint, clientId]
     );
   } catch (error) {
-    // Log error but don't throw - touchpoint creation should still succeed
     console.error(`Failed to update touchpoint summary for client ${clientId}:`, error);
-    // Optionally: send to monitoring service
   }
 }
