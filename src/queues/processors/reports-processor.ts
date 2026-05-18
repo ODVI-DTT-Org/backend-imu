@@ -18,6 +18,7 @@ import { pool } from '../../db/index.js';
 import { BaseProcessor } from '../base-processor.js';
 import type { ReportJobData, JobResult } from '../jobs/job-types.js';
 import { logger } from '../../utils/logger.js';
+import { generateItineraryAnalysisReport } from './handlers/itinerary-analysis-handler.js';
 
 /**
  * Reports Processor
@@ -109,6 +110,37 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         case 'report_market_saturation':
           result = await this.generateMarketSaturationReport(userId, params);
           break;
+        case 'report_itinerary_analysis': {
+          const from = params?.startDate ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+
+          const itineraryResult = await generateItineraryAnalysisReport(
+            pool,
+            this.s3Client,
+            this.s3Bucket,
+            from,
+            to
+          );
+
+          return {
+            success: true,
+            total: 1,
+            succeeded: ['report_itinerary_analysis'],
+            failed: [],
+            startedAt,
+            completedAt: new Date(),
+            duration: Date.now() - startedAt.getTime(),
+            result: {
+              reportType: 'itinerary_analysis',
+              format: 'excel',
+              generatedAt: new Date(),
+              parameters: { from, to },
+              downloadUrl: itineraryResult.downloadUrl,
+              fileName: itineraryResult.fileName,
+              fileSize: itineraryResult.buffer.byteLength,
+            },
+          };
+        }
         default:
           throw new Error(`Unknown report type: ${type}`);
       }
