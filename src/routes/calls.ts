@@ -212,21 +212,17 @@ calls.post('/', authMiddleware, async (c) => {
     const user = c.get('user');
     const data = await c.req.json();
 
-    // Tele can only log calls when the next touchpoint for the client is a Call type
+    // Tele can always record calls for active clients (no sequence gating)
     if (user.role === 'tele' && data.client_id) {
       const clientResult = await pool.query(
-        `SELECT next_touchpoint, loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL`,
+        `SELECT loan_released FROM clients WHERE id = $1 AND deleted_at IS NULL`,
         [data.client_id]
       );
       if (clientResult.rows.length === 0) {
         return c.json({ error: 'Client not found' }, 404);
       }
-      const client = clientResult.rows[0];
-      if (client.loan_released) {
+      if (clientResult.rows[0].loan_released) {
         return c.json({ error: 'Loan already released for this client' }, 403);
-      }
-      if (client.next_touchpoint !== 'Call') {
-        return c.json({ error: 'Not your turn — next touchpoint is not a Call' }, 403);
       }
     }
 
