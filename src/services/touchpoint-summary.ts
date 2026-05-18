@@ -73,18 +73,14 @@ export async function updateClientTouchpointSummary(clientId: string): Promise<v
 
     const count = allTouchpoints.length;
 
-    // Cyclic touchpoint sequence — repeats after 7 (unlimited touchpoints)
-    const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'] as const;
-    const nextTouchpoint: 'Visit' | 'Call' = TOUCHPOINT_SEQUENCE[count % TOUCHPOINT_SEQUENCE.length];
-
     await pool.query(
       `UPDATE clients
        SET touchpoint_summary = $1::jsonb,
            touchpoint_number = $2,
-           next_touchpoint = $3,
+           next_touchpoint = NULL,
            updated_at = NOW()
-       WHERE id = $4`,
-      [JSON.stringify(allTouchpoints), count, nextTouchpoint, clientId]
+       WHERE id = $3`,
+      [JSON.stringify(allTouchpoints), count, clientId]
     );
   } catch (error) {
     console.error(`Failed to update touchpoint summary for client ${clientId}:`, error);

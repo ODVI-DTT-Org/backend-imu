@@ -117,9 +117,6 @@ export async function getTeamPerformance(params: {
 }) {
   const { dateFrom, dateTo, role, userId } = params;
 
-  // Touchpoint sequence for determining callable status
-  const TOUCHPOINT_SEQUENCE = ['Visit', 'Call', 'Call', 'Visit', 'Call', 'Call', 'Visit'];
-
   // Build WHERE clause based on user role
   let whereClause = '';
   if (role === 'admin') {

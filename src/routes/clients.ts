@@ -267,9 +267,7 @@ function mapRowToClient(row: Record<string, any>) {
   const displayName = `${row.last_name}, ${nameParts.join(' ')}`;
 
   const loanReleased = row.loan_released || false;
-  // next_touchpoint: use the DB value; fall back to 'Visit' if stale/null and not released.
-  // Pattern-based sequencing (Visit-Call-Call-Visit...) has been removed.
-  const computedNextTouchpoint = loanReleased ? null : 'Visit';
+  const computedNextTouchpoint = null; // No touchpoint sequence — clients can receive unlimited visits or calls
   // Use summary array length as authoritative touchpoint count — touchpoint_number is stale
   // for legacy-imported clients (stuck at 7 even with 70+ touchpoints).
   const summaryCount = Array.isArray(row.touchpoint_summary) ? row.touchpoint_summary.length : 0;
@@ -418,41 +416,13 @@ clients.get('/', authMiddleware, async (c) => {
       c.created_at DESC`;
 
     if (sortBy === 'touchpoint_status') {
-      // For Tele role: use group scoring directly
-      if (user.role === 'tele' && touchpointStatus) {
-        // Order by group_score ASC, then by completed_count DESC, then by created_at DESC
-        orderByClause = `
-          CASE
-            WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
-              AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
-            WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
-            ELSE 3
-          END ASC,
-          COALESCE(c.touchpoint_number, 1) DESC,
-          c.created_at DESC`;
-      } else {
-        // For Caravan/Admin or when no touchpointStatus filter: use CASE expression
-        // Determine if current user can create the next touchpoint
-        let canCreateCondition = '';
-        if (user.role === 'caravan') {
-          canCreateCondition = `c.next_touchpoint = 'Visit' OR COALESCE(c.touchpoint_number, 1) = 1`;
-        } else {
-          canCreateCondition = `c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1`;
-        }
-
-        // Group score CASE expression for ordering (unlimited touchpoints)
-        const groupScoreCase = `CASE
-          WHEN (${canCreateCondition}) AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
-          WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
-          WHEN COALESCE(c.touchpoint_number, 1) > 0 AND c.next_touchpoint IS NOT NULL AND NOT (${canCreateCondition}) THEN 3
-          ELSE 4
-        END`;
-
-        orderByClause = `
-          ${groupScoreCase} ASC,
-          COALESCE(c.touchpoint_number, 1) DESC,
-          c.created_at DESC`;
-      }
+      // No touchpoint sequence — all active clients are equally callable/visitable.
+      // Sort: loan-released clients last, then by most touchpoints (highest engagement), then newest.
+      orderByClause = `
+        CASE WHEN c.loan_released THEN 2 ELSE 1 END ASC,
+        COALESCE(c.touchpoint_number, 0) DESC,
+        c.last_touchpoint_date DESC NULLS LAST,
+        c.created_at DESC`;
     }
 
     if (sortBy === 'recently_visited') {
@@ -502,7 +472,7 @@ clients.get('/', authMiddleware, async (c) => {
         baseParamIndex++;
       }
       if (hasArchive) {
-        parts.push(`(c.next_touchpoint IS NULL OR c.loan_released = true)`);
+        parts.push(`c.loan_released = true`);
       }
       if (parts.length > 0) {
         baseWhereConditions.push(`(${parts.join(' OR ')})`);
@@ -883,27 +853,29 @@ clients.get('/assigned', authMiddleware, async (c) => {
         baseParamIndex++;
       }
       if (hasArchive) {
-        parts.push(`(c.next_touchpoint IS NULL OR c.loan_released = true)`);
+        parts.push(`c.loan_released = true`);
       }
       if (parts.length > 0) {
         baseWhereConditions.push(`(${parts.join(' OR ')})`);
       }
     }
 
-    // Apply touchpoint_status filter to WHERE clause (unlimited touchpoints)
+    // Apply touchpoint_status filter to WHERE clause.
+    // With no touchpoint sequence, callable/waiting_for_caravan = any active non-released client.
+    // "completed" no longer means sequence-done; treat it as has-at-least-one-touchpoint.
     if (touchpointStatus && touchpointStatus.length > 0) {
       const tsConds: string[] = [];
       if (includeCallable) {
-        tsConds.push(`(c.next_touchpoint = 'Call' AND c.loan_released = false)`);
+        tsConds.push(`c.loan_released = false`);
       }
       if (includeWaitingForCaravan) {
-        tsConds.push(`(c.next_touchpoint = 'Visit' AND c.loan_released = false)`);
+        tsConds.push(`c.loan_released = false`);
       }
       if (includeNoProgress) {
         tsConds.push(`(COALESCE(c.touchpoint_number, 0) = 0 AND c.loan_released = false)`);
       }
       if (includeCompleted) {
-        tsConds.push(`(c.next_touchpoint IS NULL AND c.loan_released = false)`);
+        tsConds.push(`(COALESCE(c.touchpoint_number, 0) > 0 AND c.loan_released = false)`);
       }
       if (includeLoanReleased) {
         tsConds.push(`c.loan_released = true`);
@@ -1027,13 +999,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
         c.next_touchpoint as next_touchpoint_type,
         (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
         (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
-        -- Calculate group_score for ordering (unlimited touchpoints)
-        CASE
-          WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
-            AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
-          WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
-          ELSE 3
-        END as group_score${similaritySelect},
+        -- group_score: active clients first, loan-released last
+        CASE WHEN c.loan_released THEN 2 ELSE 1 END as group_score${similaritySelect},
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name,
         cf.id IS NOT NULL as is_favorited
@@ -1078,12 +1045,9 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
       ${searchOrderBy && searchOrderBy.trim().length > 0 ? `ORDER BY ${searchOrderBy},` : `ORDER BY`}
         (cf.client_id IS NOT NULL) DESC,
-        CASE
-          WHEN (c.next_touchpoint IS NOT NULL OR COALESCE(c.touchpoint_number, 1) = 1)
-            AND c.next_touchpoint IS NOT NULL AND NOT c.loan_released THEN 1
-          WHEN c.next_touchpoint IS NULL OR c.loan_released THEN 2
-          ELSE 3
-        END ASC
+        CASE WHEN c.loan_released THEN 2 ELSE 1 END ASC,
+        COALESCE(c.touchpoint_number, 0) DESC,
+        c.last_touchpoint_date DESC NULLS LAST
       LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
     `;
 

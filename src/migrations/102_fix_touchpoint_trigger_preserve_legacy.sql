@@ -1,17 +1,16 @@
 -- ============================================
--- Migration 102: Fix trigger to preserve legacy touchpoint_summary entries
+-- Migration 102: Fix trigger — preserve legacy entries + remove sequence
 -- ============================================
--- Problem: The trigger rebuilds clients.touchpoint_summary exclusively from
--- the touchpoints table. Clients imported from PCNICMS (and other legacy
--- systems) have their history stored only in the touchpoint_summary JSONB
--- column — they have no rows in the touchpoints table. When any new
--- touchpoint is recorded for these clients, the trigger overwrites the
--- JSONB with just the new entry, erasing all imported history.
+-- Fix 1 (legacy data): The trigger rebuilt clients.touchpoint_summary
+-- exclusively from the touchpoints table. PCNICMS-imported clients have
+-- history only in the touchpoint_summary JSONB — no touchpoints table rows.
+-- Recording any new touchpoint overwrote the JSONB with just the new entry,
+-- erasing all imported history. Fix: preserve JSONB entries whose id does
+-- not exist in the touchpoints table and merge them with the new rows.
 --
--- Fix: Before writing the new summary, pull the existing touchpoint_summary
--- from the clients row and retain any entries whose id does not appear in
--- the touchpoints table (i.e. legacy-only entries). Merge those with the
--- live touchpoints-table rows sorted by date.
+-- Fix 2 (no sequence): Business rule changed — touchpoints are unlimited
+-- with no fixed Visit/Call sequence. next_touchpoint is now always NULL;
+-- the type is determined by the agent's role at record time.
 -- ============================================
 
 BEGIN;
@@ -27,8 +26,6 @@ DECLARE
   legacy_entries     JSONB;
   merged_summary     JSONB;
   tp_count           INTEGER;
-  next_tp_num        INTEGER;
-  next_tp_type       VARCHAR(10);
 BEGIN
   affected_client_id := COALESCE(NEW.client_id, OLD.client_id);
   IF affected_client_id IS NULL THEN
@@ -91,24 +88,12 @@ BEGIN
 
   SELECT jsonb_array_length(merged_summary) INTO tp_count;
 
-  -- Determine next touchpoint type from cyclic sequence (repeats after 7)
-  next_tp_num := (tp_count % 7) + 1;
-  CASE next_tp_num
-    WHEN 1 THEN next_tp_type := 'Visit';
-    WHEN 2 THEN next_tp_type := 'Call';
-    WHEN 3 THEN next_tp_type := 'Call';
-    WHEN 4 THEN next_tp_type := 'Visit';
-    WHEN 5 THEN next_tp_type := 'Call';
-    WHEN 6 THEN next_tp_type := 'Call';
-    WHEN 7 THEN next_tp_type := 'Visit';
-    ELSE        next_tp_type := 'Visit';
-  END CASE;
-
+  -- No sequence — next_touchpoint is always NULL (type is role-based, not sequence-driven)
   UPDATE clients
   SET
     touchpoint_summary = merged_summary,
     touchpoint_number  = tp_count,
-    next_touchpoint    = next_tp_type,
+    next_touchpoint    = NULL,
     updated_at         = NOW()
   WHERE id = affected_client_id;
 
