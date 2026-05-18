@@ -91,11 +91,11 @@ function mapRowToApproval(row: Record<string, any>) {
     status: row.status,
     client_id: row.client_id,
     user_id: row.user_id,
-    touchpoint_number: row.touchpoint_number,
+    touchpoint_number: row.touchpoint_number_resolved ?? row.touchpoint_number,
     role: row.role,
     reason: row.reason,
     notes: row.notes,
-    visit_remarks: row.visit_remarks ?? null,
+    visit_remarks: row.visit_remarks_resolved ?? row.visit_remarks ?? null,
     photo_url: row.visit_photo_url ?? null,
     visit_latitude: row.visit_latitude ?? null,
     visit_longitude: row.visit_longitude ?? null,
@@ -215,7 +215,9 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
               v.province as visit_province,
               v.region as visit_region,
               v.time_in as visit_time_in,
-              v.time_out as visit_time_out
+              v.time_out as visit_time_out,
+              COALESCE(tp.tp_number, a.touchpoint_number) AS touchpoint_number_resolved,
+              COALESCE(v.remarks, tp.tp_remarks) AS visit_remarks_resolved
        FROM approvals a
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN users car ON car.id = a.user_id
@@ -227,6 +229,14 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
            AND id = (a.notes::jsonb->>'visit_id')::uuid
          LIMIT 1
        ) v ON true
+       LEFT JOIN LATERAL (
+         SELECT touchpoint_number AS tp_number, remarks AS tp_remarks
+         FROM touchpoints
+         WHERE a.type IN ('udi', 'loan_release_v2')
+           AND left(a.notes, 1) = '{'
+           AND visit_id = (a.notes::jsonb->>'visit_id')::uuid
+         LIMIT 1
+       ) tp ON true
        ${whereClause}
        ORDER BY a.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -285,10 +295,30 @@ approvals.get('/:id', authMiddleware, requirePermission('approvals', 'read'), as
               c.middle_name as client_middle_name, c.email as client_email,
               c.phone as client_phone, c.client_type,
               car.first_name as caravan_first_name, car.last_name as caravan_last_name,
-              car.email as caravan_email, car.phone as caravan_phone
+              car.email as caravan_email, car.phone as caravan_phone,
+              v.remarks as visit_remarks, v.photo_url as visit_photo_url,
+              v.latitude as visit_latitude, v.longitude as visit_longitude,
+              v.address as visit_address, v.time_in as visit_time_in, v.time_out as visit_time_out,
+              COALESCE(tp.tp_number, a.touchpoint_number) AS touchpoint_number_resolved,
+              COALESCE(v.remarks, tp.tp_remarks) AS visit_remarks_resolved
        FROM approvals a
        LEFT JOIN clients c ON c.id = a.client_id
        LEFT JOIN users car ON car.id = a.user_id
+       LEFT JOIN LATERAL (
+         SELECT remarks, photo_url, latitude, longitude, address, time_in, time_out FROM visits
+         WHERE a.type IN ('udi', 'loan_release_v2')
+           AND left(a.notes, 1) = '{'
+           AND id = (a.notes::jsonb->>'visit_id')::uuid
+         LIMIT 1
+       ) v ON true
+       LEFT JOIN LATERAL (
+         SELECT touchpoint_number AS tp_number, remarks AS tp_remarks
+         FROM touchpoints
+         WHERE a.type IN ('udi', 'loan_release_v2')
+           AND left(a.notes, 1) = '{'
+           AND visit_id = (a.notes::jsonb->>'visit_id')::uuid
+         LIMIT 1
+       ) tp ON true
        WHERE a.id = $1`,
       [id]
     );
