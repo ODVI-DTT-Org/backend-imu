@@ -45,7 +45,7 @@ export async function createAnnouncementNotifications(
        FROM users u
        JOIN user_profiles up ON up.user_id = u.id
        WHERE up.role = ANY($4::text[])
-         AND u.deleted_at IS NULL`,
+         AND u.is_active = true`,
       [title, body, announcementId, targetRoles],
     );
   } catch (e) {
