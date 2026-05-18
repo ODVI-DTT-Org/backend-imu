@@ -79,6 +79,7 @@ const createTouchpointSchema = z.object({
   user_id: z.preprocess(v => (v === '' ? null : v), z.string().uuid().nullish()), // empty string from PowerSync CRUD coerced to null
   touchpoint_number: z.union([z.number().int(), z.string().transform(Number)]).pipe(z.number().int().min(1)), // coerce string→number from PowerSync CRUD, unlimited touchpoints
   type: z.enum(['Visit', 'Call']),
+  date: z.string().optional(),
   rejection_reason: z.string().nullish(),
   visit_id: z.string().uuid().nullish(),
   call_id: z.string().uuid().nullish(),
@@ -769,20 +770,20 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
 
     const result = await pool.query(
       `INSERT INTO touchpoints (
-        id, client_id, user_id, touchpoint_number, type, rejection_reason, visit_id, call_id
+        id, client_id, user_id, touchpoint_number, type, date, rejection_reason, visit_id, call_id
       ) VALUES (
         COALESCE($1, uuid_generate_v4()), $2, $3,
         (SELECT GREATEST(
            COALESCE((SELECT MAX(t2.touchpoint_number) FROM touchpoints t2 WHERE t2.client_id = $2), 0),
            COALESCE((SELECT MAX((e->>'touchpoint_number')::int) FROM clients c2, jsonb_array_elements(c2.touchpoint_summary) e WHERE c2.id = $2), 0)
          ) + 1),  -- Atomic: max of DB rows and legacy JSONB entries
-        $4, $5, $6, $7
+        $4, COALESCE($5::date, CURRENT_DATE), $6, $7, $8
       ) ON CONFLICT (id) DO UPDATE SET updated_at = touchpoints.updated_at
       RETURNING *`,
       [
         validated.id ?? null,
         validated.client_id, validated.user_id, validated.type,
-        validated.rejection_reason, visitId, callId
+        validated.date ?? null, validated.rejection_reason, visitId, callId
       ]
     );
 
