@@ -51,7 +51,7 @@ interface ClientFilterResult {
   nextIdx: number;
 }
 
-function buildClientFilters(
+export function buildClientFilters(
   q: {
     client_type?: string | string[];
     product_type?: string | string[];
@@ -61,6 +61,7 @@ function buildClientFilters(
     agency_id?: string;
     municipality?: string | string[];
     province?: string | string[];
+    barangay?: string | string[];
     // NEW: Touchpoint-based filters
     touchpoint_reason_codes?: string | string[];
     touchpoint_date_from?: string;
@@ -122,6 +123,25 @@ function buildClientFilters(
       if (normalizedProvinceValues.length > 0) {
         conditions.push(`c.normalized_province = ANY($${idx}::text[])`);
         params.push(normalizedProvinceValues);
+        idx++;
+      }
+    }
+  }
+
+  if (q.barangay) {
+    const values = Array.isArray(q.barangay) ? q.barangay : [q.barangay];
+    if (values.length > 0) {
+      const normalizedBarangayValues = values
+        .flatMap(v => String(v).split(','))
+        .map(v => v.trim().toLowerCase())
+        .filter(v => v.length > 0 && v !== 'all');
+
+      if (normalizedBarangayValues.length > 0) {
+        conditions.push(`(
+          LOWER(TRIM(COALESCE(c.barangay, ''))) = ANY($${idx}::text[])
+          OR LOWER(TRIM(COALESCE(c.psgc_barangay, ''))) = ANY($${idx}::text[])
+        )`);
+        params.push(normalizedBarangayValues);
         idx++;
       }
     }
@@ -383,6 +403,7 @@ clients.get('/', authMiddleware, async (c) => {
       loan_type: c.req.queries('loan_type'),
       municipality: c.req.queries('municipality'),
       province: c.req.queries('province'),
+      barangay: c.req.queries('barangay'),
       touchpoint_status: c.req.queries('touchpoint_status'),
       next_touchpoint_number: c.req.queries('next_touchpoint_number'),
       touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes'),
@@ -413,8 +434,10 @@ clients.get('/', authMiddleware, async (c) => {
 
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
+    const barangayQuery = c.req.queries('barangay');
     const municipality = municipalityQuery?.length ? municipalityQuery : undefined;
     const province = provinceQuery?.length ? provinceQuery : undefined;
+    const barangay = barangayQuery?.length ? barangayQuery : undefined;
 
     const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
       client_type: c.req.queries('client_type')?.length ? c.req.queries('client_type') : undefined,
@@ -425,6 +448,7 @@ clients.get('/', authMiddleware, async (c) => {
       agency_id: c.req.query('agency_id'),
       municipality,
       province,
+      barangay,
       // NEW: Touchpoint-based filters
       touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes')?.length
         ? c.req.queries('touchpoint_reason_codes')
@@ -783,8 +807,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
     const municipalityQuery = c.req.queries('municipality');
     const provinceQuery = c.req.queries('province');
+    const barangayQuery = c.req.queries('barangay');
     const municipality = municipalityQuery?.length ? municipalityQuery : undefined;
     const province = provinceQuery?.length ? provinceQuery : undefined;
+    const barangay = barangayQuery?.length ? barangayQuery : undefined;
 
     const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
       client_type: c.req.queries('client_type')?.length ? c.req.queries('client_type') : undefined,
@@ -795,6 +821,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       agency_id: c.req.query('agency_id'),
       municipality,
       province,
+      barangay,
       // NEW: Touchpoint-based filters
       touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes')?.length
         ? c.req.queries('touchpoint_reason_codes')
