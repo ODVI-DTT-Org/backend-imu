@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { createHash } from 'crypto';
 import { authMiddleware } from '../middleware/auth.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { requirePermission } from '../middleware/permissions.js';
@@ -17,6 +18,7 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getClientsCacheService } from '../services/cache/clients-cache.js';
+import { getCacheService } from '../services/cache/redis-cache.js';
 import { getQueueManager, QUEUE_NAMES, BulkJobType, addGeocodingJob } from '../queues/index.js';
 import type { BulkUploadJobData } from '../queues/jobs/job-types.js';
 
@@ -41,20 +43,6 @@ function normalizeLocationName(name: string): string {
     .replace(/^(City of|City|Municipality of|Municipality)\s*/i, '')
     .replace(/\s*(City|Municipality)$/i, '')
     .trim();
-}
-
-/**
- * Generate SQL function for normalizing location names in database queries
- * This creates a portable SQL expression that works in PostgreSQL
- */
-function getNormalizeLocationSQL(column: string): string {
-  return `REGEXP_REPLACE(
-    REGEXP_REPLACE(
-      REGEXP_REPLACE(${column}, '^(City of|City|Municipality of|Municipality)\\s*', 'i'),
-      '\\s*(City|Municipality)$', 'i'
-    ),
-    '\\s+', ' ', 'g'
-  )`;
 }
 
 interface ClientFilterResult {
@@ -110,32 +98,32 @@ function buildClientFilters(
   if (q.municipality) {
     const values = Array.isArray(q.municipality) ? q.municipality : [q.municipality];
     if (values.length > 0) {
-      // Normalize input values (remove "City of", "City", etc.)
-      const normalizedPatterns = values
+      const normalizedValues = values
         .map(v => normalizeLocationName(v))
-        .filter(v => v.length > 0)
-        .map(v => `%${v}%`);
+        .map(v => v.toLowerCase())
+        .filter(v => v.length > 0);
 
-      // Match against normalized database column
-      conditions.push(`${getNormalizeLocationSQL('c.municipality')} ILIKE ANY($${idx}::text[])`);
-      params.push(normalizedPatterns);
-      idx++;
+      if (normalizedValues.length > 0) {
+        conditions.push(`c.normalized_municipality = ANY($${idx}::text[])`);
+        params.push(normalizedValues);
+        idx++;
+      }
     }
   }
 
   if (q.province) {
     const values = Array.isArray(q.province) ? q.province : [q.province];
     if (values.length > 0) {
-      // Normalize input values (remove "City of", "City", etc.)
-      const normalizedPatterns = values
+      const normalizedProvinceValues = values
         .map(v => normalizeLocationName(v))
-        .filter(v => v.length > 0)
-        .map(v => `%${v}%`);
+        .map(v => v.toLowerCase())
+        .filter(v => v.length > 0);
 
-      // Match against normalized database column
-      conditions.push(`${getNormalizeLocationSQL('c.province')} ILIKE ANY($${idx}::text[])`);
-      params.push(normalizedPatterns);
-      idx++;
+      if (normalizedProvinceValues.length > 0) {
+        conditions.push(`c.normalized_province = ANY($${idx}::text[])`);
+        params.push(normalizedProvinceValues);
+        idx++;
+      }
     }
   }
 
@@ -349,10 +337,65 @@ function mapRowToClient(row: Record<string, any>) {
   };
 }
 
+function serializeCacheParams(params: Record<string, string | string[] | undefined>): string {
+  return Object.keys(params)
+    .sort()
+    .map(key => `${key}=${JSON.stringify(params[key])}`)
+    .join('&');
+}
+
+function buildClientsListCacheKey(params: Record<string, string | string[] | undefined>): string {
+  const hash = createHash('sha256').update(serializeCacheParams(params)).digest('hex');
+  return `v1:clients:list:${hash}`;
+}
+
+function buildClientsCountCacheKey(params: Record<string, string | string[] | undefined>): string {
+  const { page: _page, perPage: _perPage, ...filterParams } = params;
+  const hash = createHash('sha256').update(serializeCacheParams(filterParams)).digest('hex');
+  return `v1:clients:count:${hash}`;
+}
+
+async function invalidateClientsListCache(): Promise<void> {
+  const cache = getCacheService();
+  await Promise.all([
+    cache.delPattern('v1:clients:list:*'),
+    cache.delPattern('v1:clients:count:*'),
+  ]);
+}
+
 // GET /api/clients - List ALL clients (no area filter) with pagination and filters
 clients.get('/', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
+    const cache = getCacheService();
+    const allQueryParams: Record<string, string | string[] | undefined> = {
+      page: c.req.query('page'),
+      perPage: c.req.query('perPage'),
+      search: c.req.query('search'),
+      sort_by: c.req.query('sort_by'),
+      loan_released: c.req.query('loan_released'),
+      caravan_id: c.req.query('caravan_id'),
+      agency_id: c.req.query('agency_id'),
+      client_type: c.req.queries('client_type'),
+      product_type: c.req.queries('product_type'),
+      market_type: c.req.queries('market_type'),
+      pension_type: c.req.queries('pension_type'),
+      loan_type: c.req.queries('loan_type'),
+      municipality: c.req.queries('municipality'),
+      province: c.req.queries('province'),
+      touchpoint_status: c.req.queries('touchpoint_status'),
+      next_touchpoint_number: c.req.queries('next_touchpoint_number'),
+      touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes'),
+      touchpoint_date_from: c.req.query('touchpoint_date_from'),
+      touchpoint_date_to: c.req.query('touchpoint_date_to'),
+      visit_status: c.req.queries('visit_status'),
+      _user: user.sub,
+    };
+    const listCacheKey = buildClientsListCacheKey(allQueryParams);
+    const cachedList = await cache.get<object>(listCacheKey);
+    if (cachedList) {
+      return c.json(cachedList);
+    }
 
     const page = parseInt(c.req.query('page') || '1');
     let perPage = parseInt(c.req.query('perPage') || '20');
@@ -537,13 +580,21 @@ clients.get('/', authMiddleware, async (c) => {
     const withGroupScoreCTE = ''; // No CTE needed
 
     // Get total count - direct query on clients table (no CTEs needed)
-    const countResult = await pool.query(
-      `SELECT COUNT(*) as count FROM clients c
-       WHERE c.deleted_at IS NULL
-       ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}`,
-      baseParams
-    );
-    const totalItems = parseInt(countResult.rows[0].count);
+    const countCacheKey = buildClientsCountCacheKey(allQueryParams);
+    const cachedCount = await cache.get<number>(countCacheKey);
+    let totalItems: number;
+    if (cachedCount !== null) {
+      totalItems = cachedCount;
+    } else {
+      const countResult = await pool.query(
+        `SELECT COUNT(*) as count FROM clients c
+         WHERE c.deleted_at IS NULL
+         ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}`,
+        baseParams
+      );
+      totalItems = parseInt(countResult.rows[0].count);
+      await cache.set(countCacheKey, totalItems, 60);
+    }
 
     // ============================================
     // TWO-PHASE QUERY for performance
@@ -692,13 +743,16 @@ clients.get('/', authMiddleware, async (c) => {
       };
     });
 
-    return c.json({
+    const responsePayload = {
       items: clientsList,
       page,
       perPage,
       totalItems,
       totalPages: Math.ceil(totalItems / perPage),
-    });
+    };
+
+    await cache.set(listCacheKey, responsePayload, 60);
+    return c.json(responsePayload);
   } catch (error) {
     console.error('Fetch clients error:', error);
     // Preserve the actual error message for debugging
@@ -1308,6 +1362,7 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
     );
 
     await client.query('COMMIT');
+    await invalidateClientsListCache();
 
     // Queue geocoding for newly created client (fire and forget — non-blocking)
     addGeocodingJob(user.sub, result.rows[0].id).catch((err: Error) =>
@@ -1446,6 +1501,7 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
     );
 
     await client.query('COMMIT');
+    await invalidateClientsListCache();
     return c.json({ ...mapRowToClient(result.rows[0]), requires_approval: false });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1513,6 +1569,7 @@ clients.patch('/:id', authMiddleware, auditMiddleware('client'), async (c) => {
     );
 
     await client.query('COMMIT');
+    await invalidateClientsListCache();
     return c.json(mapRowToClient(result.rows[0]));
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1581,6 +1638,7 @@ clients.delete('/:id', authMiddleware, requirePermission('clients', 'delete'), a
     // Admin: soft delete immediately
     await dbClient.query('UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2', [user.sub, id]);
     await dbClient.query('COMMIT');
+    await invalidateClientsListCache();
     return c.json({ message: 'Client deleted successfully' });
   } catch (error) {
     await dbClient.query('ROLLBACK');
@@ -1634,6 +1692,7 @@ clients.post('/:id/addresses', authMiddleware, async (c) => {
     );
 
     await client.query('COMMIT');
+    await invalidateClientsListCache();
     return c.json(result.rows[0], 201);
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1681,6 +1740,7 @@ clients.patch('/:id/addresses/:addressId/set-primary', authMiddleware, requirePe
     );
 
     await dbClient.query('COMMIT');
+    await invalidateClientsListCache();
     return c.json({ success: true, address: result.rows[0] });
   } catch (error) {
     await dbClient.query('ROLLBACK');
@@ -1733,6 +1793,7 @@ clients.post('/:id/phones', authMiddleware, async (c) => {
     );
 
     await client.query('COMMIT');
+    await invalidateClientsListCache();
     return c.json(result.rows[0], 201);
   } catch (error) {
     await client.query('ROLLBACK');
@@ -2774,6 +2835,7 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
     }
 
     await client.query('COMMIT');
+    await invalidateClientsListCache();
 
     return c.json({
       successful,
@@ -2821,6 +2883,8 @@ clients.post('/:id/favorite', authMiddleware, async (c) => {
      RETURNING *`,
     [id, user.sub, clientId]
   );
+
+  await invalidateClientsListCache();
 
   // Return the created/updated row so PowerSync can match it with the local row
   return c.json({ success: true, data: result.rows[0] || null });
@@ -2924,6 +2988,8 @@ clients.delete('/:id/favorite', authMiddleware, async (c) => {
     'DELETE FROM client_favorites WHERE user_id = $1 AND client_id = $2 RETURNING *',
     [user.sub, clientId]
   );
+
+  await invalidateClientsListCache();
 
   // Return the deleted row (or null if not found)
   return c.json({ success: true, data: result.rows[0] || null });

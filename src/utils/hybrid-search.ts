@@ -60,31 +60,7 @@ export function parseHybridSearchQuery(
 }
 
 /**
- * Generate all permutations of an array of words
- * Limited to prevent performance issues with large word counts
- */
-function generatePermutations<T>(arr: T[], maxPermutations: number = 24): T[][] {
-  if (arr.length <= 1) return [arr];
-  if (arr.length > 5) return [arr]; // Too many permutations for 5+ words
-
-  const result: T[][] = [];
-  const permute = (arr: T[], m: T[] = []) => {
-    if (arr.length === 0) {
-      result.push(m);
-    } else if (result.length < maxPermutations) {
-      for (let i = 0; i < arr.length; i++) {
-        const curr = arr.slice();
-        const next = curr.splice(i, 1);
-        permute(curr.slice(), m.concat(next));
-      }
-    }
-  };
-  permute(arr);
-  return result;
-}
-
-/**
- * Build SQL WHERE clause and parameters for hybrid search with permutation support
+ * Build SQL WHERE clause and parameters for hybrid search.
  */
 export function buildHybridSearchClause(
   parsedSearch: ReturnType<typeof parseHybridSearchQuery>,
@@ -98,7 +74,7 @@ export function buildHybridSearchClause(
   orderBy?: string;
   strategy: string;
 } {
-  const { strategy, words, normalizedQuery } = parsedSearch;
+  const { strategy, normalizedQuery } = parsedSearch;
 
   if (strategy === 'trgm') {
     // Use pg_trgm for 1-2 words (proven 100% success rate)
@@ -122,98 +98,19 @@ export function buildHybridSearchClause(
     };
   }
 
-  // Enhanced full-text search for 3+ words with permutation support
-  const wordCount = words.length;
-
-  if (wordCount === 3) {
-    // For 3-word searches, generate all 6 permutations for maximum flexibility
-    const permutations = generatePermutations(words);
-    const searchClauses: string[] = [];
-    let currentParamIndex = paramIndex;
-
-    permutations.forEach(perm => {
-      const searchQuery = perm.join(' ');
-      searchClauses.push(`to_tsvector('english', ${tableName}.full_name) @@ plainto_tsquery('english', $${currentParamIndex})`);
-      currentParamIndex++;
-    });
-
-    const whereClause = `(${searchClauses.join(' OR ')})`;
-    const params = permutations.map(perm => perm.join(' '));
-
-    // Use the first permutation for ranking
-    const similaritySelect = `, ts_rank_cd(to_tsvector('english', ${tableName}.full_name), plainto_tsquery('english', $${paramIndex})) as similarity_score`;
-    const orderBy = `similarity_score DESC`;
-
-    return {
-      whereClause,
-      params,
-      newParamIndex: currentParamIndex,
-      similaritySelect,
-      orderBy,
-      strategy: 'fulltext-permutations',
-    };
-  }
-
-  if (wordCount === 4) {
-    // For 4-word searches, use limited permutations (24 total, use first 12 for performance)
-    const permutations = generatePermutations(words, 12);
-    const searchClauses: string[] = [];
-    let currentParamIndex = paramIndex;
-
-    permutations.forEach(perm => {
-      const searchQuery = perm.join(' ');
-      searchClauses.push(`to_tsvector('english', ${tableName}.full_name) @@ plainto_tsquery('english', $${currentParamIndex})`);
-      currentParamIndex++;
-    });
-
-    const whereClause = `(${searchClauses.join(' OR ')})`;
-    const params = permutations.map(perm => perm.join(' '));
-
-    const similaritySelect = `, ts_rank_cd(to_tsvector('english', ${tableName}.full_name), plainto_tsquery('english', $${paramIndex})) as similarity_score`;
-    const orderBy = `similarity_score DESC`;
-
-    return {
-      whereClause,
-      params,
-      newParamIndex: currentParamIndex,
-      similaritySelect,
-      orderBy,
-      strategy: 'fulltext-permutations',
-    };
-  }
-
-  // For 5+ words, use original order + common name patterns
-  const commonPatterns = [
-    words.join(' '), // Original order
-    words.slice().reverse().join(' '), // Reverse order
-    // Add common name patterns if enough words
-    ...(words.length >= 5 ? [
-      `${words[words.length-1]} ${words.slice(0, words.length-1).join(' ')}`, // Last word first
-      `${words[0]} ${words.slice(1).join(' ')}`, // First word + rest
-    ] : [])
-  ];
-
-  const searchClauses: string[] = [];
-  let currentParamIndex = paramIndex;
-
-  commonPatterns.forEach(pattern => {
-    searchClauses.push(`to_tsvector('english', ${tableName}.full_name) @@ plainto_tsquery('english', $${currentParamIndex})`);
-    currentParamIndex++;
-  });
-
-  const whereClause = `(${searchClauses.join(' OR ')})`;
-  const params = commonPatterns;
-
-  const similaritySelect = `, ts_rank_cd(to_tsvector('english', ${tableName}.full_name), plainto_tsquery('english', $${paramIndex})) as similarity_score`;
+  // Full-text search for 3+ words: single plainto_tsquery against stored search_vector.
+  // plainto_tsquery is word-order-insensitive, so permutations add DB work without changing matches.
+  const whereClause = `${tableName}.search_vector @@ plainto_tsquery('simple', $${paramIndex})`;
+  const similaritySelect = `, ts_rank_cd(${tableName}.search_vector, plainto_tsquery('simple', $${paramIndex})) as similarity_score`;
   const orderBy = `similarity_score DESC`;
 
   return {
     whereClause,
-    params,
-    newParamIndex: currentParamIndex,
+    params: [normalizedQuery],
+    newParamIndex: paramIndex + 1,
     similaritySelect,
     orderBy,
-    strategy: 'fulltext-patterns',
+    strategy: 'fulltext',
   };
 }
 
@@ -232,8 +129,6 @@ export function getHybridSearchStrategyInfo(
   const strategyDescriptions: Record<string, string> = {
     trgm: 'PostgreSQL pg_trgm fuzzy matching (best for 1-2 words)',
     fulltext: 'PostgreSQL full-text search (best for 3+ words)',
-    'fulltext-permutations': 'PostgreSQL full-text search with word order permutations (3-4 words)',
-    'fulltext-patterns': 'PostgreSQL full-text search with common name patterns (5+ words)',
   };
 
   const strategy = customStrategy || parsedSearch.strategy;
