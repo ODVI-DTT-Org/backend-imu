@@ -871,6 +871,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       'admin': 100,
       'area_manager': 50,
       'assistant_area_manager': 40,
+      'team_leader': 25,
       'caravan': 20,
       'tele': 15,
     };

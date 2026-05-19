@@ -56,7 +56,7 @@ const registerSchema = z.object({
   password: z.string().min(8).max(72),
   first_name: z.string().min(1).max(100),
   last_name: z.string().min(1).max(100),
-  role: z.enum(['admin', 'area_manager', 'assistant_area_manager', 'caravan', 'tele']).optional().default('caravan'),
+  role: z.enum(['admin', 'area_manager', 'assistant_area_manager', 'caravan', 'tele', 'team_leader']).optional().default('caravan'),
 });
 
 const forgotPasswordSchema = z.object({

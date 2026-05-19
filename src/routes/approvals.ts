@@ -576,13 +576,13 @@ approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), 
         await dbClient.query(`
           INSERT INTO releases (
             id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-            udi_number, approval_notes, status
+            udi_number, approval_notes, status, approved_by, approved_at
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved', $9, NOW()
           )
         `, [approval.client_id, approval.user_id, visitId, callId,
             parsedNotes.product_type, parsedNotes.loan_type,
-            udiNum, 'Approved by admin']);
+            udiNum, 'Approved by admin', user.sub]);
 
         await dbClient.query(`
           UPDATE clients
@@ -695,14 +695,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
           await client.query(`
             INSERT INTO releases (
               id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-              udi_number, approval_notes, status
+              udi_number, approval_notes, status, approved_by, approved_at
             ) VALUES (
-              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
+              gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved', $9, NOW()
             )
           `, [approval.client_id, approval.user_id,
               parsedNotes.visit_id ?? null, parsedNotes.call_id ?? null,
               parsedNotes.product_type, parsedNotes.loan_type,
-              udiNumber, 'Approved by admin']);
+              udiNumber, 'Approved by admin', user.sub]);
 
           await client.query(
             `UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(),
@@ -726,13 +726,13 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
           await client.query(`
             INSERT INTO releases (
               id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-              udi_number, approval_notes, status
+              udi_number, approval_notes, status, approved_by, approved_at
             ) VALUES (
-              gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
+              gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved', $7, NOW()
             )
           `, [approval.client_id, approval.user_id,
               parsedNotes.product_type, parsedNotes.loan_type,
-              udiNumber, 'Approved by admin']);
+              udiNumber, 'Approved by admin', user.sub]);
 
           await client.query(
             `UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(),
@@ -804,13 +804,13 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         await client.query(`
           INSERT INTO releases (
             id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-            udi_number, approval_notes, status
+            udi_number, approval_notes, status, approved_by, approved_at
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved', $9, NOW()
           )
         `, [approval.client_id, approval.user_id, visitId, callId,
             notes.product_type, notes.loan_type, notes.udi_number ?? notes.amount,
-            'Approved by admin']);
+            'Approved by admin', user.sub]);
 
         // UPDATE clients
         await client.query(`
@@ -1611,12 +1611,12 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       await client.query(`
         INSERT INTO releases (
           id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-          udi_number, approval_notes, status
+          udi_number, approval_notes, status, approved_by, approved_at
         ) VALUES (
-          gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved'
+          gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved', $7, NOW()
         )
       `, [validated.client_id, user.sub, validated.product_type,
-          validated.loan_type, validated.udi_number, validated.remarks]);
+          validated.loan_type, validated.udi_number, validated.remarks, user.sub]);
 
       await client.query(`
         UPDATE clients
