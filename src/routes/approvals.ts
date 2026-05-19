@@ -6,6 +6,8 @@ import { auditMiddleware, auditLog } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
 import { createNotification } from '../services/notification.service.js';
+import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
+import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
 import {
   ValidationError,
   NotFoundError,
@@ -1704,6 +1706,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       }
 
       let activityId: string | undefined;
+      let shouldRefreshTouchpointSummary = false;
 
       // Caravan/AM/AAM/TL: CREATE visits record
       if (['caravan', 'area_manager', 'assistant_area_manager', 'team_leader'].includes(user.role)) {
@@ -1730,6 +1733,16 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
             validated.photo_url, validated.notes]);
 
         activityId = visitResult.rows[0].id;
+
+        const touchpointNumber = await getNextTouchpointNumber(dbClient, validated.client_id);
+        await dbClient.query(`
+          INSERT INTO touchpoints (
+            id, client_id, user_id, touchpoint_number, type, date, rejection_reason, visit_id, call_id, status, notes
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, 'Visit', CURRENT_DATE, 'Loan Release', $4, NULL, 'Completed', $5
+          )
+        `, [validated.client_id, user.sub, touchpointNumber, activityId, validated.notes ?? null]);
+        shouldRefreshTouchpointSummary = true;
 
         // UPDATE itineraries (stays in_progress)
         await dbClient.query(`
@@ -1776,6 +1789,10 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           validated.udi_number]);
 
       await dbClient.query('COMMIT');
+
+      if (shouldRefreshTouchpointSummary) {
+        await updateClientTouchpointSummary(validated.client_id);
+      }
 
       return c.json({
         message: 'Loan release submitted for approval',

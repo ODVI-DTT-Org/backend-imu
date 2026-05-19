@@ -118,7 +118,7 @@ export async function getNextTouchpointNumber(
         0
       ),
       COALESCE(
-        (SELECT MAX((entry->>'touchpoint_number')::int)
+        (SELECT MAX(COALESCE((entry->>'touchpoint_number')::int, (entry->>'number')::int))
          FROM clients c, jsonb_array_elements(c.touchpoint_summary) AS entry
          WHERE c.id = $1),
         0
