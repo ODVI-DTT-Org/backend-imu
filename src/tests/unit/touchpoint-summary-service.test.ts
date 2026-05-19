@@ -1,317 +1,169 @@
-/**
- * Unit Tests: Touchpoint Summary Service
- *
- * Tests the updateClientTouchpointSummary service function
- * to ensure it correctly updates denormalized touchpoint data.
- */
-
-import { describe, test, expect, vi, beforeEach, afterEach } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { updateClientTouchpointSummary } from '../../services/touchpoint-summary.js';
+import { pool } from '../../db/index.js';
 
-// Mock the database pool
 vi.mock('../../db/index.js', () => ({
   pool: {
     query: vi.fn(),
   },
 }));
 
-import { pool } from '../../db/index.js';
+function updateArgs() {
+  return (pool.query as any).mock.calls.find((call: any[]) =>
+    String(call[0]).includes('UPDATE clients')
+  )?.[1];
+}
 
 describe('Touchpoint Summary Service', () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  describe('updateClientTouchpointSummary', () => {
-    test('should update client with no touchpoints', async () => {
-      // Mock touchpoints query to return empty array
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [],
-      });
+  test('updates a client with no touchpoints to an empty summary', async () => {
+    (pool.query as any)
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [{ touchpoint_summary: [] }] })
+      .mockResolvedValueOnce({ rows: [] });
 
-      // Mock UPDATE query
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [],
-      });
+    await updateClientTouchpointSummary('client-123');
 
-      await updateClientTouchpointSummary('client-123');
-
-      // Verify touchpoints query was called
-      expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('SELECT'),
-        ['client-123']
-      );
-
-      // Verify UPDATE query was called with correct parameters
-      expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE clients'),
-        ['[]', 1, 'Visit', 'client-123'] // touchpoint_summary, touchpoint_number, next_touchpoint, client_id
-      );
-    });
-
-    test('should update client with 1 touchpoint (Visit)', async () => {
-      // Mock touchpoints query to return 1 touchpoint
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [
-          {
-            id: 'tp-1',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 1,
-            type: 'Visit',
-            date: '2026-04-16',
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-        ],
-      });
-
-      // Mock UPDATE query
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [],
-      });
-
-      await updateClientTouchpointSummary('client-123');
-
-      // Verify UPDATE query was called with correct parameters
-      expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE clients'),
-        [expect.stringContaining('Visit'), 2, 'Call', 'client-123'] // touchpoint_summary, touchpoint_number, next_touchpoint, client_id
-      );
-    });
-
-    test('should update client with 3 touchpoints (mixed types)', async () => {
-      // Mock touchpoints query to return 3 touchpoints
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [
-          {
-            id: 'tp-1',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 1,
-            type: 'Visit',
-            date: '2026-04-14',
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-          {
-            id: 'tp-2',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 2,
-            type: 'Call',
-            date: '2026-04-15',
-            reason: 'Not interested',
-            status: 'Not Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-          {
-            id: 'tp-3',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 3,
-            type: 'Call',
-            date: '2026-04-16',
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-        ],
-      });
-
-      // Mock UPDATE query
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [],
-      });
-
-      await updateClientTouchpointSummary('client-123');
-
-      // Verify UPDATE query was called with correct parameters
-      expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE clients'),
-        [expect.stringContaining('Call'), 4, 'Visit', 'client-123'] // touchpoint_summary, touchpoint_number, next_touchpoint, client_id
-      );
-    });
-
-    test('should update client with 7 touchpoints (completed)', async () => {
-      // Mock touchpoints query to return 7 touchpoints
-      (pool.query as any).mockResolvedValueOnce({
-        rows: Array.from({ length: 7 }, (_, i) => ({
-          id: `tp-${i + 1}`,
-          client_id: 'client-123',
-          user_id: 'user-1',
-          touchpoint_number: i + 1,
-          type: [1, 4, 7].includes(i + 1) ? 'Visit' : 'Call',
-          date: `2026-04-${10 + i}`,
-          reason: null,
-          status: 'Interested',
-          time_in: null,
-          time_out: null,
-          location: null,
-        })),
-      });
-
-      // Mock UPDATE query
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [],
-      });
-
-      await updateClientTouchpointSummary('client-123');
-
-      // Verify UPDATE query was called with correct parameters
-      expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('UPDATE clients'),
-        [expect.stringContaining('Visit'), 8, null, 'client-123'] // touchpoint_summary, touchpoint_number (8 = 7 + 1), next_touchpoint (null), client_id
-      );
-    });
-
-    test('should handle database errors gracefully', async () => {
-      // Mock touchpoints query to throw error
-      const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-      (pool.query as any).mockRejectedValueOnce(
-        new Error('Database connection failed')
-      );
-
-      // Should not throw - service catches errors and logs them
-      await updateClientTouchpointSummary('client-123');
-
-      // Verify error was logged
-      expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Failed to update touchpoint summary'),
-        expect.any(Error)
-      );
-
-      consoleErrorSpy.mockRestore();
-    });
-
-    test('should preserve touchpoint order by date', async () => {
-      // Mock touchpoints query to return touchpoints in specific order
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [
-          {
-            id: 'tp-1',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 1,
-            type: 'Visit',
-            date: '2026-04-10',
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-          {
-            id: 'tp-3',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 3,
-            type: 'Call',
-            date: '2026-04-12', // Later date
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-          {
-            id: 'tp-2',
-            client_id: 'client-123',
-            user_id: 'user-1',
-            touchpoint_number: 2,
-            type: 'Call',
-            date: '2026-04-11', // Earlier date than tp-3
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          },
-        ],
-      });
-
-      // Mock UPDATE query
-      (pool.query as any).mockResolvedValueOnce({
-        rows: [],
-      });
-
-      await updateClientTouchpointSummary('client-123');
-
-      // Verify touchpoints query was called with ORDER BY date ASC
-      expect(pool.query).toHaveBeenCalledWith(
-        expect.stringContaining('ORDER BY date ASC'),
-        ['client-123']
-      );
-
-      // Verify UPDATE query was called
-      expect(pool.query).toHaveBeenCalledTimes(2);
-    });
+    expect(updateArgs()).toEqual(['[]', 0, 'client-123']);
   });
 
-  describe('Touchpoint Sequence Validation', () => {
-    test('should calculate correct next_touchpoint for each count', async () => {
-      const testCases = [
-        { count: 0, expected: 'Visit', touchpoint_number: 1 },  // 1st: Visit
-        { count: 1, expected: 'Call', touchpoint_number: 2 },   // 2nd: Call
-        { count: 2, expected: 'Call', touchpoint_number: 3 },   // 3rd: Call
-        { count: 3, expected: 'Visit', touchpoint_number: 4 },  // 4th: Visit
-        { count: 4, expected: 'Call', touchpoint_number: 5 },   // 5th: Call
-        { count: 5, expected: 'Call', touchpoint_number: 6 },   // 6th: Call
-        { count: 6, expected: 'Visit', touchpoint_number: 7 },  // 7th: Visit
-        { count: 7, expected: null, touchpoint_number: 8 },     // Completed (next would be 8, but we're done)
-      ];
+  test('preserves legacy-only entries and appends live entries using nested visit schema', async () => {
+    const legacy = {
+      id: 'legacy-1',
+      type: 'Visit',
+      touchpoint_number: 1,
+      date: '2025-01-01',
+      status: 'Completed',
+      visit: { id: 'legacy-visit-1', status: 'completed' },
+      call: null,
+      is_legacy: true,
+    };
 
-      for (const { count, expected, touchpoint_number } of testCases) {
-        // Clear all mocks before each test case
-        vi.clearAllMocks();
-
-        // Mock touchpoints query
-        (pool.query as any).mockResolvedValueOnce({
-          rows: Array.from({ length: count }, (_, i) => ({
-            id: `tp-${i + 1}`,
-            client_id: 'client-123',
+    (pool.query as any)
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'live-2',
+            type: 'Visit',
+            touchpoint_number: 2,
+            date: '2026-05-19',
+            status: null,
             user_id: 'user-1',
-            touchpoint_number: i + 1,
-            type: [0, 3, 6].includes(i) ? 'Visit' : 'Call',
-            date: `2026-04-${10 + i}`,
-            reason: null,
-            status: 'Interested',
-            time_in: null,
-            time_out: null,
-            location: null,
-          })),
-        });
+            is_legacy: false,
+            created_at: '2026-05-19T01:00:00+00:00',
+            updated_at: '2026-05-19T02:00:00+00:00',
+            rejection_reason: 'FOR_PROCESSING',
+            visit_id: 'visit-2',
+            visit_type: 'regular_visit',
+            visit_notes: 'notes',
+            visit_reason: 'FOR_PROCESSING',
+            visit_source: 'IMU',
+            visit_status: 'completed',
+            visit_address: 'Bacolod',
+            visit_remarks: 'remarks',
+            visit_time_in: '2026-05-19T01:00:00+00:00',
+            visit_time_out: '2026-05-19T02:00:00+00:00',
+            visit_latitude: 10.1,
+            visit_longitude: 122.1,
+            visit_photo_url: 'photo.jpg',
+            visit_odometer_arrival: '1',
+            visit_odometer_departure: '2',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ touchpoint_summary: [legacy] }] })
+      .mockResolvedValueOnce({ rows: [] });
 
-        // Mock UPDATE query
-        (pool.query as any).mockResolvedValueOnce({
-          rows: [],
-        });
+    await updateClientTouchpointSummary('client-123');
 
-        await updateClientTouchpointSummary('client-123');
+    const [summaryJson, count, clientId] = updateArgs();
+    const summary = JSON.parse(summaryJson);
 
-        // Verify both SELECT and UPDATE queries were called
-        expect(pool.query).toHaveBeenCalledTimes(2);
-
-        // Get the second call (UPDATE query)
-        const updateCall = (pool.query as any).mock.calls[1];
-
-        // Verify the UPDATE query was called with correct parameters
-        expect(updateCall[0]).toContain('UPDATE clients');
-        expect(updateCall[1][1]).toBe(touchpoint_number); // touchpoint_number
-        expect(updateCall[1][2]).toBe(expected); // next_touchpoint
-        expect(updateCall[1][3]).toBe('client-123'); // client_id
-      }
+    expect(count).toBe(2);
+    expect(clientId).toBe('client-123');
+    expect(summary[0]).toEqual(legacy);
+    expect(summary[1]).toMatchObject({
+      id: 'live-2',
+      call: null,
+      type: 'Visit',
+      status: 'Completed',
+      touchpoint_number: 2,
+      visit: {
+        id: 'visit-2',
+        reason: 'FOR_PROCESSING',
+        status: 'completed',
+        address: 'Bacolod',
+      },
     });
+    expect(summary[1]).not.toHaveProperty('number');
+  });
+
+  test('writes live call entries with nested call schema', async () => {
+    (pool.query as any)
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            id: 'call-tp-1',
+            type: 'Call',
+            touchpoint_number: 1,
+            date: '2026-05-19',
+            status: null,
+            user_id: 'user-1',
+            is_legacy: false,
+            call_id: 'call-1',
+            call_type: 'regular_call',
+            call_notes: 'called',
+            call_reason: 'L2_NOT_AROUND',
+            call_source: 'IMU',
+            call_status: 'completed',
+            call_remarks: 'called',
+            call_phone_number: '9272190259',
+            call_dial_time: '2026-05-19T01:00:00+00:00',
+            call_duration: 120,
+            call_photo_url: null,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [{ touchpoint_summary: [] }] })
+      .mockResolvedValueOnce({ rows: [] });
+
+    await updateClientTouchpointSummary('client-123');
+
+    const [summaryJson, count, clientId] = updateArgs();
+    const summary = JSON.parse(summaryJson);
+
+    expect(count).toBe(1);
+    expect(clientId).toBe('client-123');
+    expect(summary[0]).toMatchObject({
+      id: 'call-tp-1',
+      visit: null,
+      type: 'Call',
+      status: 'Completed',
+      touchpoint_number: 1,
+      call: {
+        id: 'call-1',
+        reason: 'L2_NOT_AROUND',
+        status: 'completed',
+        phone_number: '9272190259',
+      },
+    });
+    expect(summary[0]).not.toHaveProperty('number');
+  });
+
+  test('handles database errors gracefully', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    (pool.query as any).mockRejectedValueOnce(new Error('Database connection failed'));
+
+    await updateClientTouchpointSummary('client-123');
+
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to update touchpoint summary'),
+      expect.any(Error)
+    );
+
+    consoleErrorSpy.mockRestore();
   });
 });
