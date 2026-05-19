@@ -8,7 +8,7 @@ describe('buildClientFilters', () => {
     } as any);
 
     expect(result.conditions).toHaveLength(1);
-    expect(result.conditions[0]).toContain('c.barangay');
+    expect(result.conditions[0]).toContain('c.normalized_barangay');
     expect(result.conditions[0]).not.toContain('c.psgc_barangay');
     expect(result.params).toEqual([['barangay 1', 'barangay 2']]);
     expect(result.nextIdx).toBe(2);

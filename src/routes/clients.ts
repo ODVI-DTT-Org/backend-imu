@@ -163,9 +163,7 @@ export function buildClientFilters(
         .filter(v => v.length > 0 && v !== 'all');
 
       if (normalizedBarangayValues.length > 0) {
-        conditions.push(`(
-          LOWER(TRIM(COALESCE(c.barangay, ''))) = ANY($${idx}::text[])
-        )`);
+        conditions.push(`c.normalized_barangay = ANY($${idx}::text[])`);
         params.push(normalizedBarangayValues);
         idx++;
       }
@@ -566,6 +564,13 @@ clients.get('/', authMiddleware, async (c) => {
       }
     }
 
+    // Determine which touchpoint-status buckets to include
+    const includeCallable = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('callable');
+    const includeWaitingForCaravan = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('waiting_for_caravan');
+    const includeCompleted = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('completed') || touchpointStatus.includes('has_progress');
+    const includeNoProgress = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('no_progress');
+    const includeLoanReleased = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('loan_released');
+
     const offset = (page - 1) * perPage;
 
     // IMPORTANT: This endpoint returns ALL clients (no area filter)
@@ -673,6 +678,30 @@ clients.get('/', authMiddleware, async (c) => {
       baseWhereConditions.push(`c.touchpoint_interest_statuses && $${baseParamIndex}::text[]`);
       baseParams.push(normalisedVisitStatus);
       baseParamIndex++;
+    }
+
+    // Apply touchpoint_status filter. Since touchpoint sequence is no longer used,
+    // treat callable/waiting_for_caravan as non-released clients.
+    if (touchpointStatus && touchpointStatus.length > 0) {
+      const tsConds: string[] = [];
+      if (includeCallable) {
+        tsConds.push(`c.loan_released = false`);
+      }
+      if (includeWaitingForCaravan) {
+        tsConds.push(`c.loan_released = false`);
+      }
+      if (includeNoProgress) {
+        tsConds.push(`(COALESCE(c.touchpoint_number, 0) = 0 AND c.loan_released = false)`);
+      }
+      if (includeCompleted) {
+        tsConds.push(`(COALESCE(c.touchpoint_number, 0) > 0 AND c.loan_released = false)`);
+      }
+      if (includeLoanReleased) {
+        tsConds.push(`c.loan_released = true`);
+      }
+      if (tsConds.length > 0) {
+        baseWhereConditions.push(`(${tsConds.join(' OR ')})`);
+      }
     }
 
     // Build WHERE clause for main query
@@ -965,6 +994,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const includeCompleted = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('completed');
     const includeLoanReleased = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('loan_released');
     const includeNoProgress = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('no_progress');
+    const includeHasProgress = !touchpointStatus || touchpointStatus.length === 0 || touchpointStatus.includes('has_progress');
 
     // ============================================
     // CACHE LAYER: Get assigned client IDs from cache
@@ -972,6 +1002,11 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // For Caravan/Tele with area filtering, try cache first
     // This avoids expensive area-based queries on every request
     let cachedClientIds: string[] | null = null;
+    let assignedPsgcFilter: {
+      psgc_ids: number[];
+      fallback_area_keys: string[];
+      last_updated: string;
+    } | null = null;
     const clientsCache = getClientsCacheService();
 
     if (shouldFilterByArea && !search && sharedConditions.length === 0) {
@@ -979,6 +1014,55 @@ clients.get('/assigned', authMiddleware, async (c) => {
       // (cache stores base assigned client IDs for the user)
       cachedClientIds = await clientsCache.getAssignedClientIds(user.sub);
       console.debug(`[AssignedClients] Cache ${cachedClientIds ? 'HIT' : 'MISS'} for user ${user.sub}`);
+    }
+
+    if (shouldFilterByArea) {
+      assignedPsgcFilter = await clientsCache.getAssignedAreaFilter(user.sub);
+
+      if (assignedPsgcFilter === null) {
+        const assignedAreaResult = await pool.query(
+          `SELECT
+             COALESCE(ARRAY_AGG(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL), ARRAY[]::int[]) AS psgc_ids,
+             COALESCE(
+               ARRAY_AGG(
+                 DISTINCT LOWER(TRIM(ul.province)) || '|' || LOWER(TRIM(ul.municipality))
+               ) FILTER (WHERE p.id IS NULL),
+               ARRAY[]::text[]
+             ) AS fallback_area_keys
+           FROM user_locations ul
+           LEFT JOIN psgc p
+             ON p.province = TRIM(ul.province)
+            AND p.mun_city = TRIM(ul.municipality)
+           WHERE ul.user_id = $1 AND ul.deleted_at IS NULL`,
+          [user.sub]
+        );
+
+        const row = assignedAreaResult.rows[0];
+        const assignedPsgcIds = (row?.psgc_ids || []).map((id: any) => Number(id));
+        const fallbackAreaKeys = (row?.fallback_area_keys || []).map((key: any) => String(key));
+        assignedPsgcFilter = {
+          psgc_ids: assignedPsgcIds,
+          fallback_area_keys: fallbackAreaKeys,
+          last_updated: new Date().toISOString(),
+        };
+        await clientsCache.setAssignedAreaFilter(
+          user.sub,
+          assignedPsgcFilter.psgc_ids,
+          assignedPsgcFilter.fallback_area_keys
+        );
+      }
+
+      const assignedPsgcIds = assignedPsgcFilter?.psgc_ids || [];
+      const assignedFallbackKeys = assignedPsgcFilter?.fallback_area_keys || [];
+      if (assignedPsgcIds.length === 0 && assignedFallbackKeys.length === 0) {
+        return c.json({
+          items: [],
+          page,
+          perPage,
+          totalItems: 0,
+          totalPages: 0,
+        });
+      }
     }
 
     // Build WHERE clause conditions — soft delete + shared filters, then search appended below
@@ -1011,7 +1095,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const teleMemberIdsQuery = c.req.queries('tele_member_ids');
     const teleMemberIds = teleMemberIdsQuery?.length ? teleMemberIdsQuery : undefined;
     if (teleMemberIds && teleMemberIds.length > 0) {
-      baseWhereConditions.push(`c.user_id = ANY($${baseParamIndex}::uuid[])`);
+      baseWhereConditions.push(`c.last_touchpoint_user_id = ANY($${baseParamIndex}::uuid[])`);
       baseParams.push(teleMemberIds);
       baseParamIndex += 1;
     }
@@ -1053,7 +1137,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       if (includeNoProgress) {
         tsConds.push(`(COALESCE(c.touchpoint_number, 0) = 0 AND c.loan_released = false)`);
       }
-      if (includeCompleted) {
+      if (includeCompleted || includeHasProgress) {
         tsConds.push(`(COALESCE(c.touchpoint_number, 0) > 0 AND c.loan_released = false)`);
       }
       if (includeLoanReleased) {
@@ -1076,6 +1160,12 @@ clients.get('/assigned', authMiddleware, async (c) => {
       baseParamIndex++;
     }
 
+    // Restrict to released-loan clients when the mobile filter sends loan_released=true.
+    const assignedLoanReleasedQuery = c.req.query('loan_released');
+    if (assignedLoanReleasedQuery === 'true' || assignedLoanReleasedQuery === '1') {
+      baseWhereConditions.push(`c.loan_released = true`);
+    }
+
     // Build WHERE clause for main query
     // Note: /clients endpoint has NO WHERE clause, but /assigned HAS WHERE c.deleted_at IS NULL
     // This will be handled differently in each endpoint
@@ -1089,30 +1179,30 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
     let areaFilterWhereClause = '';
     if (shouldFilterByArea) {
-      // For Caravan/Tele: Filter by assigned provinces/municipalities
-      // APPROACH: Use PSGC table for canonical matching (most accurate)
-      // This handles variations like "Cotabato" vs "Cotabato City" vs "City of Cotabato"
-      // IMPORTANT: Only return clients with PSGC assigned (psgc_id IS NOT NULL)
-      areaFilterWhereClause = `AND (
-        EXISTS (
-          SELECT 1
-          FROM user_areas ua
-          JOIN psgc psgc_ref ON psgc_ref.province = ua.province AND psgc_ref.mun_city = ua.municipality
-          WHERE c.psgc_id = psgc_ref.id
-        )
-        AND c.psgc_id IS NOT NULL
-      )`;
-    }
+      const assignedPsgcIds = assignedPsgcFilter?.psgc_ids || [];
+      const assignedFallbackKeys = assignedPsgcFilter?.fallback_area_keys || [];
 
-    // OPTIMIZED: Use denormalized touchpoint columns directly from clients table
-    // Build WITH clause only for user_areas if needed - no touchpoint_info CTE needed
-    let withGroupScoreCTE = '';
-    if (shouldFilterByArea) {
-      withGroupScoreCTE = `WITH user_areas AS (
-        SELECT province, municipality
-        FROM user_locations
-        WHERE user_id = '${user.sub}' AND deleted_at IS NULL
-      )`;
+      const areaFilterConditions: string[] = [];
+
+      if (assignedPsgcIds.length > 0) {
+        const psgcParamIndex = baseParamIndex;
+        baseParams.push(assignedPsgcIds);
+        areaFilterConditions.push(`c.psgc_id = ANY($${psgcParamIndex}::int[])`);
+        baseParamIndex += 1;
+      }
+
+      if (assignedFallbackKeys.length > 0) {
+        const fallbackParamIndex = baseParamIndex;
+        baseParams.push(assignedFallbackKeys);
+        areaFilterConditions.push(
+          `(LOWER(TRIM(COALESCE(c.province, ''))) || '|' || LOWER(TRIM(COALESCE(c.municipality, '')))) = ANY($${fallbackParamIndex}::text[])`
+        );
+        baseParamIndex += 1;
+      }
+
+      if (areaFilterConditions.length > 0) {
+        areaFilterWhereClause = `AND (${areaFilterConditions.join(' OR ')})`;
+      }
     }
 
     // OPTIMIZATION: Using denormalized columns from clients table
@@ -1120,7 +1210,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
     // Get total count
     const countQuery = `
-      ${withGroupScoreCTE}
       SELECT COUNT(*) as count
       FROM clients c
       WHERE ${baseWhereConditionsJoined}
@@ -1138,7 +1227,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
       c.last_touchpoint_date DESC NULLS LAST`;
 
     const idQuery = `
-      ${withGroupScoreCTE}
       SELECT c.id${searchStrategy}
       FROM clients c
       LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${baseParamIndex + 2}::uuid
@@ -1227,17 +1315,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
     if (shouldFilterByArea && !cachedClientIds && !search && sharedConditions.length === 0) {
       // Extract client IDs from the result
       if (orderedIds.length > 0) {
-        // Get user's assigned areas for caching
-        const areasQuery = `
-          SELECT DISTINCT province, municipality
-          FROM user_locations
-          WHERE user_id = $1 AND deleted_at IS NULL
-        `;
-        const areasResult = await pool.query(areasQuery, [user.sub]);
-        const areas = areasResult.rows.map(row => `${row.province}:${row.municipality}`);
-
         // Populate cache
-        await clientsCache.setAssignedClientIds(user.sub, orderedIds, areas);
+        await clientsCache.setAssignedClientIds(user.sub, orderedIds);
         console.debug(`[AssignedClients] Cached ${orderedIds.length} client IDs for user ${user.sub}`);
       }
     }
