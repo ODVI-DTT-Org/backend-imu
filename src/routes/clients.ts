@@ -787,9 +787,52 @@ clients.get('/', authMiddleware, async (c) => {
     if (orderedIds.length === 0) {
       result = { rows: [] };
     } else {
-      // Phase 2: hydrate. WHERE c.id = ANY(ids) is an index-friendly lookup;
-      // array_position($ids, c.id) preserves the ORDER BY from Phase 1.
+      // Phase 2: hydrate. Keep Phase-1 ordering by joining on a derived
+      // ordered id set (UNNEST + ordinality), and fetch addresses/phones
+      // in set-based subqueries to avoid per-row lateral scans.
       const hydrateQuery = `
+        WITH ordered_client_ids AS (
+          SELECT client_id, ord
+          FROM unnest($1::uuid[]) WITH ORDINALITY AS t(client_id, ord)
+        ),
+        aggregated_addresses AS (
+          SELECT
+            a.client_id,
+            json_agg(json_build_object(
+              'id', a.id,
+              'client_id', a.client_id,
+              'type', a.type,
+              'street', a.street,
+              'barangay', a.barangay,
+              'city', a.city,
+              'province', a.province,
+              'postal_code', a.postal_code,
+              'latitude', a.latitude,
+              'longitude', a.longitude,
+              'is_primary', a.is_primary,
+              'created_at', a.created_at,
+              'updated_at', a.updated_at
+            )) as addresses_json
+          FROM addresses a
+          WHERE a.client_id = ANY($1::uuid[])
+          GROUP BY a.client_id
+        ),
+        aggregated_phones AS (
+          SELECT
+            p.client_id,
+            json_agg(json_build_object(
+              'id', p.id,
+              'client_id', p.client_id,
+              'label', p.label,
+              'number', p.number,
+              'is_primary', p.is_primary,
+              'created_at', p.created_at,
+              'updated_at', p.updated_at
+            )) as phones_json
+          FROM phone_numbers p
+          WHERE p.client_id = ANY($1::uuid[])
+          GROUP BY p.client_id
+        )
         SELECT ${CLIENT_LIST_SELECT_COLUMNS},
           c.region as psgc_region,
           c.province as psgc_province,
@@ -807,43 +850,13 @@ clients.get('/', authMiddleware, async (c) => {
           lt.first_name as last_touchpoint_first_name,
           lt.last_name as last_touchpoint_last_name,
           cf.id IS NOT NULL as is_favorited
-        FROM clients c
-        LEFT JOIN LATERAL (
-          SELECT json_agg(json_build_object(
-            'id', a.id,
-            'client_id', a.client_id,
-            'type', a.type,
-            'street', a.street,
-            'barangay', a.barangay,
-            'city', a.city,
-            'province', a.province,
-            'postal_code', a.postal_code,
-            'latitude', a.latitude,
-            'longitude', a.longitude,
-            'is_primary', a.is_primary,
-            'created_at', a.created_at,
-            'updated_at', a.updated_at
-          )) as addresses_json
-          FROM addresses a
-          WHERE a.client_id = c.id
-        ) addr ON true
-        LEFT JOIN LATERAL (
-          SELECT json_agg(json_build_object(
-            'id', p.id,
-            'client_id', p.client_id,
-            'label', p.label,
-            'number', p.number,
-            'is_primary', p.is_primary,
-            'created_at', p.created_at,
-            'updated_at', p.updated_at
-          )) as phones_json
-          FROM phone_numbers p
-          WHERE p.client_id = c.id
-        ) phones ON true
+        FROM ordered_client_ids oi
+        INNER JOIN clients c ON c.id = oi.client_id
+        LEFT JOIN aggregated_addresses addr ON addr.client_id = c.id
+        LEFT JOIN aggregated_phones phones ON phones.client_id = c.id
         LEFT JOIN users lt ON lt.id = c.last_touchpoint_user_id
         LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $2::uuid
-        WHERE c.id = ANY($1::uuid[])
-        ORDER BY array_position($1::uuid[], c.id)
+        ORDER BY oi.ord
       `;
       result = await pool.query(hydrateQuery, [orderedIds, user.sub]);
     }

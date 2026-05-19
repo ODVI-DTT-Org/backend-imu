@@ -73,6 +73,12 @@ export interface AssignedClientsData {
   last_updated: string;
 }
 
+export interface AssignedPsgcIdsData {
+  psgc_ids: number[];
+  fallback_area_keys: string[];
+  last_updated: string;
+}
+
 /**
  * Clients Cache Service
  *
@@ -165,6 +171,87 @@ export class ClientsCacheService {
     } catch (error) {
       console.error(`[ClientsCache] Set assigned areas error for user ${safeUserId}:`, error);
     }
+  }
+
+  /**
+   * Get assigned PSGC IDs for a user from cache
+   * @param userId - User ID
+   * @returns Assigned PSGC IDs or null if not cached
+   */
+  async getAssignedAreaFilter(userId: string): Promise<AssignedPsgcIdsData | null> {
+    const safeUserId = validateCacheKey(userId);
+    const key = `${CACHE_PREFIX}user:assigned_psgc_ids:${safeUserId}`;
+    try {
+      const data = await this.cache.get<AssignedPsgcIdsData>(key);
+      if (!data) {
+        return null;
+      }
+
+      return {
+        psgc_ids: Array.isArray(data.psgc_ids)
+          ? data.psgc_ids
+              .filter((id) => Number.isInteger(id))
+              .map((id) => Number(id))
+          : [],
+        fallback_area_keys: Array.isArray((data as any).fallback_area_keys)
+          ? ((data as any).fallback_area_keys as string[]).filter((key) => typeof key === 'string')
+          : [],
+        last_updated: data.last_updated,
+      };
+    } catch (error) {
+      console.error(`[ClientsCache] Get assigned PSGC IDs error for user ${safeUserId}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Set assigned PSGC IDs and fallback text keys for a user in cache.
+   * Fallback keys are used when users are assigned areas that cannot be mapped to PSGC IDs.
+   * @param userId - User ID
+   * @param psgcIds - Array of PSGC IDs
+   * @param fallbackAreaKeys - Normalized province|municipality keys for fallback matching
+   */
+  async setAssignedAreaFilter(userId: string, psgcIds: number[], fallbackAreaKeys: string[]): Promise<void> {
+    const safeUserId = validateCacheKey(userId);
+    const key = `${CACHE_PREFIX}user:assigned_psgc_ids:${safeUserId}`;
+    const uniqueIds = Array.from(
+      new Set((psgcIds || []).filter((id) => Number.isInteger(id))
+    ));
+    const uniqueFallbackKeys = Array.from(new Set((fallbackAreaKeys || []).filter((key) => typeof key === 'string' && key.trim().length > 0)));
+    const data: AssignedPsgcIdsData = {
+      psgc_ids: uniqueIds,
+      fallback_area_keys: uniqueFallbackKeys,
+      last_updated: new Date().toISOString(),
+    };
+
+    try {
+      await this.cache.set(key, data, CACHE_TTL.ASSIGNED_AREAS);
+      console.debug(`[ClientsCache] Cached ${uniqueIds.length} PSGC IDs and ${uniqueFallbackKeys.length} fallback area keys for user ${safeUserId}`);
+    } catch (error) {
+      console.error(`[ClientsCache] Set assigned PSGC IDs error for user ${safeUserId}:`, error);
+    }
+  }
+
+  /**
+   * Get assigned PSGC IDs only for backwards compatibility.
+   * @param userId - User ID
+   * @returns Assigned PSGC IDs or null if not cached
+   */
+  async getAssignedPsgcIds(userId: string): Promise<number[] | null> {
+    const data = await this.getAssignedAreaFilter(userId);
+    if (!data) {
+      return null;
+    }
+    return data.psgc_ids;
+  }
+
+  /**
+   * Set assigned PSGC IDs for a user in cache
+   * @param userId - User ID
+   * @param psgcIds - Array of PSGC IDs
+   */
+  async setAssignedPsgcIds(userId: string, psgcIds: number[]): Promise<void> {
+    await this.setAssignedAreaFilter(userId, psgcIds, []);
   }
 
   /**
@@ -265,6 +352,7 @@ export class ClientsCacheService {
     const patterns = [
       `${CACHE_PREFIX}user:assigned_ids:${safeUserId}`,
       `${CACHE_PREFIX}user:assigned_areas:${safeUserId}`,
+      `${CACHE_PREFIX}user:assigned_psgc_ids:${safeUserId}`,
     ];
 
     try {

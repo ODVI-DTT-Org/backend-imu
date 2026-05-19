@@ -11,6 +11,7 @@ import {
   AuthenticationError,
   ConflictError,
 } from '../errors/index.js';
+import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 
 const caravans = new Hono();
 
@@ -36,6 +37,12 @@ const updateCaravanSchema = z.object({
 const bulkDeleteSchema = z.object({
   ids: z.array(z.string().uuid()).min(1).max(100)
 });
+
+const invalidateAreaAssignmentCache = (userId: string) => {
+  getClientCacheInvalidation().onAreaAssignmentChanged(userId).catch((error) => {
+    console.error('[Caravans] Failed to invalidate area assignment cache:', error);
+  });
+};
 
 // Helper to map DB row to Caravan type
 // Note: Caravans are stored in the users table with role = 'caravan' (renamed from 'field_agent' in migration 008)
@@ -540,6 +547,8 @@ caravans.post('/:id/municipalities/bulk/create', authMiddleware, requirePermissi
       }, 400); // 400 Bad Request since nothing was actually changed
     }
 
+    invalidateAreaAssignmentCache(userId!);
+
     return c.json({
       message: 'Municipalities assigned successfully',
       assigned_count: assigned,
@@ -695,6 +704,8 @@ caravans.post('/:id/municipalities/bulk/update', authMiddleware, requirePermissi
       }, 400);
     }
 
+    invalidateAreaAssignmentCache(userId!);
+
     return c.json({
       message: 'Municipalities updated successfully',
       updated_count: updated,
@@ -761,6 +772,10 @@ caravans.post('/:id/municipalities/bulk/delete', authMiddleware, requirePermissi
       deleted_count: result.rows.length
     });
 
+    if (result.rows.length > 0) {
+      invalidateAreaAssignmentCache(userId!);
+    }
+
     return c.json({
       message: `Bulk unassigned ${result.rows.length} locations`,
       deleted_count: result.rows.length,
@@ -824,6 +839,8 @@ caravans.delete('/:id/municipalities/:province/:municipality', authMiddleware, r
       'UPDATE user_locations SET deleted_at = NOW() WHERE id = $1',
       [record.id]
     );
+
+    invalidateAreaAssignmentCache(userId!);
 
     return c.json({ message: 'Municipality unassigned successfully' });
   } catch (error) {

@@ -16,6 +16,7 @@ import {
   DatabaseError,
 } from '../errors/index.js';
 import { clearPermissionCache } from '../middleware/permissions.js';
+import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 
 const { hash, compare } = bcrypt;
 
@@ -29,6 +30,12 @@ const TELE_ROLES = ['tele'] as const;
 
 // Password complexity regex: min 8 chars, 1 uppercase, 1 lowercase, 1 number
 const passwordComplexityRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
+
+const invalidateAreaAssignmentCache = (userId: string) => {
+  getClientCacheInvalidation().onAreaAssignmentChanged(userId).catch((error) => {
+    console.error('[Users] Failed to invalidate area assignment cache:', error);
+  });
+};
 
 // Validation schemas
 const createUserSchema = z.object({
@@ -804,6 +811,8 @@ users.post('/:id/municipalities', authMiddleware, requireAnyRole(...MANAGER_ROLE
       throw new ValidationError('No new municipalities were assigned. All selected municipalities are already assigned to this user.');
     }
 
+    invalidateAreaAssignmentCache(userId!);
+
     return c.json({
       message: `Municipalities assigned successfully to user`,
       assigned_count: assignedCount,
@@ -945,6 +954,10 @@ users.post('/:id/municipalities/bulk/create', authMiddleware, requirePermission(
       }
     }
 
+    if (createdCount > 0) {
+      invalidateAreaAssignmentCache(userId!);
+    }
+
     return c.json({
       message: `Bulk created ${createdCount} municipality assignments`,
       created_count: createdCount,
@@ -1041,6 +1054,10 @@ users.post('/:id/municipalities/bulk/update', authMiddleware, requirePermission(
       }
     }
 
+    if (updatedCount > 0) {
+      invalidateAreaAssignmentCache(userId!);
+    }
+
     return c.json({
       message: `Bulk updated ${updatedCount} municipality assignments`,
       updated_count: updatedCount,
@@ -1135,6 +1152,10 @@ users.post('/:id/municipalities/bulk/delete', authMiddleware, requirePermission(
       [userId]
     );
 
+    if ((result.rowCount || 0) > 0) {
+      invalidateAreaAssignmentCache(userId!);
+    }
+
     return c.json({
       message: `Bulk deleted ${result.rowCount || 0} municipality assignments`,
       deleted_count: result.rowCount || 0,
@@ -1203,6 +1224,10 @@ users.post('/:id/municipalities/bulk', authMiddleware, requireAnyRole(...MANAGER
         [userId, province, municipality]
       );
       deletedCount += result.rowCount || 0;
+    }
+
+    if (deletedCount > 0) {
+      invalidateAreaAssignmentCache(userId!);
     }
 
     return c.json({
@@ -1275,6 +1300,8 @@ users.delete('/:id/locations/:province/:municipality', authMiddleware, requireAn
         [record.id]
       );
     }
+
+    invalidateAreaAssignmentCache(userId!);
 
     return c.json({ message: 'Location unassigned successfully' });
   } catch (error: any) {

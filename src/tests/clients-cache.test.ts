@@ -146,6 +146,56 @@ describe('ClientsCacheService', () => {
     });
   });
 
+  describe('getAssignedPsgcIds', () => {
+    it('should return null when cache is empty', async () => {
+      mockCacheService.get.mockResolvedValue(null);
+
+      const service = getClientsCacheService();
+
+      const result = await service.getAssignedPsgcIds('user-123');
+
+      expect(result).toBeNull();
+      expect(mockCacheService.get).toHaveBeenCalledWith('v1:clients:user:assigned_psgc_ids:user-123');
+    });
+
+    it('should return PSGC IDs from cache', async () => {
+      const cachedData = {
+        psgc_ids: [101, 202, 303],
+        last_updated: new Date().toISOString(),
+      };
+
+      mockCacheService.get.mockResolvedValue(cachedData);
+
+      const service = getClientsCacheService();
+
+      const result = await service.getAssignedPsgcIds('user-123');
+
+      expect(result).toEqual([101, 202, 303]);
+    });
+  });
+
+  describe('setAssignedPsgcIds', () => {
+    it('should store unique PSGC IDs in cache with correct TTL', async () => {
+      mockCacheService.set.mockResolvedValue(true);
+
+      const service = getClientsCacheService();
+
+      await service.setAssignedPsgcIds('user-123', [101, 202, 202, 303]);
+
+      const expectedData = {
+        psgc_ids: [101, 202, 303],
+        fallback_area_keys: [],
+        last_updated: expect.any(String),
+      };
+
+      expect(mockCacheService.set).toHaveBeenCalledWith(
+        'v1:clients:user:assigned_psgc_ids:user-123',
+        expectedData,
+        3600 // 1 hour TTL
+      );
+    });
+  });
+
   describe('getTouchpointSummary', () => {
     it('should return null when cache miss', async () => {
       mockCacheService.get.mockResolvedValue(null);
