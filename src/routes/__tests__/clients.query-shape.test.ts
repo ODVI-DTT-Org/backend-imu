@@ -12,4 +12,20 @@ describe('clients route query shape', () => {
     expect(allClientsHydrate).not.toContain('SELECT c.*,');
     expect(assignedClientsQuery).not.toContain('SELECT c.*,');
   });
+
+  it('hydrates assigned clients only after selecting the ordered page ids', () => {
+    const assignedRoute = source.match(/clients\.get\('\/assigned'[\s\S]*?\/\/ GET \/api\/clients\/:id/)?.[0] ?? '';
+
+    expect(assignedRoute).toContain('const idQuery = `');
+    expect(assignedRoute).toContain('const hydrateQuery = `');
+    expect(assignedRoute).toContain('WHERE c.id = ANY($1::uuid[])');
+    expect(assignedRoute).toContain('ORDER BY array_position($1::uuid[], c.id)');
+  });
+
+  it('does not scan touchpoint_summary JSON for visit_status filters', () => {
+    const listRoutes = source.match(/clients\.get\('\/'[\s\S]*?\/\/ GET \/api\/clients\/:id/)?.[0] ?? '';
+
+    expect(listRoutes).not.toContain('jsonb_array_elements(c.touchpoint_summary)');
+    expect(listRoutes).toContain('c.touchpoint_interest_statuses &&');
+  });
 });

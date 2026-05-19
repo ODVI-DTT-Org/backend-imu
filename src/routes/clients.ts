@@ -51,6 +51,31 @@ interface ClientFilterResult {
   nextIdx: number;
 }
 
+function normalizeTouchpointFilterValues(values: string[]): string[] {
+  return values
+    .flatMap(v => String(v).split(','))
+    .map(v => v.trim().toLowerCase().replace(/_/g, ' '))
+    .filter(v => v.length > 0 && v !== 'all');
+}
+
+function buildDateRangeValues(from?: string, to?: string): string[] | null {
+  if (!from || !to) return null;
+
+  const start = new Date(`${from}T00:00:00.000Z`);
+  const end = new Date(`${to}T00:00:00.000Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return null;
+  }
+
+  const dates: string[] = [];
+  const cursor = new Date(start);
+  while (cursor <= end) {
+    dates.push(cursor.toISOString().slice(0, 10));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return dates;
+}
+
 export function buildClientFilters(
   q: {
     client_type?: string | string[];
@@ -167,35 +192,35 @@ export function buildClientFilters(
     const values = Array.isArray(q.touchpoint_reason_codes)
       ? q.touchpoint_reason_codes
       : (q.touchpoint_reason_codes as string).split(',').map(v => v.trim());
-    if (values.length > 0) {
-      // Store for later use in touchpoint subquery
-      conditions.push(`EXISTS (
-        SELECT 1 FROM touchpoints t
-        WHERE t.client_id = c.id
-        AND t.reason_code = ANY($${idx}::text[])
-      )`);
-      params.push(values);
+    const normalizedValues = normalizeTouchpointFilterValues(values);
+    if (normalizedValues.length > 0) {
+      conditions.push(`c.touchpoint_reason_values && $${idx}::text[]`);
+      params.push(normalizedValues);
       idx++;
     }
   }
 
   // NEW: Touchpoint date range filters
-  if (q.touchpoint_date_from) {
-    conditions.push(`EXISTS (
-      SELECT 1 FROM touchpoints t
-      WHERE t.client_id = c.id
-      AND t.date >= $${idx}::date
-    )`);
+  if (q.touchpoint_date_from && q.touchpoint_date_to) {
+    const dateValues = buildDateRangeValues(q.touchpoint_date_from, q.touchpoint_date_to);
+    if (dateValues && dateValues.length > 0 && dateValues.length <= 366) {
+      conditions.push(`c.touchpoint_dates && $${idx}::date[]`);
+      params.push(dateValues);
+      idx++;
+    } else {
+      conditions.push(`(
+        c.first_touchpoint_date <= $${idx + 1}::date
+        AND c.last_touchpoint_date::date >= $${idx}::date
+      )`);
+      params.push(q.touchpoint_date_from, q.touchpoint_date_to);
+      idx += 2;
+    }
+  } else if (q.touchpoint_date_from) {
+    conditions.push(`c.last_touchpoint_date::date >= $${idx}::date`);
     params.push(q.touchpoint_date_from);
     idx++;
-  }
-
-  if (q.touchpoint_date_to) {
-    conditions.push(`EXISTS (
-      SELECT 1 FROM touchpoints t
-      WHERE t.client_id = c.id
-      AND t.date <= $${idx}::date
-    )`);
+  } else if (q.touchpoint_date_to) {
+    conditions.push(`c.first_touchpoint_date <= $${idx}::date`);
     params.push(q.touchpoint_date_to);
     idx++;
   }
@@ -636,41 +661,16 @@ clients.get('/', authMiddleware, async (c) => {
     }
 
     // visit_status: per-touchpoint interest level (INTERESTED, NOT_INTERESTED,
-    // UNDECIDED, etc.). Two data sources must both be checked:
-    //   1. clients.touchpoint_summary JSONB — legacy/imported records store the
-    //      interest level in elem->'visit'->>'reason' (title-case with spaces,
-    //      e.g. "Not Interested"). No touchpoints rows exist for these clients.
-    //   2. touchpoints.status — new app-recorded touchpoints will store the
-    //      interest level here (e.g. "NOT_INTERESTED").
-    // Both sides are normalised (LOWER + replace underscores with spaces) so
-    // "NOT_INTERESTED", "Not Interested", and "NOT INTERESTED" all match.
-    // EXISTS on both legs prevents client-level duplicates without a DISTINCT.
+    // UNDECIDED, etc.). This uses materialized arrays maintained from
+    // clients.touchpoint_summary so the list query does not expand JSON for
+    // every client row.
     const visitStatusQuery = c.req.queries('visit_status');
     const visitStatusValues = visitStatusQuery?.length
       ? visitStatusQuery.flatMap(v => v.split(',')).map(s => s.trim()).filter(Boolean)
       : [];
     if (visitStatusValues.length > 0) {
-      // Normalise filter values: lowercase + underscores → spaces
-      const normalisedVisitStatus = visitStatusValues.map(s => s.toLowerCase().replace(/_/g, ' '));
-      baseWhereConditions.push(
-        `(
-          EXISTS (
-            SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
-            WHERE LOWER(REPLACE(
-              COALESCE(elem->'visit'->>'reason', elem->'call'->>'reason', ''),
-              '_', ' '
-            )) = ANY($${baseParamIndex}::text[])
-          )
-          OR EXISTS (
-            SELECT 1 FROM touchpoints tp
-            LEFT JOIN visits v  ON v.id  = tp.visit_id
-            LEFT JOIN calls  ca ON ca.id = tp.call_id
-            WHERE tp.client_id = c.id
-            AND LOWER(REPLACE(COALESCE(v.status, ca.status, tp.status, ''), '_', ' '))
-              = ANY($${baseParamIndex}::text[])
-          )
-        )`
-      );
+      const normalisedVisitStatus = normalizeTouchpointFilterValues(visitStatusValues);
+      baseWhereConditions.push(`c.touchpoint_interest_statuses && $${baseParamIndex}::text[]`);
       baseParams.push(normalisedVisitStatus);
       baseParamIndex++;
     }
@@ -768,13 +768,13 @@ clients.get('/', authMiddleware, async (c) => {
           c.barangay as psgc_barangay,
           COALESCE(addr.addresses_json, '[]') as addresses,
           COALESCE(phones.phones_json, '[]') as phone_numbers,
-          COALESCE(jsonb_array_length(c.touchpoint_summary), 0) as completed_touchpoints,
+          COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
           CASE WHEN c.loan_released THEN NULL
-            ELSE COALESCE(jsonb_array_length(c.touchpoint_summary), 0) + 1
+            ELSE COALESCE(c.touchpoint_number, 0) + 1
           END as next_touchpoint_number,
           c.next_touchpoint as next_touchpoint_type,
-          (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
-          (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
+          c.last_touchpoint_type as last_touchpoint_type,
+          c.last_touchpoint_user_id as last_touchpoint_user_id,
           lt.first_name as last_touchpoint_first_name,
           lt.last_name as last_touchpoint_last_name,
           cf.id IS NOT NULL as is_favorited
@@ -811,7 +811,7 @@ clients.get('/', authMiddleware, async (c) => {
           FROM phone_numbers p
           WHERE p.client_id = c.id
         ) phones ON true
-        LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
+        LEFT JOIN users lt ON lt.id = c.last_touchpoint_user_id
         LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $2::uuid
         WHERE c.id = ANY($1::uuid[])
         ORDER BY array_position($1::uuid[], c.id)
@@ -1064,34 +1064,14 @@ clients.get('/assigned', authMiddleware, async (c) => {
       }
     }
 
-    // visit_status: per-touchpoint interest level. Same dual-source logic as
-    // /api/clients above — checks both touchpoint_summary JSONB (legacy) and
-    // touchpoints.status (new records) with normalised case comparison.
+    // visit_status: per-touchpoint interest level from materialized client arrays.
     const visitStatusQueryAssigned = c.req.queries('visit_status');
     const visitStatusValuesAssigned = visitStatusQueryAssigned?.length
       ? visitStatusQueryAssigned.flatMap(v => v.split(',')).map(s => s.trim()).filter(Boolean)
       : [];
     if (visitStatusValuesAssigned.length > 0) {
-      const normalisedVisitStatusAssigned = visitStatusValuesAssigned.map(s => s.toLowerCase().replace(/_/g, ' '));
-      baseWhereConditions.push(
-        `(
-          EXISTS (
-            SELECT 1 FROM jsonb_array_elements(c.touchpoint_summary) elem
-            WHERE LOWER(REPLACE(
-              COALESCE(elem->'visit'->>'reason', elem->'call'->>'reason', ''),
-              '_', ' '
-            )) = ANY($${baseParamIndex}::text[])
-          )
-          OR EXISTS (
-            SELECT 1 FROM touchpoints tp
-            LEFT JOIN visits v  ON v.id  = tp.visit_id
-            LEFT JOIN calls  ca ON ca.id = tp.call_id
-            WHERE tp.client_id = c.id
-            AND LOWER(REPLACE(COALESCE(v.status, ca.status, tp.status, ''), '_', ' '))
-              = ANY($${baseParamIndex}::text[])
-          )
-        )`
-      );
+      const normalisedVisitStatusAssigned = normalizeTouchpointFilterValues(visitStatusValuesAssigned);
+      baseWhereConditions.push(`c.touchpoint_interest_statuses && $${baseParamIndex}::text[]`);
       baseParams.push(normalisedVisitStatusAssigned);
       baseParamIndex++;
     }
@@ -1143,21 +1123,39 @@ clients.get('/assigned', authMiddleware, async (c) => {
       ${withGroupScoreCTE}
       SELECT COUNT(*) as count
       FROM clients c
-      WHERE c.deleted_at IS NULL
-      ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
+      WHERE ${baseWhereConditionsJoined}
       ${areaFilterWhereClause ? areaFilterWhereClause : ''}
     `;
 
     const countResult = await pool.query(countQuery, baseParams);
     const totalItems = parseInt(countResult.rows[0].count);
 
-    // Get paginated results - direct query on clients table (no CTEs needed)
-    // IMPORTANT: Query uses direct column access for optimal performance
-    // Add similarity score or word match count to SELECT when search is active
-    const similaritySelect = searchStrategy || '';
+    const assignedOrderByClause = `
+      ${searchOrderBy && searchOrderBy.trim().length > 0 ? `${searchOrderBy},` : ''}
+      (cf.client_id IS NOT NULL) DESC,
+      CASE WHEN c.loan_released THEN 2 ELSE 1 END ASC,
+      COALESCE(c.touchpoint_number, 0) DESC,
+      c.last_touchpoint_date DESC NULLS LAST`;
 
-    const mainQuery = `
+    const idQuery = `
       ${withGroupScoreCTE}
+      SELECT c.id${searchStrategy}
+      FROM clients c
+      LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${baseParamIndex + 2}::uuid
+      WHERE ${baseWhereConditionsJoined}
+      ${areaFilterWhereClause ? areaFilterWhereClause : ''}
+      ORDER BY ${assignedOrderByClause}
+      LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
+    `;
+
+    const idResult = await pool.query(idQuery, [...baseParams, perPage, offset, user.sub]);
+    const orderedIds: string[] = idResult.rows.map(row => row.id);
+
+    let result: { rows: any[] };
+    if (orderedIds.length === 0) {
+      result = { rows: [] };
+    } else {
+      const hydrateQuery = `
       SELECT ${CLIENT_LIST_SELECT_COLUMNS},
         c.region as psgc_region,
         c.province as psgc_province,
@@ -1169,17 +1167,14 @@ clients.get('/assigned', authMiddleware, async (c) => {
         COALESCE(
           phones.phones_json, '[]'
         ) as phone_numbers,
-        -- Use actual summary array length (authoritative; touchpoint_number may be stale)
-        COALESCE(jsonb_array_length(c.touchpoint_summary), 0) as completed_touchpoints,
-        -- next_touchpoint_number is always summary_length+1; null only when loan released
+        COALESCE(c.touchpoint_number, 0) as completed_touchpoints,
         CASE WHEN c.loan_released THEN NULL
-          ELSE COALESCE(jsonb_array_length(c.touchpoint_summary), 0) + 1
+          ELSE COALESCE(c.touchpoint_number, 0) + 1
         END as next_touchpoint_number,
         c.next_touchpoint as next_touchpoint_type,
-        (c.touchpoint_summary->-1->>'type') as last_touchpoint_type,
-        (c.touchpoint_summary->-1->>'user_id')::uuid as last_touchpoint_user_id,
-        -- group_score: active clients first, loan-released last
-        CASE WHEN c.loan_released THEN 2 ELSE 1 END as group_score${similaritySelect},
+        c.last_touchpoint_type as last_touchpoint_type,
+        c.last_touchpoint_user_id as last_touchpoint_user_id,
+        CASE WHEN c.loan_released THEN 2 ELSE 1 END as group_score,
         lt.first_name as last_touchpoint_first_name,
         lt.last_name as last_touchpoint_last_name,
         cf.id IS NOT NULL as is_favorited
@@ -1216,20 +1211,13 @@ clients.get('/assigned', authMiddleware, async (c) => {
         FROM phone_numbers p
         WHERE p.client_id = c.id
       ) phones ON true
-      LEFT JOIN users lt ON lt.id = (c.touchpoint_summary->-1->>'user_id')::uuid
-      LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${baseParamIndex + 2}::uuid
-      WHERE c.deleted_at IS NULL
-      ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}
-      ${areaFilterWhereClause ? areaFilterWhereClause : ''}
-      ${searchOrderBy && searchOrderBy.trim().length > 0 ? `ORDER BY ${searchOrderBy},` : `ORDER BY`}
-        (cf.client_id IS NOT NULL) DESC,
-        CASE WHEN c.loan_released THEN 2 ELSE 1 END ASC,
-        COALESCE(c.touchpoint_number, 0) DESC,
-        c.last_touchpoint_date DESC NULLS LAST
-      LIMIT $${baseParamIndex} OFFSET $${baseParamIndex + 1}
-    `;
-
-    const result = await pool.query(mainQuery, [...baseParams, perPage, offset, user.sub]);
+      LEFT JOIN users lt ON lt.id = c.last_touchpoint_user_id
+      LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $2::uuid
+      WHERE c.id = ANY($1::uuid[])
+      ORDER BY array_position($1::uuid[], c.id)
+      `;
+      result = await pool.query(hydrateQuery, [orderedIds, user.sub]);
+    }
 
     // ============================================
     // CACHE POPULATION: Populate cache on miss
@@ -1238,8 +1226,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // Only cache when no additional filters were present (base assigned clients)
     if (shouldFilterByArea && !cachedClientIds && !search && sharedConditions.length === 0) {
       // Extract client IDs from the result
-      const clientIds = result.rows.map(row => row.id);
-      if (clientIds.length > 0) {
+      if (orderedIds.length > 0) {
         // Get user's assigned areas for caching
         const areasQuery = `
           SELECT DISTINCT province, municipality
@@ -1250,8 +1237,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
         const areas = areasResult.rows.map(row => `${row.province}:${row.municipality}`);
 
         // Populate cache
-        await clientsCache.setAssignedClientIds(user.sub, clientIds, areas);
-        console.debug(`[AssignedClients] Cached ${clientIds.length} client IDs for user ${user.sub}`);
+        await clientsCache.setAssignedClientIds(user.sub, orderedIds, areas);
+        console.debug(`[AssignedClients] Cached ${orderedIds.length} client IDs for user ${user.sub}`);
       }
     }
 

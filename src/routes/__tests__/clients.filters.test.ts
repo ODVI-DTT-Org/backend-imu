@@ -35,4 +35,41 @@ describe('buildClientFilters', () => {
     expect(result.params).toEqual(['bacolod']);
     expect(result.nextIdx).toBe(2);
   });
+
+  it('uses materialized touchpoint filter columns instead of per-row touchpoint subqueries', () => {
+    const result = buildClientFilters({
+      touchpoint_reason_codes: ['Loan Inquiry', 'Undecided'],
+      touchpoint_date_from: '2026-05-01',
+      touchpoint_date_to: '2026-05-19',
+    } as any);
+
+    expect(result.conditions.join('\n')).toContain('c.touchpoint_reason_values');
+    expect(result.conditions.join('\n')).toContain('c.touchpoint_dates');
+    expect(result.conditions.join('\n')).not.toContain('FROM touchpoints');
+    expect(result.params).toEqual([
+      ['loan inquiry', 'undecided'],
+      [
+        '2026-05-01',
+        '2026-05-02',
+        '2026-05-03',
+        '2026-05-04',
+        '2026-05-05',
+        '2026-05-06',
+        '2026-05-07',
+        '2026-05-08',
+        '2026-05-09',
+        '2026-05-10',
+        '2026-05-11',
+        '2026-05-12',
+        '2026-05-13',
+        '2026-05-14',
+        '2026-05-15',
+        '2026-05-16',
+        '2026-05-17',
+        '2026-05-18',
+        '2026-05-19',
+      ],
+    ]);
+    expect(result.nextIdx).toBe(3);
+  });
 });
