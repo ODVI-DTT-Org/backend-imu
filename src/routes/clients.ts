@@ -140,7 +140,6 @@ export function buildClientFilters(
       if (normalizedBarangayValues.length > 0) {
         conditions.push(`(
           LOWER(TRIM(COALESCE(c.barangay, ''))) = ANY($${idx}::text[])
-          OR LOWER(TRIM(COALESCE(c.psgc_barangay, ''))) = ANY($${idx}::text[])
         )`);
         params.push(normalizedBarangayValues);
         idx++;
@@ -490,15 +489,24 @@ clients.get('/', authMiddleware, async (c) => {
     // IMPORTANT: This endpoint returns ALL clients (no area filter)
     // Use /api/clients/assigned for area-filtered clients
 
-    // 4-tier ORDER BY: favorites → role-based callable → loan released → default
+    // 4-tier ORDER BY: role-based callable → loan released → default.
+    // Favorite-first sorting is opt-in because it prevents Postgres from using
+    // idx_clients_default_sort for the hot no-filter list path.
     let orderByClause: string;
-    // All roles: favorites first, then by last touchpoint date
     orderByClause = `
-      (cf.client_id IS NOT NULL) DESC,
       c.loan_released DESC,
       c.last_touchpoint_date DESC NULLS LAST,
       COALESCE(c.touchpoint_number, 0) DESC,
       c.created_at DESC`;
+
+    if (sortBy === 'favorites') {
+      orderByClause = `
+        (cf.client_id IS NOT NULL) DESC,
+        c.loan_released DESC,
+        c.last_touchpoint_date DESC NULLS LAST,
+        COALESCE(c.touchpoint_number, 0) DESC,
+        c.created_at DESC`;
+    }
 
     if (sortBy === 'touchpoint_status') {
       // No touchpoint sequence — all active clients are equally callable/visitable.
@@ -628,12 +636,18 @@ clients.get('/', authMiddleware, async (c) => {
     if (cachedCount !== null) {
       totalItems = cachedCount;
     } else {
-      const countResult = await pool.query(
-        `SELECT COUNT(*) as count FROM clients c
-         WHERE c.deleted_at IS NULL
-         ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}`,
-        baseParams
-      );
+      const countResult = baseWhereConditions.length === 0
+        ? await pool.query(`
+          SELECT GREATEST(0, reltuples::bigint) as count
+          FROM pg_class
+          WHERE relname = 'idx_clients_default_sort'
+        `)
+        : await pool.query(
+          `SELECT COUNT(*) as count FROM clients c
+           WHERE c.deleted_at IS NULL
+           ${baseWhereConditionsJoined ? `AND ${baseWhereConditionsJoined}` : ''}`,
+          baseParams
+        );
       totalItems = parseInt(countResult.rows[0].count);
       await cache.set(countCacheKey, totalItems, 60);
     }
@@ -657,6 +671,9 @@ clients.get('/', authMiddleware, async (c) => {
     const userIdParamIdx = baseParamIndex + 2;
     const limitParamIdx = baseParamIndex;
     const offsetParamIdx = baseParamIndex + 1;
+    const phase1FavoritesJoin = sortBy === 'favorites'
+      ? `LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${userIdParamIdx}::uuid`
+      : '';
 
     // searchStrategy already starts with ", <expr> as similarity_score" when
     // a hybrid search is active. The Phase-1 SELECT must include it so
@@ -664,7 +681,7 @@ clients.get('/', authMiddleware, async (c) => {
     const idQuery = `
       SELECT c.id${searchStrategy}
       FROM clients c
-      LEFT JOIN client_favorites cf ON cf.client_id = c.id AND cf.user_id = $${userIdParamIdx}::uuid
+      ${phase1FavoritesJoin}
       ${whereClause}
       ${searchOrderBy && searchOrderBy.trim().length > 0
         ? `ORDER BY ${searchOrderBy}, ${orderByClause}`
@@ -672,7 +689,12 @@ clients.get('/', authMiddleware, async (c) => {
       LIMIT $${limitParamIdx} OFFSET $${offsetParamIdx}
     `;
 
-    const idResult = await pool.query(idQuery, [...baseParams, perPage, offset, user.sub]);
+    const idResult = await pool.query(
+      idQuery,
+      sortBy === 'favorites'
+        ? [...baseParams, perPage, offset, user.sub]
+        : [...baseParams, perPage, offset],
+    );
     const orderedIds: string[] = idResult.rows.map(r => r.id);
 
     let result: { rows: any[] };
@@ -683,10 +705,10 @@ clients.get('/', authMiddleware, async (c) => {
       // array_position($ids, c.id) preserves the ORDER BY from Phase 1.
       const hydrateQuery = `
         SELECT c.*,
-          psg.region as psgc_region,
-          psg.province as psgc_province,
-          psg.mun_city as psgc_municipality,
-          psg.barangay as psgc_barangay,
+          c.region as psgc_region,
+          c.province as psgc_province,
+          c.municipality as psgc_municipality,
+          c.barangay as psgc_barangay,
           COALESCE(addr.addresses_json, '[]') as addresses,
           COALESCE(phones.phones_json, '[]') as phone_numbers,
           COALESCE(jsonb_array_length(c.touchpoint_summary), 0) as completed_touchpoints,
@@ -700,7 +722,6 @@ clients.get('/', authMiddleware, async (c) => {
           lt.last_name as last_touchpoint_last_name,
           cf.id IS NOT NULL as is_favorited
         FROM clients c
-        LEFT JOIN psgc psg ON psg.id = c.psgc_id
         LEFT JOIN LATERAL (
           SELECT json_agg(json_build_object(
             'id', a.id,
@@ -1081,10 +1102,10 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const mainQuery = `
       ${withGroupScoreCTE}
       SELECT c.*,
-        psg.region as psgc_region,
-        psg.province as psgc_province,
-        psg.mun_city as psgc_municipality,
-        psg.barangay as psgc_barangay,
+        c.region as psgc_region,
+        c.province as psgc_province,
+        c.municipality as psgc_municipality,
+        c.barangay as psgc_barangay,
         COALESCE(
           addr.addresses_json, '[]'
         ) as addresses,
@@ -1106,7 +1127,6 @@ clients.get('/assigned', authMiddleware, async (c) => {
         lt.last_name as last_touchpoint_last_name,
         cf.id IS NOT NULL as is_favorited
       FROM clients c
-      LEFT JOIN psgc psg ON psg.id = c.psgc_id
       LEFT JOIN LATERAL (
         SELECT json_agg(json_build_object(
           'id', a.id,
@@ -1255,10 +1275,10 @@ clients.get('/:id', authMiddleware, async (c) => {
 
     const result = await pool.query(
       `SELECT c.*,
-        psg.region as psgc_region,
-        psg.province as psgc_province,
-        psg.mun_city as psgc_municipality,
-        psg.barangay as psgc_barangay,
+        c.region as psgc_region,
+        c.province as psgc_province,
+        c.municipality as psgc_municipality,
+        c.barangay as psgc_barangay,
         COALESCE(
           json_agg(DISTINCT a) FILTER (WHERE a.id IS NOT NULL), '[]'
         ) as addresses,
@@ -1267,11 +1287,10 @@ clients.get('/:id', authMiddleware, async (c) => {
         ) as phone_numbers,
         c.touchpoint_summary as touchpoints
        FROM clients c
-       LEFT JOIN psgc psg ON psg.id = c.psgc_id
        LEFT JOIN addresses a ON a.client_id = c.id AND a.deleted_at IS NULL
        LEFT JOIN phone_numbers p ON p.client_id = c.id AND p.deleted_at IS NULL
        WHERE c.id = $1 AND c.deleted_at IS NULL
-       GROUP BY c.id, psg.region, psg.province, psg.mun_city, psg.barangay, c.touchpoint_summary
+       GROUP BY c.id, c.touchpoint_summary
       `,
       [id]
     );
@@ -2455,23 +2474,15 @@ clients.post(
       const result = await pool.query(
         `UPDATE clients
          SET psgc_id = $1,
-             psgc_region = $2,
-             psgc_province = $3,
-             psgc_municipality = $4,
-             psgc_barangay = $5,
-             region = COALESCE($6, region),
-             province = COALESCE($7, province),
-             municipality = COALESCE($8, municipality),
-             barangay = COALESCE($9, barangay),
+             region = COALESCE($2, region),
+             province = COALESCE($3, province),
+             municipality = COALESCE($4, municipality),
+             barangay = COALESCE($5, barangay),
              updated_at = NOW()
-         WHERE id = $10
+         WHERE id = $6
          RETURNING *`,
         [
           validated.psgc_id,
-          psgc.region,
-          psgc.province,
-          psgc.mun_city,
-          psgc.barangay,
           validated.region || psgc.region,
           validated.province || psgc.province,
           validated.municipality || psgc.mun_city,
