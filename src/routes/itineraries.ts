@@ -152,6 +152,10 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
               c.first_name as client_first_name, c.last_name as client_last_name,
               c.middle_name as client_middle_name,
               c.municipality as client_municipality,
+              c.full_address as client_full_address,
+              c.region as client_region,
+              c.province as client_province,
+              c.barangay as client_barangay,
               u.first_name as user_first_name, u.last_name as user_last_name,
               cb.first_name as created_by_first_name, cb.last_name as created_by_last_name
        FROM itineraries i
@@ -180,7 +184,11 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
             last_name: row.client_last_name,
             middle_name: row.client_middle_name,
             display_name: clientDisplayName,
+            full_address: row.client_full_address,
+            region: row.client_region,
+            province: row.client_province,
             municipality: row.client_municipality,
+            barangay: row.client_barangay,
           },
           user_id: row.user_id ? {
             id: row.user_id,
@@ -218,6 +226,10 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
       `SELECT i.*,
               c.first_name as client_first_name, c.middle_name as client_middle_name, c.last_name as client_last_name,
               c.municipality as client_municipality,
+              c.full_address as client_full_address,
+              c.region as client_region,
+              c.province as client_province,
+              c.barangay as client_barangay,
               u.first_name as user_first_name, u.last_name as user_last_name,
               cb.first_name as created_by_first_name, cb.last_name as created_by_last_name
        FROM itineraries i
@@ -260,7 +272,11 @@ itineraries.get('/:id', authMiddleware, requirePermission('itineraries', 'read')
           middle_name: itinerary.client_middle_name,
           last_name: itinerary.client_last_name,
           display_name: clientDisplayName,
+          full_address: itinerary.client_full_address,
+          region: itinerary.client_region,
+          province: itinerary.client_province,
           municipality: itinerary.client_municipality,
+          barangay: itinerary.client_barangay,
         },
         created_by: itinerary.created_by ? {
           id: itinerary.created_by,

@@ -315,6 +315,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     // Get itineraries for the target date with client info
     const itinerariesResult = await pool.query(
       `SELECT i.*, c.first_name, c.middle_name, c.last_name, c.email, c.phone, c.client_type,
+              c.full_address, c.region, c.province, c.municipality, c.barangay,
               a.name as agency_name,
               u.name as assigned_by_name
        FROM itineraries i
@@ -434,6 +435,11 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
           email: row.email,
           phone: row.phone,
           client_type: row.client_type,
+          full_address: row.full_address,
+          region: row.region,
+          province: row.province,
+          municipality: row.municipality,
+          barangay: row.barangay,
           agency: row.agency_name,
           addresses: addresses,
         },

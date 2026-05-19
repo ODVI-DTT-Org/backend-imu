@@ -2946,6 +2946,7 @@ clients.post('/by-ids', authMiddleware, requirePermission('clients', 'read'), as
        c.employment_status, c.payroll_date, c.tenure, c.client_type,
        c.product_type, c.market_type, c.pension_type, c.loan_type, c.pan,
        c.facebook_link, c.remarks, c.agency_id, c.psgc_id,
+       c.full_address,
        c.region, c.province, c.municipality, c.barangay, c.udi,
        c.loan_released, c.loan_released_at, c.created_at, c.updated_at,
        c.touchpoint_summary, c.touchpoint_number, c.next_touchpoint

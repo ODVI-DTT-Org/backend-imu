@@ -67,6 +67,7 @@ describe.skip('POST /api/clients/by-ids (Integration - requires database)', () =
     expect(client.id).toBe(ids[0]);
     expect(client).toHaveProperty('first_name');
     expect(client).toHaveProperty('last_name');
+    expect(client).toHaveProperty('full_address');
     expect(client).toHaveProperty('addresses');
     expect(Array.isArray(client.addresses)).toBe(true);
     expect(client).toHaveProperty('phone_numbers');
