@@ -13,4 +13,21 @@ describe('buildClientFilters', () => {
     expect(result.params).toEqual([['barangay 1', 'barangay 2']]);
     expect(result.nextIdx).toBe(2);
   });
+
+  it('builds an address search filter across address fields', () => {
+    const result = buildClientFilters({
+      address_search: 'Alangilan Bacolod',
+    } as any);
+
+    expect(result.conditions).toHaveLength(2);
+    expect(result.conditions[0]).toContain('c.full_address');
+    expect(result.conditions[0]).toContain('c.region');
+    expect(result.conditions[0]).toContain('c.province');
+    expect(result.conditions[0]).toContain('c.municipality');
+    expect(result.conditions[0]).toContain('c.barangay');
+    expect(result.conditions[1]).toContain('c.full_address');
+    expect(result.conditions[1]).toContain('c.barangay');
+    expect(result.params).toEqual(['%alangilan%', '%bacolod%']);
+    expect(result.nextIdx).toBe(3);
+  });
 });

@@ -62,6 +62,7 @@ export function buildClientFilters(
     municipality?: string | string[];
     province?: string | string[];
     barangay?: string | string[];
+    address_search?: string;
     // NEW: Touchpoint-based filters
     touchpoint_reason_codes?: string | string[];
     touchpoint_date_from?: string;
@@ -144,6 +145,26 @@ export function buildClientFilters(
         params.push(normalizedBarangayValues);
         idx++;
       }
+    }
+  }
+
+  if (q.address_search && q.address_search.trim().length > 0) {
+    const words = q.address_search
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(word => word.length >= 2);
+
+    for (const word of words) {
+      conditions.push(`(
+        LOWER(COALESCE(c.full_address, '')) LIKE $${idx}
+        OR LOWER(COALESCE(c.region, '')) LIKE $${idx}
+        OR LOWER(COALESCE(c.province, '')) LIKE $${idx}
+        OR LOWER(COALESCE(c.municipality, '')) LIKE $${idx}
+        OR LOWER(COALESCE(c.barangay, '')) LIKE $${idx}
+      )`);
+      params.push(`%${word}%`);
+      idx++;
     }
   }
 
@@ -404,6 +425,7 @@ clients.get('/', authMiddleware, async (c) => {
       municipality: c.req.queries('municipality'),
       province: c.req.queries('province'),
       barangay: c.req.queries('barangay'),
+      address_search: c.req.query('address_search'),
       touchpoint_status: c.req.queries('touchpoint_status'),
       next_touchpoint_number: c.req.queries('next_touchpoint_number'),
       touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes'),
@@ -449,6 +471,7 @@ clients.get('/', authMiddleware, async (c) => {
       municipality,
       province,
       barangay,
+      address_search: c.req.query('address_search'),
       // NEW: Touchpoint-based filters
       touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes')?.length
         ? c.req.queries('touchpoint_reason_codes')
@@ -822,6 +845,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       municipality,
       province,
       barangay,
+      address_search: c.req.query('address_search'),
       // NEW: Touchpoint-based filters
       touchpoint_reason_codes: c.req.queries('touchpoint_reason_codes')?.length
         ? c.req.queries('touchpoint_reason_codes')
