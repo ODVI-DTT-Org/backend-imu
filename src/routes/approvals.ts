@@ -532,25 +532,64 @@ approvals.patch('/:id/owner-edit', authMiddleware, async (c) => {
 
 // PUT /api/approvals/:id - Update approval
 approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval'), async (c) => {
+  const dbClient = await pool.connect();
   try {
+    await dbClient.query('BEGIN');
+
     const user = c.get('user');
     const id = c.req.param('id');
     const body = await c.req.json();
     const validated = updateApprovalSchema.parse(body);
 
     // Check if approval exists
-    const existing = await pool.query(
+    const existing = await dbClient.query(
       'SELECT * FROM approvals WHERE id = $1',
       [id]
     );
 
     if (existing.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
       throw new NotFoundError('Approval');
     }
 
+    const approval = existing.rows[0];
+
     // Only admin/staff can update status
     if (validated.status && (user.role === 'caravan' || user.role === 'tele')) {
+      await dbClient.query('ROLLBACK');
       throw new AuthorizationError('Not authorized to update status');
+    }
+
+    // When approving a loan release (udi type), create the releases record and update client
+    if (validated.status === 'approved' && approval.status === 'pending' &&
+        (approval.type === 'udi' || approval.type === 'loan_release' || approval.type === 'loan_release_v2')) {
+      let parsedNotes: any = null;
+      try { parsedNotes = JSON.parse(approval.notes); } catch (_) {}
+
+      if (parsedNotes && (parsedNotes.product_type || parsedNotes.loan_type)) {
+        const visitId = parsedNotes.visit_id ?? null;
+        const callId = parsedNotes.call_id ?? null;
+        const udiNum = approval.udi_number || parsedNotes.udi_number || null;
+
+        await dbClient.query(`
+          INSERT INTO releases (
+            id, client_id, user_id, visit_id, call_id, product_type, loan_type,
+            udi_number, approval_notes, status
+          ) VALUES (
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved'
+          )
+        `, [approval.client_id, approval.user_id, visitId, callId,
+            parsedNotes.product_type, parsedNotes.loan_type,
+            udiNum, 'Approved by admin']);
+
+        await dbClient.query(`
+          UPDATE clients
+          SET loan_released = TRUE, loan_released_at = NOW(),
+            product_type = COALESCE($2, product_type),
+            loan_type = COALESCE($3, loan_type)
+          WHERE id = $1
+        `, [approval.client_id, parsedNotes.product_type ?? null, parsedNotes.loan_type ?? null]);
+      }
     }
 
     const updates: string[] = [];
@@ -567,21 +606,32 @@ approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), 
       updates.push(`status = $${paramIndex}`);
       params.push(validated.status);
       paramIndex++;
+
+      if (validated.status === 'approved') {
+        updates.push(`approved_by = $${paramIndex}`);
+        params.push(user.sub);
+        paramIndex++;
+        updates.push(`approved_at = NOW()`);
+      }
     }
 
     if (updates.length === 0) {
+      await dbClient.query('ROLLBACK');
       throw new ValidationError('No fields to update');
     }
 
     params.push(id);
-    const result = await pool.query(
+    const result = await dbClient.query(
       `UPDATE approvals SET ${updates.join(', ')}, updated_at = NOW()
        WHERE id = $${paramIndex} RETURNING *`,
       params
     );
 
+    await dbClient.query('COMMIT');
+
     return c.json(mapRowToApproval(result.rows[0]));
   } catch (error) {
+    await dbClient.query('ROLLBACK');
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -591,6 +641,8 @@ approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), 
     }
     console.error('Update approval error:', error);
     throw new Error('Failed to update approval');
+  } finally {
+    dbClient.release();
   }
 });
 
