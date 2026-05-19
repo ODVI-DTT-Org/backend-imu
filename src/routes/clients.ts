@@ -281,6 +281,63 @@ const phoneSchema = z.object({
   is_primary: z.boolean().default(false),
 });
 
+const CLIENT_LIST_SELECT_COLUMNS = `
+  c.id,
+  c.first_name,
+  c.last_name,
+  c.middle_name,
+  c.birth_date,
+  c.email,
+  c.phone,
+  c.agency_name,
+  c.department,
+  c.position,
+  c.employment_status,
+  c.payroll_date,
+  c.tenure,
+  c.client_type,
+  c.product_type,
+  c.market_type,
+  c.pension_type,
+  c.loan_type,
+  c.pan,
+  c.facebook_link,
+  c.remarks,
+  c.agency_id,
+  c.region,
+  c.province,
+  c.municipality,
+  c.barangay,
+  c.psgc_id,
+  c.is_starred,
+  c.loan_released,
+  c.loan_released_at,
+  c.touchpoint_summary,
+  c.touchpoint_number,
+  c.next_touchpoint,
+  c.ext_name,
+  c.fullname,
+  c.full_address,
+  c.account_code,
+  c.account_number,
+  c.rank,
+  c.monthly_pension_amount,
+  c.monthly_pension_gross,
+  c.atm_number,
+  c.applicable_republic_act,
+  c.unit_code,
+  c.pcni_acct_code,
+  c.dob,
+  c.g_company,
+  c.g_status,
+  c.status,
+  c.created_by,
+  c.deleted_by,
+  c.deleted_at,
+  c.created_at,
+  c.updated_at
+`;
+
 // Helper to map DB row to Client type
 function mapRowToClient(row: Record<string, any>) {
   // Calculate display_name: "Surname, First Name MiddleName"
@@ -704,7 +761,7 @@ clients.get('/', authMiddleware, async (c) => {
       // Phase 2: hydrate. WHERE c.id = ANY(ids) is an index-friendly lookup;
       // array_position($ids, c.id) preserves the ORDER BY from Phase 1.
       const hydrateQuery = `
-        SELECT c.*,
+        SELECT ${CLIENT_LIST_SELECT_COLUMNS},
           c.region as psgc_region,
           c.province as psgc_province,
           c.municipality as psgc_municipality,
@@ -1101,7 +1158,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
     const mainQuery = `
       ${withGroupScoreCTE}
-      SELECT c.*,
+      SELECT ${CLIENT_LIST_SELECT_COLUMNS},
         c.region as psgc_region,
         c.province as psgc_province,
         c.municipality as psgc_municipality,
