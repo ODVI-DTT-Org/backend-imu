@@ -149,21 +149,16 @@ export function buildClientFilters(
   }
 
   if (q.address_search && q.address_search.trim().length > 0) {
-    const words = q.address_search
+    const normalizedAddressSearch = q.address_search
       .trim()
       .toLowerCase()
       .split(/\s+/)
-      .filter(word => word.length >= 2);
+      .filter(word => word.length >= 2)
+      .join(' ');
 
-    for (const word of words) {
-      conditions.push(`(
-        LOWER(COALESCE(c.full_address, '')) LIKE $${idx}
-        OR LOWER(COALESCE(c.region, '')) LIKE $${idx}
-        OR LOWER(COALESCE(c.province, '')) LIKE $${idx}
-        OR LOWER(COALESCE(c.municipality, '')) LIKE $${idx}
-        OR LOWER(COALESCE(c.barangay, '')) LIKE $${idx}
-      )`);
-      params.push(`%${word}%`);
+    if (normalizedAddressSearch.length > 0) {
+      conditions.push(`c.address_search_vector @@ plainto_tsquery('simple', $${idx})`);
+      params.push(normalizedAddressSearch);
       idx++;
     }
   }

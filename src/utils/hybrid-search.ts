@@ -24,7 +24,7 @@ export interface HybridSearchConfig {
 
 const DEFAULT_CONFIG: Required<HybridSearchConfig> = {
   minWordLength: 2,
-  fullTextThreshold: 3,
+  fullTextThreshold: 1,
   textSearchConfig: 'english',
 };
 
