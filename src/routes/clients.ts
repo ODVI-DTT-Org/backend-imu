@@ -249,6 +249,20 @@ const clients = new Hono();
 // Pagination limits
 const MAX_PER_PAGE = 500;
 
+// Format full_address as "Region, Province, Mun/City, Brgy, Street" (skips empty parts)
+function formatFullAddress(p: {
+  region?: string | null;
+  province?: string | null;
+  municipality?: string | null;
+  barangay?: string | null;
+  street?: string | null;
+}): string | undefined {
+  const parts = [p.region, p.province, p.municipality, p.barangay, p.street]
+    .map((s) => (s ?? '').trim())
+    .filter(Boolean);
+  return parts.length ? parts.join(', ') : undefined;
+}
+
 // Validation schemas
 const createClientSchema = z.object({
   id: z.string().uuid().optional(),
@@ -278,6 +292,10 @@ const createClientSchema = z.object({
   loan_released_at: z.string().max(50).optional(),
   // Address fields
   street: z.string().max(500).optional(),
+  region: z.string().max(255).optional(),
+  province: z.string().max(255).optional(),
+  municipality: z.string().max(255).optional(),
+  barangay: z.string().max(255).optional(),
   // Legacy PCNICMS fields (optional)
   ext_name: z.string().max(50).optional(),
   fullname: z.string().max(500).optional(),
@@ -1531,6 +1549,12 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
     // Convert client name fields to uppercase
     const validatedWithUppercaseNames = uppercaseClientNames(validated);
 
+    // Auto-format full_address from PSGC parts + street when available
+    const computedFullAddress = formatFullAddress(validatedWithUppercaseNames);
+    if (computedFullAddress) {
+      validatedWithUppercaseNames.full_address = computedFullAddress;
+    }
+
     // For Tele and Caravan users, create approval request instead of inserting directly
     if (user.role === 'tele' || user.role === 'caravan') {
       // Store client data as JSON in notes field (with uppercase names)
@@ -1559,14 +1583,14 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         id, first_name, last_name, middle_name, birth_date, email, phone,
         agency_name, department, position, employment_status, payroll_date, tenure,
         client_type, product_type, market_type, pension_type, loan_type, pan, facebook_link, remarks,
-        agency_id, is_starred, street,
+        agency_id, is_starred, street, region, province, municipality, barangay,
         ext_name, fullname, full_address, account_code, account_number, rank,
         monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
         unit_code, pcni_acct_code, dob, g_company, g_status, status,
         created_by
       ) VALUES (
-        COALESCE($43, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
-        $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42
+        COALESCE($45, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27,
+        $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44
       ) ON CONFLICT (id) DO UPDATE SET updated_at = clients.updated_at
       RETURNING *`,
       [
@@ -1577,6 +1601,7 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         validatedWithUppercaseNames.loan_type,
         validatedWithUppercaseNames.pan, validatedWithUppercaseNames.facebook_link, validatedWithUppercaseNames.remarks, validatedWithUppercaseNames.agency_id,
         validatedWithUppercaseNames.is_starred, validatedWithUppercaseNames.street,
+        validatedWithUppercaseNames.region, validatedWithUppercaseNames.province, validatedWithUppercaseNames.municipality, validatedWithUppercaseNames.barangay,
         validatedWithUppercaseNames.ext_name, validatedWithUppercaseNames.fullname, validatedWithUppercaseNames.full_address, validatedWithUppercaseNames.account_code,
         validatedWithUppercaseNames.account_number, validatedWithUppercaseNames.rank, validatedWithUppercaseNames.monthly_pension_amount,
         validatedWithUppercaseNames.monthly_pension_gross, validatedWithUppercaseNames.atm_number, validatedWithUppercaseNames.applicable_republic_act,
@@ -1635,6 +1660,18 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
     }
 
     const existingClient = existingResult.rows[0];
+
+    // Recompute full_address from merged PSGC parts + street (keep in sync on update)
+    const computedFullAddress = formatFullAddress({
+      region: validatedWithUppercaseNames.region ?? existingClient.region,
+      province: validatedWithUppercaseNames.province ?? existingClient.province,
+      municipality: validatedWithUppercaseNames.municipality ?? existingClient.municipality,
+      barangay: validatedWithUppercaseNames.barangay ?? existingClient.barangay,
+      street: validatedWithUppercaseNames.street ?? existingClient.street,
+    });
+    if (computedFullAddress) {
+      validatedWithUppercaseNames.full_address = computedFullAddress;
+    }
 
     // For Tele and Caravan users, create approval request instead of updating directly
     if (user.role === 'tele' || user.role === 'caravan') {
@@ -2972,6 +3009,12 @@ clients.post('/bulk-create', authMiddleware, requirePermission('clients', 'creat
       try {
         // Validate individual client
         const validatedClient = createClientSchema.parse(clientData);
+
+        // Auto-format full_address from PSGC parts + street when available
+        const computedBulkFullAddress = formatFullAddress(validatedClient);
+        if (computedBulkFullAddress) {
+          validatedClient.full_address = computedBulkFullAddress;
+        }
 
         // For Tele and Caravan users, create approval request instead of inserting directly
         if (user.role === 'tele' || user.role === 'caravan') {
