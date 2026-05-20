@@ -65,6 +65,15 @@ const updateApprovalSchema = z.object({
   notes: z.string().optional(),
 });
 
+const editApprovalSchema = z.object({
+  reason: z.string().optional(),
+  role: z.string().optional(),
+  udi_number: z.string().optional(),
+  visit_remarks: z.string().optional(),
+  updated_client_information: z.record(z.unknown()).optional(),
+  updated_udi: z.string().optional(),
+});
+
 const approveSchema = z.object({
   notes: z.string().optional(),
 });
@@ -643,6 +652,125 @@ approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), 
     }
     console.error('Update approval error:', error);
     throw new Error('Failed to update approval');
+  } finally {
+    dbClient.release();
+  }
+});
+
+// POST /api/approvals/:id/edit - Edit approval details (admin only)
+approvals.post('/:id/edit', authMiddleware, requirePermission('approvals', 'update'), auditMiddleware('approval'), async (c) => {
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+
+    const user = c.get('user');
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    const validated = editApprovalSchema.parse(body);
+
+    // Check if approval exists
+    const existing = await dbClient.query(
+      'SELECT * FROM approvals WHERE id = $1',
+      [id]
+    );
+
+    if (existing.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
+      throw new NotFoundError('Approval');
+    }
+
+    const approval = existing.rows[0];
+
+    // Only allow editing pending and approved approvals
+    if (approval.status !== 'pending' && approval.status !== 'approved') {
+      await dbClient.query('ROLLBACK');
+      throw new ValidationError('Can only edit pending or approved approvals');
+    }
+
+    // Don't allow editing delete type approvals
+    if (approval.type === 'address_delete' || approval.type === 'phone_delete' || approval.type === 'client_delete') {
+      await dbClient.query('ROLLBACK');
+      throw new ValidationError('Cannot edit delete type approvals');
+    }
+
+    const updates: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    // Build dynamic update query based on provided fields
+    if (validated.reason !== undefined) {
+      updates.push(`reason = $${paramIndex}`);
+      params.push(validated.reason);
+      paramIndex++;
+    }
+
+    if (validated.role !== undefined) {
+      updates.push(`role = $${paramIndex}`);
+      params.push(validated.role);
+      paramIndex++;
+    }
+
+    if (validated.udi_number !== undefined) {
+      updates.push(`udi_number = $${paramIndex}`);
+      params.push(validated.udi_number);
+      paramIndex++;
+    }
+
+    if (validated.visit_remarks !== undefined) {
+      // visit_remarks is stored in notes field as JSON
+      let notes: any = {};
+      try {
+        notes = JSON.parse(approval.notes || '{}');
+      } catch (_) {
+        notes = {};
+      }
+      notes.visit_remarks = validated.visit_remarks;
+      updates.push(`notes = $${paramIndex}`);
+      params.push(JSON.stringify(notes));
+      paramIndex++;
+    }
+
+    if (validated.updated_client_information !== undefined) {
+      updates.push(`updated_client_information = $${paramIndex}`);
+      params.push(JSON.stringify(validated.updated_client_information));
+      paramIndex++;
+    }
+
+    if (validated.updated_udi !== undefined) {
+      updates.push(`updated_udi = $${paramIndex}`);
+      params.push(validated.updated_udi);
+      paramIndex++;
+    }
+
+    if (updates.length === 0) {
+      await dbClient.query('ROLLBACK');
+      throw new ValidationError('No fields to update');
+    }
+
+    params.push(id);
+    const result = await dbClient.query(
+      `UPDATE approvals SET ${updates.join(', ')}, updated_at = NOW()
+       WHERE id = $${paramIndex} RETURNING *`,
+      params
+    );
+
+    await dbClient.query('COMMIT');
+
+    return c.json(mapRowToApproval(result.rows[0]));
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    if (error instanceof z.ZodError) {
+      const validationError = new ValidationError('Invalid input');
+      error.errors.forEach((err: any) => {
+        validationError.addFieldError(err.path[0] || 'unknown', err.message);
+      });
+      throw validationError;
+    }
+    if (error instanceof ValidationError || error instanceof NotFoundError) {
+      throw error;
+    }
+    console.error('Edit approval error:', error);
+    throw new Error('Failed to edit approval');
   } finally {
     dbClient.release();
   }

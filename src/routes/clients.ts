@@ -276,6 +276,8 @@ const createClientSchema = z.object({
   is_starred: z.boolean().default(false),
   loan_released: z.boolean().optional().default(false),
   loan_released_at: z.string().max(50).optional(),
+  // Address fields
+  street: z.string().max(500).optional(),
   // Legacy PCNICMS fields (optional)
   ext_name: z.string().max(50).optional(),
   fullname: z.string().max(500).optional(),
@@ -350,6 +352,7 @@ const CLIENT_LIST_SELECT_COLUMNS = `
   c.municipality,
   c.barangay,
   c.psgc_id,
+  c.street,
   c.is_starred,
   c.loan_released,
   c.loan_released_at,
@@ -1556,14 +1559,14 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         id, first_name, last_name, middle_name, birth_date, email, phone,
         agency_name, department, position, employment_status, payroll_date, tenure,
         client_type, product_type, market_type, pension_type, loan_type, pan, facebook_link, remarks,
-        agency_id, is_starred,
+        agency_id, is_starred, street,
         ext_name, fullname, full_address, account_code, account_number, rank,
         monthly_pension_amount, monthly_pension_gross, atm_number, applicable_republic_act,
         unit_code, pcni_acct_code, dob, g_company, g_status, status,
         created_by
       ) VALUES (
-        COALESCE($42, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-        $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41
+        COALESCE($43, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+        $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42
       ) ON CONFLICT (id) DO UPDATE SET updated_at = clients.updated_at
       RETURNING *`,
       [
@@ -1573,7 +1576,7 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
         validatedWithUppercaseNames.client_type, validatedWithUppercaseNames.product_type, validatedWithUppercaseNames.market_type, validatedWithUppercaseNames.pension_type,
         validatedWithUppercaseNames.loan_type,
         validatedWithUppercaseNames.pan, validatedWithUppercaseNames.facebook_link, validatedWithUppercaseNames.remarks, validatedWithUppercaseNames.agency_id,
-        validatedWithUppercaseNames.is_starred,
+        validatedWithUppercaseNames.is_starred, validatedWithUppercaseNames.street,
         validatedWithUppercaseNames.ext_name, validatedWithUppercaseNames.fullname, validatedWithUppercaseNames.full_address, validatedWithUppercaseNames.account_code,
         validatedWithUppercaseNames.account_number, validatedWithUppercaseNames.rank, validatedWithUppercaseNames.monthly_pension_amount,
         validatedWithUppercaseNames.monthly_pension_gross, validatedWithUppercaseNames.atm_number, validatedWithUppercaseNames.applicable_republic_act,
@@ -1685,6 +1688,7 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
       province: 'province',
       municipality: 'municipality',
       barangay: 'barangay',
+      street: 'street',
       is_starred: 'is_starred',
       loan_released: 'loan_released',
       loan_released_at: 'loan_released_at',
