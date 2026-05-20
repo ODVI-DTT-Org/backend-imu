@@ -71,11 +71,16 @@ function mapRowToUser(row: Record<string, any>) {
     email: row.email,
     name: `${row.first_name} ${row.last_name}`,
     first_name: row.first_name,
+    middle_name: row.middle_name,
     last_name: row.last_name,
     role: row.role,
     phone: row.phone,
     avatar: row.avatar_url,
     is_active: row.is_active,
+    last_login_at: row.last_login_at,
+    theme_color: row.theme_color,
+    theme_mode: row.theme_mode,
+    assigned_areas: row.assigned_areas,
     area_manager_id: row.area_manager_id,
     assistant_area_manager_id: row.assistant_area_manager_id,
     created: row.created_at,
@@ -152,8 +157,11 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
 
     // Get paginated results
     const result = await pool.query(
-      `SELECT u.id, u.email, u.first_name, u.last_name, u.role, u.phone, u.avatar_url, u.is_active,
-              u.created_at, u.updated_at
+      `SELECT u.id, u.email, u.first_name, u.middle_name, u.last_name, u.role, u.phone, u.avatar_url, u.is_active,
+              u.last_login_at, u.theme_color, u.theme_mode, u.created_at, u.updated_at,
+              (SELECT string_agg(DISTINCT COALESCE(ul.municipality, ul.province), ', ')
+                 FROM user_locations ul
+                 WHERE ul.user_id = u.id AND ul.deleted_at IS NULL) AS assigned_areas
        FROM users u
        ${whereClause}
        ORDER BY u.created_at DESC
