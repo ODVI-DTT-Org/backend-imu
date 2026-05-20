@@ -45,6 +45,24 @@ function normalizeLocationName(name: string): string {
     .trim();
 }
 
+/**
+ * Convert client name fields to uppercase
+ * Applies to: first_name, last_name, middle_name
+ */
+function uppercaseClientNames(data: Record<string, any>): Record<string, any> {
+  const result = { ...data };
+  if (result.first_name && typeof result.first_name === 'string') {
+    result.first_name = result.first_name.toUpperCase();
+  }
+  if (result.last_name && typeof result.last_name === 'string') {
+    result.last_name = result.last_name.toUpperCase();
+  }
+  if (result.middle_name && typeof result.middle_name === 'string') {
+    result.middle_name = result.middle_name.toUpperCase();
+  }
+  return result;
+}
+
 interface ClientFilterResult {
   conditions: string[];
   params: any[];
@@ -1507,10 +1525,13 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
     const body = await c.req.json();
     const validated = createClientSchema.parse(body);
 
+    // Convert client name fields to uppercase
+    const validatedWithUppercaseNames = uppercaseClientNames(validated);
+
     // For Tele and Caravan users, create approval request instead of inserting directly
     if (user.role === 'tele' || user.role === 'caravan') {
-      // Store client data as JSON in notes field
-      const clientData = JSON.stringify(validated);
+      // Store client data as JSON in notes field (with uppercase names)
+      const clientData = JSON.stringify(validatedWithUppercaseNames);
 
       // Create approval request for client creation
       const approvalResult = await client.query(
@@ -1546,20 +1567,20 @@ clients.post('/', authMiddleware, requirePermission('clients', 'create'), auditM
       ) ON CONFLICT (id) DO UPDATE SET updated_at = clients.updated_at
       RETURNING *`,
       [
-        validated.first_name, validated.last_name, validated.middle_name, validated.birth_date,
-        validated.email, validated.phone, validated.agency_name, validated.department,
-        validated.position, validated.employment_status, validated.payroll_date, validated.tenure,
-        validated.client_type, validated.product_type, validated.market_type, validated.pension_type,
-        validated.loan_type,
-        validated.pan, validated.facebook_link, validated.remarks, validated.agency_id,
-        validated.is_starred,
-        validated.ext_name, validated.fullname, validated.full_address, validated.account_code,
-        validated.account_number, validated.rank, validated.monthly_pension_amount,
-        validated.monthly_pension_gross, validated.atm_number, validated.applicable_republic_act,
-        validated.unit_code, validated.pcni_acct_code, validated.dob, validated.g_company,
-        validated.g_status, validated.status,
+        validatedWithUppercaseNames.first_name, validatedWithUppercaseNames.last_name, validatedWithUppercaseNames.middle_name, validatedWithUppercaseNames.birth_date,
+        validatedWithUppercaseNames.email, validatedWithUppercaseNames.phone, validatedWithUppercaseNames.agency_name, validatedWithUppercaseNames.department,
+        validatedWithUppercaseNames.position, validatedWithUppercaseNames.employment_status, validatedWithUppercaseNames.payroll_date, validatedWithUppercaseNames.tenure,
+        validatedWithUppercaseNames.client_type, validatedWithUppercaseNames.product_type, validatedWithUppercaseNames.market_type, validatedWithUppercaseNames.pension_type,
+        validatedWithUppercaseNames.loan_type,
+        validatedWithUppercaseNames.pan, validatedWithUppercaseNames.facebook_link, validatedWithUppercaseNames.remarks, validatedWithUppercaseNames.agency_id,
+        validatedWithUppercaseNames.is_starred,
+        validatedWithUppercaseNames.ext_name, validatedWithUppercaseNames.fullname, validatedWithUppercaseNames.full_address, validatedWithUppercaseNames.account_code,
+        validatedWithUppercaseNames.account_number, validatedWithUppercaseNames.rank, validatedWithUppercaseNames.monthly_pension_amount,
+        validatedWithUppercaseNames.monthly_pension_gross, validatedWithUppercaseNames.atm_number, validatedWithUppercaseNames.applicable_republic_act,
+        validatedWithUppercaseNames.unit_code, validatedWithUppercaseNames.pcni_acct_code, validatedWithUppercaseNames.dob, validatedWithUppercaseNames.g_company,
+        validatedWithUppercaseNames.g_status, validatedWithUppercaseNames.status,
         user.sub,
-        validated.id ?? null
+        validatedWithUppercaseNames.id ?? null
       ]
     );
 
@@ -1600,6 +1621,9 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
 
     const validated = updateClientSchema.parse(body);
 
+    // Convert client name fields to uppercase
+    const validatedWithUppercaseNames = uppercaseClientNames(validated);
+
     // Check if client exists (not soft-deleted)
     const existingResult = await client.query('SELECT * FROM clients WHERE id = $1 AND deleted_at IS NULL', [id]);
     if (existingResult.rows.length === 0) {
@@ -1611,8 +1635,8 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
 
     // For Tele and Caravan users, create approval request instead of updating directly
     if (user.role === 'tele' || user.role === 'caravan') {
-      // Store changes as JSON in notes field
-      const changes = JSON.stringify(validated);
+      // Store changes as JSON in notes field (with uppercase names)
+      const changes = JSON.stringify(validatedWithUppercaseNames);
 
       // Create approval request
       const approvalResult = await client.query(
@@ -1684,9 +1708,9 @@ clients.put('/:id', authMiddleware, requirePermission('clients', 'update'), audi
     };
 
     for (const [key, dbField] of Object.entries(fieldMappings)) {
-      if (key in validated) {
+      if (key in validatedWithUppercaseNames) {
         updateFields.push(`${dbField} = $${paramIndex}`);
-        updateValues.push((validated as any)[key]);
+        updateValues.push((validatedWithUppercaseNames as any)[key]);
         paramIndex++;
       }
     }
