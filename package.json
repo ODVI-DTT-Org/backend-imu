@@ -11,6 +11,7 @@
     "dev": "tsx watch src/bootstrap.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "detect-duplicates": "node --loader ts-node/esm scripts/detect-duplicates.ts",
     "test": "vitest",
     "test:ui": "vitest --ui"
   },
@@ -32,8 +33,10 @@
     "busboy": "^1.6.0",
     "dotenv": "^16.4.7",
     "exceljs": "^4.4.0",
+    "fastest-levenshtein": "^1.0.16",
     "firebase-admin": "^13.10.0",
     "hono": "^4.6.14",
+    "openai": "^4.71.0",
     "ioredis": "^5.10.1",
     "jsonwebtoken": "^9.0.2",
     "lodash-es": "^4.18.1",
@@ -44,10 +47,12 @@
     "posthog-node": "^5.28.2",
     "typescript": "^5.7.3",
     "uuid": "^13.0.0",
+    "yargs": "^17.7.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/nodemailer": "^8.0.0",
+    "@types/yargs": "^17.0.32",
     "@vitest/ui": "^4.1.2",
     "tsx": "^4.19.2",
     "vitest": "^4.1.2"
