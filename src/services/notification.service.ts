@@ -86,3 +86,40 @@ export async function markAllNotificationsRead(userId: string): Promise<number> 
   );
   return result.rowCount ?? 0;
 }
+
+export async function clearNotifications(userId: string): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM notifications
+     WHERE user_id = $1`,
+    [userId],
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function clearReadNotifications(userId: string): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM notifications
+     WHERE user_id = $1 AND read_at IS NOT NULL`,
+    [userId],
+  );
+  return result.rowCount ?? 0;
+}
+
+export async function cleanupOldNotifications(retentionDays = 3): Promise<number> {
+  if (!Number.isInteger(retentionDays) || retentionDays < 1) {
+    throw new Error('retentionDays must be at least 1');
+  }
+
+  const result = await pool.query(
+    `DELETE FROM notifications
+     WHERE created_at < NOW() - ($1::int * INTERVAL '1 day')`,
+    [retentionDays],
+  );
+
+  const deleted = result.rowCount ?? 0;
+  logger.info('notifications', 'Cleaned up old notifications', {
+    deleted,
+    retentionDays,
+  });
+  return deleted;
+}

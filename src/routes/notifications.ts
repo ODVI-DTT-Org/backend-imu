@@ -4,6 +4,8 @@ import { pool } from '../db/index.js';
 import {
   markNotificationRead,
   markAllNotificationsRead,
+  clearNotifications,
+  clearReadNotifications,
   createAnnouncementNotifications,
 } from '../services/notification.service.js';
 import { requirePermission } from '../middleware/permissions.js';
@@ -69,6 +71,20 @@ notifications.patch('/read-all', authMiddleware, async (c) => {
   const user = c.get('user');
   const count = await markAllNotificationsRead(user.sub);
   return c.json({ success: true, marked: count });
+});
+
+// DELETE /api/notifications/read - clear read notifications for the current user
+notifications.delete('/read', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const count = await clearReadNotifications(user.sub);
+  return c.json({ success: true, deleted: count });
+});
+
+// DELETE /api/notifications - clear all notifications for the current user
+notifications.delete('/', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const count = await clearNotifications(user.sub);
+  return c.json({ success: true, deleted: count });
 });
 
 // POST /api/notifications/announcements — admin/manager only

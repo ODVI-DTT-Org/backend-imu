@@ -12,7 +12,7 @@ import { warmAllAssignedClientsCache } from './cache-warming.js';
 import { refreshTouchpointSummaryMV, refreshAllMaterializedViews } from './touchpoint-mv-refresh.js';
 import { logger } from '../utils/logger.js';
 import { pool } from '../db/index.js';
-import { createNotification } from './notification.service.js';
+import { cleanupOldNotifications, createNotification } from './notification.service.js';
 
 /**
  * Scheduled tasks configuration
@@ -42,6 +42,12 @@ const SCHEDULED_TASKS = {
     description: 'Notify users with overdue pending itineraries',
     task: 'missedVisitNotifications',
   },
+  // Delete notifications older than the retention window daily at 2:30 AM
+  notificationCleanup: {
+    schedule: '30 2 * * *', // Daily at 2:30 AM
+    description: 'Delete notifications older than the configured retention window',
+    task: 'notificationCleanup',
+  },
 };
 
 /**
@@ -69,6 +75,9 @@ export function startScheduler(): void {
 
   // Start missed visit notifications job
   startMissedVisitNotificationsJob();
+
+  // Start notification cleanup job
+  startNotificationCleanupJob();
 
   logger.info('scheduler', 'Cron job scheduler started successfully', {
     activeJobs: Array.from(activeJobs.keys()),
@@ -251,6 +260,36 @@ function startMissedVisitNotificationsJob(): void {
   logger.info('scheduler', `Started cron job: ${task.task}`, { schedule: task.schedule });
 }
 
+function notificationRetentionDays(): number {
+  const parsed = Number.parseInt(process.env.NOTIFICATION_RETENTION_DAYS || '3', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 3;
+}
+
+/**
+ * Delete notifications older than the configured retention window.
+ */
+function startNotificationCleanupJob(): void {
+  const task = SCHEDULED_TASKS.notificationCleanup;
+
+  const job = cron.schedule(task.schedule, async () => {
+    try {
+      const retentionDays = notificationRetentionDays();
+      logger.info('scheduler', `Executing scheduled task: ${task.task}`, { retentionDays });
+      const deleted = await cleanupOldNotifications(retentionDays);
+      logger.info('scheduler', `${task.task}: deleted ${deleted} notification(s)`, {
+        retentionDays,
+      });
+    } catch (error: any) {
+      logger.error('scheduler', `Failed to execute scheduled task: ${task.task}`, {
+        error: error.message,
+      });
+    }
+  });
+
+  activeJobs.set(task.task, job);
+  logger.info('scheduler', `Started cron job: ${task.task}`, { schedule: task.schedule });
+}
+
 /**
  * Get scheduler status
  *
@@ -296,6 +335,9 @@ export async function triggerTask(taskName: string): Promise<{
         break;
       case 'missedVisitNotifications':
         result = await notifyMissedVisits();
+        break;
+      case 'notificationCleanup':
+        result = await cleanupOldNotifications(notificationRetentionDays());
         break;
       default:
         throw new Error(`Unknown task: ${taskName}`);
