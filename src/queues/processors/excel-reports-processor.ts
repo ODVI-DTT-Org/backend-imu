@@ -26,9 +26,11 @@ export class ExcelReportsProcessor extends BaseProcessor<ReportJobData, JobResul
 
   constructor() {
     super('excel-reports');
-    this.s3Bucket = process.env.AWS_S3_BUCKET || 'imu-reports';
+    // Align with the working StorageService bucket/region (the dedicated
+    // AWS_S3_BUCKET / 'imu-reports' bucket does not exist in this environment).
+    this.s3Bucket = process.env.STORAGE_BUCKET || process.env.AWS_S3_BUCKET || 'imu-uploads';
     this.s3Client = new S3Client({
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || 'ap-southeast-1',
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',

@@ -21,6 +21,35 @@ import { logger } from '../../utils/logger.js';
 import { generateItineraryAnalysisReport } from './handlers/itinerary-analysis-handler.js';
 
 /**
+ * Builds a SQL expression that resolves a client's address with this priority:
+ *   1. the client's primary address (from the addresses table)
+ *   2. clients.full_address
+ *   3. formatted PSGC "Region, Province, Mun/City, Brgy, Street"
+ * `alias` must expose: id, full_address, region, province, municipality, barangay, street.
+ */
+function clientAddressSql(alias: string): string {
+  return `COALESCE(
+    (SELECT NULLIF(TRIM(BOTH ', ' FROM CONCAT_WS(', ',
+        NULLIF(COALESCE(a.street_address, a.street), ''),
+        NULLIF(a.barangay, ''),
+        NULLIF(a.city, ''),
+        NULLIF(a.province, '')
+     )), '')
+     FROM addresses a
+     WHERE a.client_id = ${alias}.id AND a.is_primary = TRUE AND a.deleted_at IS NULL
+     LIMIT 1),
+    NULLIF(${alias}.full_address, ''),
+    NULLIF(TRIM(BOTH ', ' FROM CONCAT_WS(', ',
+        NULLIF(${alias}.region, ''),
+        NULLIF(${alias}.province, ''),
+        NULLIF(${alias}.municipality, ''),
+        NULLIF(${alias}.barangay, ''),
+        NULLIF(${alias}.street, '')
+     )), '')
+  )`;
+}
+
+/**
  * Reports Processor
  */
 export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
@@ -29,9 +58,11 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
   constructor() {
     super('reports');
-    this.s3Bucket = process.env.AWS_S3_BUCKET || 'imu-reports';
+    // Align with the working StorageService bucket/region (the dedicated
+    // AWS_S3_BUCKET / 'imu-reports' bucket does not exist in this environment).
+    this.s3Bucket = process.env.STORAGE_BUCKET || process.env.AWS_S3_BUCKET || 'imu-uploads';
     this.s3Client = new S3Client({
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: process.env.AWS_REGION || 'ap-southeast-1',
       credentials: {
         accessKeyId: process.env.AWS_ACCESS_KEY_ID || '',
         secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || '',
@@ -291,6 +322,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         c.last_name,
         c.municipality,
         c.province,
+        ${clientAddressSql('c')} as address,
         c.client_type,
         COUNT(t.id) as total_touchpoints,
         COUNT(t.id) FILTER (WHERE t.status = 'Completed') as completed_touchpoints,
@@ -688,6 +720,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             c.province,
             c.municipality,
             c.barangay,
+            c.street,
             c.full_address,
             c.phone,
             c.account_number,
@@ -742,7 +775,8 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         cat.municipality                                           AS "Municipality",
         cat.barangay                                               AS "Barangay",
         cat.full_address                                           AS "Full Address",
-        ucar.username                                              AS "Assigned Caravan",
+        ${clientAddressSql('cat')}                                 AS "Address",
+        (ucar.first_name || ' ' || ucar.last_name)                 AS "Assigned Caravan",
         cat.assigned_team_name                                     AS "Assigned Team",
         TO_CHAR(cat.last_visit_at, 'YYYY-MM-DD"T"HH24:MI:SSOF')    AS "Last Visit Date",
         cat.last_reason                                            AS "Last Visit Reason",
@@ -754,7 +788,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
               + EXTRACT(MONTH FROM AGE(NOW(), cat.first_visit_at)))::INT
         END                                                        AS "Aging (months)",
         TO_CHAR(cat.release_date, 'YYYY-MM-DD"T"HH24:MI:SSOF')     AS "Release Date",
-        ulr.username                                               AS "Release By",
+        (ulr.first_name || ' ' || ulr.last_name)                   AS "Release By",
         cat.lr_team_name                                           AS "LR Team",
         cat.loan_type                                              AS "Loan Type",
         cat.udi_number                                             AS "UDI Number",
@@ -796,6 +830,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         'Municipality',
         'Barangay',
         'Full Address',
+        'Address',
         'Assigned Caravan',
         'Assigned Team',
         'Last Visit Date',
