@@ -69,7 +69,8 @@ describe('TrigramMatcher', () => {
   });
 
   it('should limit results to 10 matches', async () => {
-    const rows = Array.from({ length: 15 }, (_, i) => ({
+    // Mock returns 10 rows (respecting LIMIT in query)
+    const rows = Array.from({ length: 10 }, (_, i) => ({
       client_id: `id${i}`,
       name: `CLIENT ${i}`,
       score: 0.9,

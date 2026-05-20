@@ -79,8 +79,8 @@ describe('MetadataBuilder', () => {
     const after = new Date().toISOString();
 
     expect(metadata.last_checked_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
-    expect(metadata.last_checked_at).toBeGreaterThanOrEqual(before);
-    expect(metadata.last_checked_at).toBeLessThanOrEqual(after);
+    expect(new Date(metadata.last_checked_at).getTime()).toBeGreaterThanOrEqual(new Date(before).getTime());
+    expect(new Date(metadata.last_checked_at).getTime()).toBeLessThanOrEqual(new Date(after).getTime());
   });
 
   it('should validate correct metadata', () => {
