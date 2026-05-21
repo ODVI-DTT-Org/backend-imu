@@ -43,17 +43,19 @@ export class DBClient {
   }
 
   /**
-   * Get all non-deleted clients for comparison (excluding target)
+   * Fetch specific client records by id (used to hydrate trigram/fuzzy
+   * candidates for AI validation). Bounded to the candidate set — never loads
+   * every client into memory.
    */
-  async getAllOtherClients(excludeId: string): Promise<ClientRecord[]> {
+  async getClientsByIds(ids: string[]): Promise<ClientRecord[]> {
+    if (ids.length === 0) return [];
     const query = `
       SELECT id, fullname, first_name, last_name, birth_date, agency_name
       FROM clients
-      WHERE deleted_at IS NULL AND id != $1
-      ORDER BY created_at DESC
+      WHERE deleted_at IS NULL AND id = ANY($1)
     `;
 
-    const result = await this.pool.query(query, [excludeId]);
+    const result = await this.pool.query(query, [ids]);
     return result.rows;
   }
 

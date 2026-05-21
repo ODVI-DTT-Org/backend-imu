@@ -98,58 +98,57 @@ async function main() {
 
       // Process each client in the batch
       for (const client of clientsToProcess) {
-        const allOtherClients = await db.getAllOtherClients(client.id);
+        const name =
+          client.fullname || `${client.first_name} ${client.last_name}`.trim();
 
-        // Step 1: Trigram matching
-        const trigramResults = await trigramMatcher.findSimilar(
-          client.fullname || `${client.first_name} ${client.last_name}`.trim(),
-          client.id,
-          0.85
+        // Step 1: Generate candidates via the indexed trigram query (fast — no
+        // full-table scan and no loading every client into memory). Cast a
+        // modestly wide net; the precise flag thresholds are applied below.
+        const candidates = await trigramMatcher.findSimilar(name, client.id, 0.5, 30);
+
+        // Step 2: Apply the duplicate criteria against this small candidate set
+        // only: strong trigram matches (>=0.85) plus Levenshtein matches (>=0.8).
+        // Preserves the original detection rules without the O(n^2) brute force.
+        const strongTrigram = candidates.filter((m) => m.score >= 0.85);
+        const fuzzyMatches = fuzzyMatcher.findSimilar(
+          name,
+          candidates.map((c) => ({ id: c.client_id, name: c.name })),
+          0.8
         );
-
-        let finalMatches: MatchingResult[] = [...trigramResults];
-
-        // Step 2: Fuzzy matching on non-trigram results
-        if (trigramResults.length === 0 || finalMatches.length < 10) {
-          const fuzzyMatches = fuzzyMatcher.findSimilar(
-            client.fullname || `${client.first_name} ${client.last_name}`.trim(),
-            allOtherClients.map((c) => ({
-              id: c.id,
-              name: c.fullname || `${c.first_name} ${c.last_name}`.trim(),
-            })),
-            0.8
-          );
-
-          // Merge results, avoiding duplicates
-          const existingIds = new Set(finalMatches.map((m) => m.client_id));
-          finalMatches = [
-            ...finalMatches,
-            ...fuzzyMatches.filter((m) => !existingIds.has(m.client_id)),
-          ];
+        const byId = new Map<string, MatchingResult>();
+        for (const m of strongTrigram) byId.set(m.client_id, m);
+        for (const m of fuzzyMatches) {
+          if (!byId.has(m.client_id)) byId.set(m.client_id, m);
         }
+        let finalMatches: MatchingResult[] = [...byId.values()];
 
-        // Step 3: AI validation for borderline cases (60-80%)
+        // Step 3: AI validation for borderline cases (60-80%). Fetch only the
+        // candidate records by id rather than every client.
         let aiWasInvoked = false;
         if (aiValidator && !options.aiDisabled) {
           const borderlineMatches = finalMatches.filter((m) => m.score >= 0.6 && m.score < 0.8);
+          if (borderlineMatches.length > 0) {
+            const others = await db.getClientsByIds(borderlineMatches.map((m) => m.client_id));
+            const othersById = new Map(others.map((o) => [o.id, o]));
 
-          for (const borderlineMatch of borderlineMatches) {
-            const otherClient = allOtherClients.find((c) => c.id === borderlineMatch.client_id);
-            if (!otherClient) continue;
+            for (const borderlineMatch of borderlineMatches) {
+              const otherClient = othersById.get(borderlineMatch.client_id);
+              if (!otherClient) continue;
 
-            const aiResult = await aiValidator.validate(client, otherClient);
+              const aiResult = await aiValidator.validate(client, otherClient);
 
-            if (aiResult === 'yes') {
-              borderlineMatch.method = 'ai';
-              borderlineMatch.score = 0.75; // Assign confidence from AI decision
-              aiWasInvoked = true;
-              aiValidationCount++;
-            } else if (aiResult === 'no') {
-              // Remove from matches
-              finalMatches = finalMatches.filter((m) => m.client_id !== borderlineMatch.client_id);
-            } else {
-              // 'unsure' - keep as-is
-              aiWasInvoked = true;
+              if (aiResult === 'yes') {
+                borderlineMatch.method = 'ai';
+                borderlineMatch.score = 0.75; // Assign confidence from AI decision
+                aiWasInvoked = true;
+                aiValidationCount++;
+              } else if (aiResult === 'no') {
+                // Remove from matches
+                finalMatches = finalMatches.filter((m) => m.client_id !== borderlineMatch.client_id);
+              } else {
+                // 'unsure' - keep as-is
+                aiWasInvoked = true;
+              }
             }
           }
         }
