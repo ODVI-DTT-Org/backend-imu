@@ -139,7 +139,37 @@ async function recordCountsByClient(
 }
 
 const DETAIL_COLUMNS = `id, first_name, last_name, middle_name, full_name,
-  birth_date, agency_name, municipality, province, barangay, full_address, created_at`;
+  birth_date, agency_name, pension_type, pan,
+  municipality, province, barangay, full_address, created_at`;
+
+/** Up to `perClient` most recent visits per client, for the review comparison. */
+async function recentVisitsByClient(
+  dbc: any,
+  ids: string[],
+  perClient = 5,
+): Promise<Record<string, Array<{ date: string | null; type: string | null; address: string | null; status: string | null }>>> {
+  const out: Record<string, any[]> = {};
+  for (const id of ids) out[id] = [];
+  if (ids.length === 0) return out;
+  const r = await dbc.query(
+    `SELECT client_id, time_in, type, address, status, created_at FROM (
+       SELECT client_id, time_in, type, address, status, created_at,
+              ROW_NUMBER() OVER (PARTITION BY client_id ORDER BY created_at DESC) AS rn
+       FROM visits WHERE client_id = ANY($1)
+     ) t WHERE rn <= $2`,
+    [ids, perClient],
+  );
+  for (const row of r.rows) {
+    if (!out[row.client_id]) out[row.client_id] = [];
+    out[row.client_id].push({
+      date: row.time_in ?? row.created_at,
+      type: row.type,
+      address: row.address,
+      status: row.status,
+    });
+  }
+  return out;
+}
 
 // GET /api/duplicates/:id/detail — the flagged client plus its candidate matches,
 // each with key fields and history-record counts, for the admin to compare before merging.
@@ -174,9 +204,16 @@ duplicates.get('/:id/detail', authMiddleware, requireRole('admin'), async (c) =>
         .filter(Boolean);
     }
 
-    const counts = await recordCountsByClient(dbc, [id, ...candidates.map((x) => x.id)]);
+    const ids = [id, ...candidates.map((x) => x.id)];
+    const counts = await recordCountsByClient(dbc, ids);
+    const visits = await recentVisitsByClient(dbc, ids);
     client.counts = counts[id] ?? {};
-    candidates = candidates.map((x) => ({ ...x, counts: counts[x.id] ?? {} }));
+    client.recent_visits = visits[id] ?? [];
+    candidates = candidates.map((x) => ({
+      ...x,
+      counts: counts[x.id] ?? {},
+      recent_visits: visits[x.id] ?? [],
+    }));
 
     return c.json({ client, candidates });
   } finally {
