@@ -28,7 +28,7 @@ import { generateItineraryAnalysisReport } from './handlers/itinerary-analysis-h
  * `alias` must expose: id, full_address, region, province, municipality, barangay, street.
  */
 function clientAddressSql(alias: string): string {
-  return `COALESCE(
+  return `UPPER(COALESCE(
     (SELECT NULLIF(TRIM(BOTH ', ' FROM CONCAT_WS(', ',
         NULLIF(COALESCE(a.street_address, a.street), ''),
         NULLIF(a.barangay, ''),
@@ -46,7 +46,30 @@ function clientAddressSql(alias: string): string {
         NULLIF(${alias}.barangay, ''),
         NULLIF(${alias}.street, '')
      )), '')
-  )`;
+  ))`;
+}
+
+/**
+ * Full name as "LAST NAME, FIRST NAME MIDDLE NAME EXT", always UPPERCASE.
+ * `alias` must expose: last_name, first_name, middle_name, ext_name.
+ */
+function clientFullNameSql(alias: string): string {
+  return `UPPER(NULLIF(TRIM(BOTH ', ' FROM CONCAT_WS(', ',
+    NULLIF(${alias}.last_name, ''),
+    NULLIF(TRIM(CONCAT_WS(' ',
+        NULLIF(${alias}.first_name, ''),
+        NULLIF(${alias}.middle_name, ''),
+        NULLIF(${alias}.ext_name, '')
+    )), '')
+  )), ''))`;
+}
+
+/** Agent (users) full name as "LAST NAME, FIRST NAME", always UPPERCASE. */
+function userFullNameSql(alias: string): string {
+  return `UPPER(NULLIF(TRIM(BOTH ', ' FROM CONCAT_WS(', ',
+    NULLIF(${alias}.last_name, ''),
+    NULLIF(${alias}.first_name, '')
+  )), ''))`;
 }
 
 /**
@@ -251,6 +274,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `
       SELECT
         u.id as user_id,
+        ${userFullNameSql('u')} as full_name,
         u.first_name,
         u.last_name,
         u.role,
@@ -318,11 +342,12 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `
       SELECT
         c.id as client_id,
+        ${clientFullNameSql('c')} as full_name,
         c.first_name,
         c.last_name,
         c.municipality,
         c.province,
-        ${clientAddressSql('c')} as address,
+        ${clientAddressSql('c')} as full_address,
         c.client_type,
         COUNT(t.id) as total_touchpoints,
         COUNT(t.id) FILTER (WHERE t.status = 'Completed') as completed_touchpoints,
@@ -428,6 +453,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `
       SELECT
         u.id as user_id,
+        ${userFullNameSql('u')} as full_name,
         u.first_name,
         u.last_name,
         u.role,
@@ -481,6 +507,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `
       SELECT
         u.id as user_id,
+        ${userFullNameSql('u')} as full_name,
         u.first_name,
         u.last_name,
         u.role,
@@ -752,17 +779,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         )
       SELECT
         cat.id                                                     AS "ID",
-        COALESCE(
-          cat.full_name,
-          TRIM(BOTH ', ' FROM
-            CONCAT_WS(
-              ' ',
-              CONCAT_WS(', ', NULLIF(cat.last_name, ''), NULLIF(cat.first_name, '')),
-              NULLIF(cat.middle_name, ''),
-              NULLIF(cat.ext_name, '')
-            )
-          )
-        )                                                          AS "Full Name",
+        ${clientFullNameSql('cat')}                                AS "Full Name",
         cat.first_name                                             AS "First Name",
         cat.middle_name                                            AS "Middle Name",
         cat.last_name                                              AS "Last Name",
@@ -774,7 +791,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         cat.province                                               AS "Province",
         cat.municipality                                           AS "Municipality",
         cat.barangay                                               AS "Barangay",
-        cat.full_address                                           AS "Full Address",
+        ${clientAddressSql('cat')}                                 AS "Full Address",
         ${clientAddressSql('cat')}                                 AS "Address",
         (ucar.first_name || ' ' || ucar.last_name)                 AS "Assigned Caravan",
         cat.assigned_team_name                                     AS "Assigned Team",
