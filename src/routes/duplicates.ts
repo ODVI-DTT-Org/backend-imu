@@ -114,6 +114,76 @@ duplicates.get('/', authMiddleware, requireRole('admin'), async (c) => {
   }
 });
 
+/**
+ * Per-client counts of the history tables that a merge would move, so the admin
+ * can see how much data each client carries before confirming.
+ */
+async function recordCountsByClient(
+  dbc: any,
+  ids: string[],
+): Promise<Record<string, Record<string, number>>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const id of ids) out[id] = {};
+  if (ids.length === 0) return out;
+  for (const table of ['touchpoints', 'visits', 'calls', 'releases']) {
+    const r = await dbc.query(
+      `SELECT client_id, COUNT(*)::int AS cnt FROM "${table}" WHERE client_id = ANY($1) GROUP BY client_id`,
+      [ids],
+    );
+    for (const row of r.rows) {
+      if (!out[row.client_id]) out[row.client_id] = {};
+      out[row.client_id][table] = row.cnt;
+    }
+  }
+  return out;
+}
+
+const DETAIL_COLUMNS = `id, first_name, last_name, middle_name, full_name,
+  birth_date, agency_name, municipality, province, barangay, full_address, created_at`;
+
+// GET /api/duplicates/:id/detail — the flagged client plus its candidate matches,
+// each with key fields and history-record counts, for the admin to compare before merging.
+duplicates.get('/:id/detail', authMiddleware, requireRole('admin'), async (c) => {
+  const id = c.req.param('id');
+  if (!isUuid(id)) return c.json({ error: 'Invalid client id' }, 400);
+
+  const dbc = await pool.connect();
+  try {
+    const base = await dbc.query(
+      `SELECT ${DETAIL_COLUMNS}, duplicate_metadata, duplicate_review_status, merged_into
+       FROM clients WHERE id = $1`,
+      [id],
+    );
+    if (base.rows.length === 0) return c.json({ error: 'Client not found' }, 404);
+    const client = base.rows[0];
+
+    const similar: Array<{ id: string; name?: string; score?: number; similarity_method?: string }> =
+      client.duplicate_metadata?.similar_clients ?? [];
+    const similarIds = similar.map((s) => s.id).filter(Boolean);
+
+    let candidates: any[] = [];
+    if (similarIds.length > 0) {
+      const cand = await dbc.query(`SELECT ${DETAIL_COLUMNS} FROM clients WHERE id = ANY($1) AND deleted_at IS NULL`, [similarIds]);
+      const byId = new Map(cand.rows.map((r: any) => [r.id, r]));
+      candidates = similar
+        .map((s) => {
+          const row = byId.get(s.id);
+          if (!row) return null; // candidate was deleted/merged away — skip
+          return { ...row, score: s.score, similarity_method: s.similarity_method };
+        })
+        .filter(Boolean);
+    }
+
+    const counts = await recordCountsByClient(dbc, [id, ...candidates.map((x) => x.id)]);
+    client.counts = counts[id] ?? {};
+    candidates = candidates.map((x) => ({ ...x, counts: counts[x.id] ?? {} }));
+
+    return c.json({ client, candidates });
+  } finally {
+    dbc.release();
+  }
+});
+
 // POST /api/duplicates/:id/mark-unique — admin confirms the client is NOT a duplicate.
 duplicates.post('/:id/mark-unique', authMiddleware, requireRole('admin'), async (c) => {
   const id = c.req.param('id');
