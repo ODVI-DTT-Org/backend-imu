@@ -24,6 +24,7 @@ import cron from 'node-cron';
 import authRoutes from './routes/auth.js';
 import uploadRoutes from './routes/upload.js';
 import clientsRoutes from './routes/clients.js';
+import duplicatesRoutes from './routes/duplicates.js';
 import usersRoutes from './routes/users.js';
 import agenciesRoutes from './routes/agencies.js';
 import caravansRoutes from './routes/caravans.js';
@@ -682,6 +683,7 @@ app.get('/', (c) => {
 app.route('/api/auth', authRoutes);
 app.route('/api/upload', uploadRoutes);
 app.route('/api/clients', clientsRoutes);
+app.route('/api/duplicates', duplicatesRoutes);
 app.route('/api/users', usersRoutes);
 app.route('/api/agencies', agenciesRoutes);
 app.route('/api/caravans', caravansRoutes);
