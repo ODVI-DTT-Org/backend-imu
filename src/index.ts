@@ -62,6 +62,7 @@ import phoneNumbersRoutes from './routes/phone-numbers.js';
 import cacheStatsRoutes from './routes/cache-stats.js';
 import healthRoutes from './routes/health.js';
 import notificationsRoutes from './routes/notifications.js';
+import geofenceRoutes from './routes/geofence.js';
 import './queues/workers.js'; // Start BullMQ workers
 
 const app = new Hono();
@@ -720,6 +721,7 @@ app.route('/api', addressesRoutes);
 app.route('/api', phoneNumbersRoutes);
 app.route('/api/cache', cacheStatsRoutes);
 app.route('/api/notifications', notificationsRoutes);
+app.route('/api/geofence', geofenceRoutes);
 
 // 404 handler
 app.notFound((c) => {
