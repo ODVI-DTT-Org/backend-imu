@@ -380,6 +380,8 @@ const CLIENT_LIST_SELECT_COLUMNS = `
   c.ext_name,
   c.fullname,
   c.full_address,
+  c.latitude,
+  c.longitude,
   c.account_code,
   c.account_number,
   c.rank,
