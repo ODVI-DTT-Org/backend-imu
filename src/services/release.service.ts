@@ -57,28 +57,38 @@ export const releaseService = {
   async findAll(userId: string, filters: any = {}): Promise<Release[]> {
     const { client_id, status, product_type, loan_type, limit = 50, offset = 0 } = filters;
 
-    let query = 'SELECT * FROM releases WHERE user_id = $1';
+    let query = `
+      SELECT
+        r.*,
+        NULLIF(TRIM(CONCAT_WS(' ', c.first_name, c.middle_name, c.last_name)), '') AS client_name,
+        c.first_name AS client_first_name,
+        c.middle_name AS client_middle_name,
+        c.last_name AS client_last_name
+      FROM releases r
+      LEFT JOIN clients c ON c.id = r.client_id
+      WHERE r.user_id = $1
+    `;
     const params: any[] = [userId];
     let paramIndex = 2;
 
     if (client_id) {
-      query += ` AND client_id = $${paramIndex++}`;
+      query += ` AND r.client_id = $${paramIndex++}`;
       params.push(client_id);
     }
     if (status) {
-      query += ` AND status = $${paramIndex++}`;
+      query += ` AND r.status = $${paramIndex++}`;
       params.push(status);
     }
     if (product_type) {
-      query += ` AND product_type = $${paramIndex++}`;
+      query += ` AND r.product_type = $${paramIndex++}`;
       params.push(product_type);
     }
     if (loan_type) {
-      query += ` AND loan_type = $${paramIndex++}`;
+      query += ` AND r.loan_type = $${paramIndex++}`;
       params.push(loan_type);
     }
 
-    query += ` ORDER BY created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
+    query += ` ORDER BY r.created_at DESC LIMIT $${paramIndex++} OFFSET $${paramIndex}`;
     params.push(limit, offset);
 
     const result = await pool.query(query, params);

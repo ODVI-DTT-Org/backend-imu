@@ -11,6 +11,17 @@ const visits = new Hono();
 
 const SIGNED_URL_EXPIRY = 3600; // 1 hour
 
+function inferVisitPhotoMimeType(filename: string, reportedType: string): string {
+  if (reportedType && reportedType !== 'application/octet-stream') return reportedType;
+
+  const extension = filename.split('.').pop()?.toLowerCase();
+  if (extension === 'png') return 'image/png';
+  if (extension === 'webp') return 'image/webp';
+  if (extension === 'jpg' || extension === 'jpeg') return 'image/jpeg';
+
+  return reportedType;
+}
+
 function extractS3Key(url: string): string | null {
   if (!url) return null;
   const bucket = process.env.STORAGE_BUCKET || 'imu-uploads';
@@ -101,11 +112,12 @@ visits.post('/', authMiddleware, async (c) => {
       // If photo file is present, upload it to S3
       if (file && file instanceof File) {
         console.log('[Visits] Photo file detected:', file.name, 'type:', file.type, 'size:', file.size);
+        const photoMimeType = inferVisitPhotoMimeType(file.name, file.type);
 
         try {
           // Validate file type
           const allowedTypes = ['image/jpeg', 'image/png', 'image/webp'];
-          if (!allowedTypes.includes(file.type)) {
+          if (!allowedTypes.includes(photoMimeType)) {
             console.error('[Visits] Invalid photo type:', file.type);
             return c.json({ success: false, message: `Invalid photo type. Only JPEG, PNG, and WebP are allowed` }, 400);
           }
@@ -126,7 +138,7 @@ visits.post('/', authMiddleware, async (c) => {
           const uploadResult = await storageService.upload({
             file: buffer,
             filename: file.name,
-            mimetype: file.type,
+            mimetype: photoMimeType,
             folder: 'visit_photo',
             maxSize: 10 * 1024 * 1024,
             allowedMimeTypes: allowedTypes,
@@ -146,7 +158,7 @@ visits.post('/', authMiddleware, async (c) => {
           visitData.photo_url = photoUrl;
           visitData._uploadKey = uploadResult.key;
           visitData._uploadSize = file.size;
-          visitData._uploadMime = file.type;
+          visitData._uploadMime = photoMimeType;
           visitData._uploadOriginalName = file.name;
 
           console.log('[Visits] Photo uploaded successfully:', photoUrl);
