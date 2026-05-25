@@ -449,6 +449,8 @@ function mapRowToClient(row: Record<string, any>) {
     barangay: row.psgc_barangay,
     postal_code: row.postal_code,
     psgc_id: row.psgc_id,
+    latitude: row.latitude,
+    longitude: row.longitude,
     is_starred: row.is_starred,
     loan_released: row.loan_released || false,
     loan_released_at: row.loan_released_at,
