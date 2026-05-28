@@ -1089,6 +1089,192 @@ clients.get('/nearby', authMiddleware, async (c) => {
   }
 });
 
+// GET /api/clients/pipeline - Pipeline view with recency buckets
+clients.get('/pipeline', authMiddleware, async (c) => {
+  const VALID_BUCKETS = ['overdue', 'due_soon', 'active', 'new', 'released'] as const;
+  type BucketName = typeof VALID_BUCKETS[number];
+
+  const user = c.get('user');
+  const bucketParam = c.req.query('bucket');
+  const page = Math.max(1, parseInt(c.req.query('page') || '1'));
+  const perPageRaw = Math.min(50, Math.max(1, parseInt(c.req.query('per_page') || '20')));
+  const provinceQuery = c.req.queries('province');
+  const municipalityQuery = c.req.queries('municipality');
+
+  // Validate bucket param
+  if (bucketParam && !VALID_BUCKETS.includes(bucketParam as BucketName)) {
+    return c.json({ error: `Invalid bucket. Must be one of: ${VALID_BUCKETS.join(', ')}` }, 400);
+  }
+
+  try {
+    // Determine territory filter (same pattern as /assigned)
+    const ROLE_LEVELS: Record<string, number> = {
+      'admin': 100, 'area_manager': 50, 'assistant_area_manager': 40,
+      'team_leader': 25, 'caravan': 20, 'tele': 15,
+    };
+    const userLevel = ROLE_LEVELS[user.role] || 0;
+    const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
+
+    const params: any[] = [];
+    let paramIndex = 1;
+    const areaConditions: string[] = [];
+
+    if (shouldFilterByArea) {
+      const areaResult = await pool.query(
+        `SELECT
+           COALESCE(ARRAY_AGG(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL), ARRAY[]::int[]) AS psgc_ids,
+           COALESCE(
+             ARRAY_AGG(DISTINCT LOWER(TRIM(ul.province)) || '|' || LOWER(TRIM(ul.municipality)))
+             FILTER (WHERE p.id IS NULL), ARRAY[]::text[]
+           ) AS fallback_area_keys
+         FROM user_locations ul
+         LEFT JOIN psgc p ON p.province = TRIM(ul.province) AND p.mun_city = TRIM(ul.municipality)
+         WHERE ul.user_id = $1 AND ul.deleted_at IS NULL`,
+        [user.sub]
+      );
+      const row = areaResult.rows[0];
+      const psgcIds = (row?.psgc_ids || []).map((id: any) => Number(id));
+      const fallbackKeys = (row?.fallback_area_keys || []).map((k: any) => String(k));
+
+      if (psgcIds.length === 0 && fallbackKeys.length === 0) {
+        // No assigned area — return empty result
+        return c.json({
+          summary: { overdue: { total: 0 }, due_soon: { total: 0 }, active: { total: 0 }, new: { total: 0 }, released: { total: 0 } },
+          ...(bucketParam ? { bucket: bucketParam, clients: [], pagination: { page, per_page: perPageRaw, total: 0, total_pages: 0 } } : {}),
+        });
+      }
+
+      if (psgcIds.length > 0) {
+        params.push(psgcIds);
+        areaConditions.push(`c.psgc_id = ANY($${paramIndex}::int[])`);
+        paramIndex++;
+      }
+      if (fallbackKeys.length > 0) {
+        params.push(fallbackKeys);
+        areaConditions.push(
+          `(LOWER(TRIM(COALESCE(c.province, ''))) || '|' || LOWER(TRIM(COALESCE(c.municipality, '')))) = ANY($${paramIndex}::text[])`
+        );
+        paramIndex++;
+      }
+    }
+
+    // Optional province/municipality filters
+    const extraConditions: string[] = [];
+    if (provinceQuery && provinceQuery.length > 0) {
+      params.push(provinceQuery);
+      extraConditions.push(`c.province = ANY($${paramIndex}::text[])`);
+      paramIndex++;
+    }
+    if (municipalityQuery && municipalityQuery.length > 0) {
+      params.push(municipalityQuery);
+      extraConditions.push(`c.municipality = ANY($${paramIndex}::text[])`);
+      paramIndex++;
+    }
+
+    const whereClause = [
+      'c.deleted_at IS NULL',
+      ...(areaConditions.length > 0 ? [`(${areaConditions.join(' OR ')})`] : []),
+      ...extraConditions,
+    ].join(' AND ');
+
+    // CTE that classifies clients into buckets
+    const cteSQL = `
+      WITH classified AS (
+        SELECT
+          c.id,
+          c.first_name,
+          c.last_name,
+          c.middle_name,
+          c.full_address,
+          c.product_type,
+          c.pension_type,
+          c.touchpoint_number,
+          c.last_touchpoint_date,
+          c.last_touchpoint_type,
+          c.next_touchpoint,
+          c.loan_released,
+          EXTRACT(EPOCH FROM (NOW() - c.last_touchpoint_date)) / 86400 AS days_since,
+          CASE
+            WHEN c.loan_released = true THEN 'released'
+            WHEN c.touchpoint_number = 0 OR c.last_touchpoint_date IS NULL THEN 'new'
+            WHEN c.last_touchpoint_date < NOW() - INTERVAL '30 days' THEN 'overdue'
+            WHEN c.last_touchpoint_date < NOW() - INTERVAL '14 days' THEN 'due_soon'
+            ELSE 'active'
+          END AS bucket
+        FROM clients c
+        WHERE ${whereClause}
+      )
+    `;
+
+    // Always run summary query
+    const summaryResult = await pool.query(
+      `${cteSQL} SELECT bucket, COUNT(*)::int AS total FROM classified GROUP BY bucket`,
+      params
+    );
+
+    const summary: Record<BucketName, { total: number }> = {
+      overdue: { total: 0 }, due_soon: { total: 0 }, active: { total: 0 },
+      new: { total: 0 }, released: { total: 0 },
+    };
+    for (const row of summaryResult.rows) {
+      if (row.bucket in summary) {
+        summary[row.bucket as BucketName] = { total: row.total };
+      }
+    }
+
+    if (!bucketParam) {
+      return c.json({ summary });
+    }
+
+    // Detail query for specific bucket
+    const offset = (page - 1) * perPageRaw;
+    const bucketParams = [...params, bucketParam, perPageRaw, offset];
+    const bucketParamIndex = paramIndex;
+
+    const detailResult = await pool.query(
+      `${cteSQL}
+       SELECT *, COUNT(*) OVER() AS total_count
+       FROM classified
+       WHERE bucket = $${bucketParamIndex}
+       ORDER BY days_since DESC NULLS LAST
+       LIMIT $${bucketParamIndex + 1} OFFSET $${bucketParamIndex + 2}`,
+      bucketParams
+    );
+
+    const total = detailResult.rows.length > 0 ? parseInt(detailResult.rows[0].total_count) : 0;
+    const clients = detailResult.rows.map((row: any) => ({
+      id: row.id,
+      first_name: row.first_name,
+      last_name: row.last_name,
+      middle_name: row.middle_name,
+      full_address: row.full_address,
+      product_type: row.product_type,
+      pension_type: row.pension_type,
+      touchpoint_number: row.touchpoint_number != null ? parseInt(row.touchpoint_number) : 0,
+      last_touchpoint_date: row.last_touchpoint_date,
+      last_touchpoint_type: row.last_touchpoint_type,
+      next_touchpoint: row.next_touchpoint,
+      days_since: row.days_since != null ? Math.round(parseFloat(row.days_since)) : null,
+      bucket: row.bucket,
+    }));
+
+    return c.json({
+      summary,
+      bucket: bucketParam,
+      clients,
+      pagination: {
+        page,
+        per_page: perPageRaw,
+        total,
+        total_pages: Math.ceil(total / perPageRaw),
+      },
+    });
+  } catch (error) {
+    console.error('[/clients/pipeline] Error:', error);
+    throw error;
+  }
+});
+
 // GET /api/clients/assigned - List ASSIGNED clients for Tele/Caravan (with area filter + callable status)
 clients.get('/assigned', authMiddleware, async (c) => {
   try {
