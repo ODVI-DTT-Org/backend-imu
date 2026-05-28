@@ -377,6 +377,8 @@ const CLIENT_LIST_SELECT_COLUMNS = `
   c.touchpoint_summary,
   c.touchpoint_number,
   c.next_touchpoint,
+  c.last_touchpoint_date,
+  c.last_touchpoint_type,
   c.ext_name,
   c.fullname,
   c.full_address,
@@ -461,6 +463,8 @@ function mapRowToClient(row: Record<string, any>) {
     touchpoint_number: summaryCount || row.touchpoint_number || 0,
     next_touchpoint: row.next_touchpoint || computedNextTouchpoint,
     next_touchpoint_number: row.next_touchpoint_number || null,
+    last_touchpoint_date: row.last_touchpoint_date || null,
+    last_touchpoint_type: row.last_touchpoint_type || null,
     // Legacy PCNICMS fields
     ext_name: row.ext_name,
     fullname: row.fullname,
