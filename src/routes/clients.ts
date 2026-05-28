@@ -991,7 +991,11 @@ clients.get('/nearby', authMiddleware, async (c) => {
   }
 
   const offset = (page - 1) * perPage;
-  const userLevel = user.level ?? 0;
+  const ROLE_LEVELS: Record<string, number> = {
+    'admin': 100, 'area_manager': 50, 'assistant_area_manager': 40,
+    'team_leader': 25, 'caravan': 20, 'tele': 15,
+  };
+  const userLevel = ROLE_LEVELS[user.role] || 0;
   const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
 
   // Build territory filter — same pattern as /assigned
