@@ -968,6 +968,127 @@ clients.get('/', authMiddleware, async (c) => {
   }
 });
 
+// GET /api/clients/nearby - Return clients within a given radius (hybrid geofence backend leg)
+clients.get('/nearby', authMiddleware, async (c) => {
+  const user = c.get('user');
+
+  // Parse + validate params
+  const lat = parseFloat(c.req.query('lat') ?? '');
+  const lng = parseFloat(c.req.query('lng') ?? '');
+  const radius = parseFloat(c.req.query('radius') ?? '7000');
+  const page = Math.max(1, parseInt(c.req.query('page') ?? '1'));
+  const perPage = Math.min(50, Math.max(1, parseInt(c.req.query('per_page') ?? '20')));
+
+  if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    return c.json({ error: 'Invalid lat/lng' }, 400);
+  }
+  if (isNaN(radius) || radius <= 0 || radius > 500000) {
+    return c.json({ error: 'radius must be between 1 and 500000 meters' }, 400);
+  }
+
+  const offset = (page - 1) * perPage;
+  const userLevel = user.level ?? 0;
+  const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
+
+  // Build territory filter — same pattern as /assigned
+  // If shouldFilterByArea, join with user_locations to restrict to assigned territory
+  const areaJoin = shouldFilterByArea ? `
+    JOIN user_locations ul
+      ON ul.user_id = $6
+     AND ul.deleted_at IS NULL
+     AND (
+       LOWER(TRIM(ul.province))    = LOWER(TRIM(COALESCE(c.province, a.province)))
+       AND LOWER(TRIM(ul.municipality)) = LOWER(TRIM(COALESCE(c.municipality, a.city)))
+     )
+  ` : '';
+
+  // Haversine distance in meters
+  const distanceExpr = `
+    6371000 * acos(
+      LEAST(1, cos(radians($1)) * cos(radians(COALESCE(c.latitude, a.latitude)))
+        * cos(radians(COALESCE(c.longitude, a.longitude)) - radians($2))
+        + sin(radians($1)) * sin(radians(COALESCE(c.latitude, a.latitude)))
+      )
+    )
+  `;
+
+  const params: any[] = [lat, lng, radius, perPage, offset];
+  if (shouldFilterByArea) params.push(user.sub);
+
+  const sql = `
+    WITH candidates AS (
+      SELECT
+        c.id,
+        c.first_name, c.middle_name, c.last_name,
+        COALESCE(c.full_address,
+          NULLIF(TRIM(
+            COALESCE(a.street, '') || ' ' ||
+            COALESCE(a.barangay, '') || ' ' ||
+            COALESCE(a.city, '') || ' ' ||
+            COALESCE(a.province, '')
+          ), '')
+        ) AS full_address,
+        COALESCE(c.latitude, a.latitude)   AS latitude,
+        COALESCE(c.longitude, a.longitude) AS longitude,
+        c.product_type,
+        c.pension_type,
+        c.touchpoint_number,
+        (${distanceExpr}) AS distance_meters
+      FROM clients c
+      LEFT JOIN addresses a ON a.id = (
+        SELECT a2.id FROM addresses a2
+        WHERE a2.client_id = c.id
+          AND a2.deleted_at IS NULL
+          AND a2.latitude  IS NOT NULL
+          AND a2.longitude IS NOT NULL
+        ORDER BY a2.is_primary DESC, a2.created_at ASC
+        LIMIT 1
+      )
+      ${areaJoin}
+      WHERE c.deleted_at IS NULL
+        AND (c.loan_released IS NULL OR c.loan_released = false)
+        AND COALESCE(c.latitude, a.latitude)  IS NOT NULL
+        AND COALESCE(c.longitude, a.longitude) IS NOT NULL
+    )
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM candidates
+    WHERE distance_meters <= $3
+    ORDER BY distance_meters
+    LIMIT $4 OFFSET $5
+  `;
+
+  try {
+    const result = await pool.query(sql, params);
+    const total = result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0;
+    const clients = result.rows.map((row: any) => ({
+      id: row.id,
+      first_name: row.first_name,
+      middle_name: row.middle_name,
+      last_name: row.last_name,
+      full_address: row.full_address,
+      latitude: row.latitude != null ? parseFloat(row.latitude) : null,
+      longitude: row.longitude != null ? parseFloat(row.longitude) : null,
+      product_type: row.product_type,
+      pension_type: row.pension_type,
+      touchpoint_number: row.touchpoint_number != null ? parseInt(row.touchpoint_number) : 0,
+      distance_meters: Math.round(parseFloat(row.distance_meters)),
+    }));
+
+    return c.json({
+      clients,
+      pagination: {
+        page,
+        per_page: perPage,
+        total,
+        total_pages: Math.ceil(total / perPage),
+      },
+    });
+  } catch (error) {
+    console.error('[/clients/nearby] Error:', error);
+    throw error;
+  }
+});
+
 // GET /api/clients/assigned - List ASSIGNED clients for Tele/Caravan (with area filter + callable status)
 clients.get('/assigned', authMiddleware, async (c) => {
   try {
