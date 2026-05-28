@@ -401,7 +401,8 @@ const CLIENT_LIST_SELECT_COLUMNS = `
   c.deleted_by,
   c.deleted_at,
   c.created_at,
-  c.updated_at
+  c.updated_at,
+  c.touchpoint_reason_values
 `;
 
 // Helper to map DB row to Client type
@@ -465,6 +466,7 @@ function mapRowToClient(row: Record<string, any>) {
     next_touchpoint_number: row.next_touchpoint_number || null,
     last_touchpoint_date: row.last_touchpoint_date || null,
     last_touchpoint_type: row.last_touchpoint_type || null,
+    touchpoint_reason_values: row.touchpoint_reason_values || [],
     // Legacy PCNICMS fields
     ext_name: row.ext_name,
     fullname: row.fullname,
@@ -1097,9 +1099,9 @@ clients.get('/nearby', authMiddleware, async (c) => {
   }
 });
 
-// GET /api/clients/pipeline - Pipeline view with recency buckets
+// GET /api/clients/pipeline - Pipeline view with status/reason-based buckets
 clients.get('/pipeline', authMiddleware, async (c) => {
-  const VALID_BUCKETS = ['overdue', 'due_soon', 'active', 'new', 'released'] as const;
+  const VALID_BUCKETS = ['hot', 'warm', 'cold', 'disqualified', 'released'] as const;
   type BucketName = typeof VALID_BUCKETS[number];
 
   const user = c.get('user');
@@ -1147,7 +1149,7 @@ clients.get('/pipeline', authMiddleware, async (c) => {
       if (psgcIds.length === 0 && fallbackKeys.length === 0) {
         // No assigned area — return empty result
         return c.json({
-          summary: { overdue: { total: 0 }, due_soon: { total: 0 }, active: { total: 0 }, new: { total: 0 }, released: { total: 0 } },
+          summary: { hot: { total: 0 }, warm: { total: 0 }, cold: { total: 0 }, disqualified: { total: 0 }, released: { total: 0 } },
           ...(bucketParam ? { bucket: bucketParam, clients: [], pagination: { page, per_page: perPageRaw, total: 0, total_pages: 0 } } : {}),
         });
       }
@@ -1185,53 +1187,100 @@ clients.get('/pipeline', authMiddleware, async (c) => {
       ...extraConditions,
     ].join(' AND ');
 
-    // CTE that classifies clients into buckets
+    // Cache key for summary (not detail) — includes user + optional province/municipality filters
+    const pKey = (provinceQuery || []).slice().sort().join(',');
+    const mKey = (municipalityQuery || []).slice().sort().join(',');
+    const cacheKey = `pipeline:summary:${user.sub}:p=${pKey}:m=${mKey}`;
+
+    // CTE that classifies clients into status/reason buckets
     const cteSQL = `
-      WITH classified AS (
+      WITH normalized AS (
         SELECT
-          c.id,
-          c.first_name,
-          c.last_name,
-          c.middle_name,
-          c.full_address,
-          c.product_type,
-          c.pension_type,
-          c.touchpoint_number,
-          c.last_touchpoint_date,
-          c.last_touchpoint_type,
-          c.next_touchpoint,
-          c.loan_released,
-          EXTRACT(EPOCH FROM (NOW() - c.last_touchpoint_date)) / 86400 AS days_since,
-          CASE
-            WHEN c.loan_released = true THEN 'released'
-            WHEN c.touchpoint_number = 0 OR c.last_touchpoint_date IS NULL THEN 'new'
-            WHEN c.last_touchpoint_date < NOW() - INTERVAL '30 days' THEN 'overdue'
-            WHEN c.last_touchpoint_date < NOW() - INTERVAL '14 days' THEN 'due_soon'
-            ELSE 'active'
-          END AS bucket
+          c.id, c.first_name, c.last_name, c.middle_name,
+          c.full_address, c.product_type, c.pension_type,
+          c.touchpoint_number, c.last_touchpoint_date, c.last_touchpoint_type, c.next_touchpoint,
+          c.touchpoint_reason_values,
+          LOWER(TRIM(c.touchpoint_reason_values[array_length(c.touchpoint_reason_values, 1)])) AS norm_reason,
+          EXISTS(
+            SELECT 1 FROM releases r
+            WHERE r.client_id = c.id AND r.status = 'approved'
+          ) AS is_released
         FROM clients c
         WHERE ${whereClause}
+      ),
+      classified AS (
+        SELECT *,
+          EXTRACT(EPOCH FROM (NOW() - last_touchpoint_date)) / 86400 AS days_since,
+          CASE
+            WHEN is_released THEN 'released'
+            WHEN norm_reason IN ('loan release', 'released cheque for remaining change / differential') THEN 'released'
+            WHEN norm_reason IN (
+              'interested', 'loan inquiry',
+              'for verification', 'for processing / approval / request',
+              'for processing/approval/request', 'for processing',
+              'for update', 'for ada authentication', 'for ada compliance',
+              'apply for pusu membership', 'apply for pusu / lika membership'
+            ) THEN 'hot'
+            WHEN norm_reason = 'undecided' THEN 'warm'
+            WHEN norm_reason IN (
+              'not around', 'unlocated',
+              'inaccessible / critical area', 'moved out'
+            ) THEN 'cold'
+            WHEN norm_reason IN (
+              'not interested', 'deceased', 'overaged', 'abroad',
+              'disapproved', 'backed out',
+              'with existing loan in other lis', 'with existing loan to other li''s',
+              'not amenable to our product criteria', 'poor health condition',
+              'returned atm', 'not in the list',
+              'interested, but declined due to family decision'
+            ) THEN 'disqualified'
+            ELSE NULL
+          END AS bucket
+        FROM normalized
       )
     `;
 
-    // Always run summary query
+    const summary: Record<BucketName, { total: number }> = {
+      hot: { total: 0 }, warm: { total: 0 }, cold: { total: 0 },
+      disqualified: { total: 0 }, released: { total: 0 },
+    };
+
+    if (!bucketParam) {
+      // Check Redis cache for summary
+      const cache = getCacheService();
+      const cached = await cache.get<Record<BucketName, { total: number }>>(cacheKey);
+      console.log('[/clients/pipeline] Cache', cached ? 'HIT' : 'MISS', cacheKey);
+
+      if (cached) {
+        return c.json({ summary: cached });
+      }
+
+      // Cache miss — run summary query
+      const summaryResult = await pool.query(
+        `${cteSQL} SELECT bucket, COUNT(*)::int AS total FROM classified WHERE bucket IS NOT NULL GROUP BY bucket`,
+        params
+      );
+      for (const row of summaryResult.rows) {
+        if (row.bucket in summary) {
+          summary[row.bucket as BucketName] = { total: row.total };
+        }
+      }
+
+      // Cache the summary for 1 day
+      await cache.set(cacheKey, summary, 86400);
+
+      return c.json({ summary });
+    }
+
+    // Summary is needed alongside detail — run it fresh (not cached for detail requests)
     const summaryResult = await pool.query(
-      `${cteSQL} SELECT bucket, COUNT(*)::int AS total FROM classified GROUP BY bucket`,
+      `${cteSQL} SELECT bucket, COUNT(*)::int AS total FROM classified WHERE bucket IS NOT NULL GROUP BY bucket`,
       params
     );
-
-    const summary: Record<BucketName, { total: number }> = {
-      overdue: { total: 0 }, due_soon: { total: 0 }, active: { total: 0 },
-      new: { total: 0 }, released: { total: 0 },
-    };
     for (const row of summaryResult.rows) {
       if (row.bucket in summary) {
         summary[row.bucket as BucketName] = { total: row.total };
       }
-    }
-
-    if (!bucketParam) {
-      return c.json({ summary });
     }
 
     // Detail query for specific bucket
@@ -1244,7 +1293,7 @@ clients.get('/pipeline', authMiddleware, async (c) => {
        SELECT *, COUNT(*) OVER() AS total_count
        FROM classified
        WHERE bucket = $${bucketParamIndex}
-       ORDER BY days_since DESC NULLS LAST
+       ORDER BY last_touchpoint_date DESC NULLS LAST
        LIMIT $${bucketParamIndex + 1} OFFSET $${bucketParamIndex + 2}`,
       bucketParams
     );
@@ -1262,6 +1311,7 @@ clients.get('/pipeline', authMiddleware, async (c) => {
       last_touchpoint_date: row.last_touchpoint_date,
       last_touchpoint_type: row.last_touchpoint_type,
       next_touchpoint: row.next_touchpoint,
+      touchpoint_reason_values: row.touchpoint_reason_values || [],
       days_since: row.days_since != null ? Math.round(parseFloat(row.days_since)) : null,
       bucket: row.bucket,
     }));
