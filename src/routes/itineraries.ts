@@ -9,6 +9,7 @@ import {
   NotFoundError,
   AuthorizationError,
 } from '../errors/index.js';
+import { getCacheService } from '../services/cache/redis-cache.js';
 
 const itineraries = new Hono();
 
@@ -619,6 +620,259 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
     }
     console.error('Bulk delete itineraries error:', error);
     throw new Error('Failed to bulk delete itineraries');
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Haversine helpers (flat-Earth approximation sufficient for ≤ 1km corridor)
+// ─────────────────────────────────────────────────────────────────────────────
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000; // Earth radius in metres
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function pointToSegmentMeters(
+  px: number, py: number,
+  ax: number, ay: number,
+  bx: number, by: number,
+): number {
+  const dx = bx - ax, dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return haversineMeters(px, py, ax, ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  const nx = ax + t * dx, ny = ay + t * dy;
+  return haversineMeters(px, py, nx, ny);
+}
+
+// The bucket-classification logic (mirrors /clients/pipeline)
+const BUCKET_CASE_SQL = `
+  CASE
+    WHEN EXISTS(SELECT 1 FROM releases r WHERE r.client_id = c.id AND r.status = 'approved') THEN 'released'
+    WHEN LOWER(TRIM(c.touchpoint_reason_values[array_length(c.touchpoint_reason_values, 1)])) IN (
+      'loan release', 'released cheque for remaining change / differential'
+    ) THEN 'released'
+    WHEN LOWER(TRIM(c.touchpoint_reason_values[array_length(c.touchpoint_reason_values, 1)])) IN (
+      'interested', 'loan inquiry',
+      'for verification', 'for processing / approval / request',
+      'for processing/approval/request', 'for processing',
+      'for update', 'for ada authentication', 'for ada compliance',
+      'apply for pusu membership', 'apply for pusu / lika membership'
+    ) THEN 'hot'
+    WHEN LOWER(TRIM(c.touchpoint_reason_values[array_length(c.touchpoint_reason_values, 1)])) = 'undecided' THEN 'warm'
+    WHEN LOWER(TRIM(c.touchpoint_reason_values[array_length(c.touchpoint_reason_values, 1)])) IN (
+      'not around', 'unlocated',
+      'inaccessible / critical area', 'moved out'
+    ) THEN 'cold'
+    WHEN LOWER(TRIM(c.touchpoint_reason_values[array_length(c.touchpoint_reason_values, 1)])) IN (
+      'not interested', 'deceased', 'overaged', 'abroad',
+      'disapproved', 'backed out',
+      'with existing loan in other lis', 'with existing loan to other li''s',
+      'not amenable to our product criteria', 'poor health condition',
+      'returned atm', 'not in the list',
+      'interested, but declined due to family decision'
+    ) THEN 'disqualified'
+    ELSE NULL
+  END AS bucket
+`;
+
+// GET /api/itineraries/route-suggestions
+itineraries.get('/route-suggestions', authMiddleware, requirePermission('itineraries', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const today = new Date();
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+    const dateParam = c.req.query('date') || todayStr;
+    const corridorMeters = Math.max(50, Math.min(5000, parseInt(c.req.query('corridor_meters') || '500')));
+    const limit = Math.max(1, Math.min(50, parseInt(c.req.query('limit') || '20')));
+
+    const cacheKey = `route_suggestions:${user.sub}:${dateParam}:${corridorMeters}`;
+    const cache = getCacheService();
+    const cached = await cache.get<object>(cacheKey);
+    if (cached) return c.json(cached);
+
+    // 1. Fetch today's itinerary stops with client coordinates, ordered by scheduled_time
+    const stopsResult = await pool.query(
+      `SELECT i.client_id, c.latitude, c.longitude
+       FROM itineraries i
+       JOIN clients c ON c.id = i.client_id
+       WHERE i.user_id = $1
+         AND i.scheduled_date = $2::date
+         AND c.latitude IS NOT NULL
+         AND c.longitude IS NOT NULL
+         AND c.deleted_at IS NULL
+       ORDER BY i.scheduled_time NULLS LAST, i.created_at`,
+      [user.sub, dateParam]
+    );
+
+    const stops = stopsResult.rows as Array<{ client_id: string; latitude: number; longitude: number }>;
+
+    if (stops.length < 2) {
+      const result = { suggestions: [], reason: 'insufficient_route_data', date: dateParam, corridor_meters: corridorMeters, stops_used: stops.length };
+      await cache.set(cacheKey, result, 300);
+      return c.json(result);
+    }
+
+    // Build bounding box across all segments with corridor margin
+    // ~111,000m per degree of latitude; longitude varies but using same factor is fine at this scale
+    const metersToDeg = corridorMeters / 111000;
+    const lats = stops.map(s => s.latitude);
+    const lngs = stops.map(s => s.longitude);
+    const minLat = Math.min(...lats) - metersToDeg;
+    const maxLat = Math.max(...lats) + metersToDeg;
+    const minLng = Math.min(...lngs) - metersToDeg;
+    const maxLng = Math.max(...lngs) + metersToDeg;
+
+    // Get client IDs already in today's itinerary (to exclude)
+    const existingInItinerary = new Set(stops.map(s => s.client_id));
+    // Also fetch any itinerary clients that may not have coords (still want to exclude them)
+    const allTodayResult = await pool.query(
+      `SELECT client_id FROM itineraries WHERE user_id = $1 AND scheduled_date = $2::date`,
+      [user.sub, dateParam]
+    );
+    for (const row of allTodayResult.rows) existingInItinerary.add(row.client_id);
+
+    // 2. Territory filter — same ROLE_LEVELS pattern as /clients/pipeline
+    const ROLE_LEVELS: Record<string, number> = {
+      'admin': 100, 'area_manager': 50, 'assistant_area_manager': 40,
+      'team_leader': 25, 'caravan': 20, 'tele': 15,
+    };
+    const userLevel = ROLE_LEVELS[user.role] || 0;
+    const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
+
+    const areaParams: any[] = [];
+    const areaConditions: string[] = [];
+    let paramIndex = 1;
+
+    if (shouldFilterByArea) {
+      const areaResult = await pool.query(
+        `SELECT
+           COALESCE(ARRAY_AGG(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL), ARRAY[]::int[]) AS psgc_ids,
+           COALESCE(
+             ARRAY_AGG(DISTINCT LOWER(TRIM(ul.province)) || '|' || LOWER(TRIM(ul.municipality)))
+             FILTER (WHERE p.id IS NULL), ARRAY[]::text[]
+           ) AS fallback_area_keys
+         FROM user_locations ul
+         LEFT JOIN psgc p ON p.province = TRIM(ul.province) AND p.mun_city = TRIM(ul.municipality)
+         WHERE ul.user_id = $1 AND ul.deleted_at IS NULL`,
+        [user.sub]
+      );
+      const row = areaResult.rows[0];
+      const psgcIds = (row?.psgc_ids || []).map((id: any) => Number(id));
+      const fallbackKeys = (row?.fallback_area_keys || []).map((k: any) => String(k));
+
+      if (psgcIds.length === 0 && fallbackKeys.length === 0) {
+        const result = { suggestions: [], reason: 'no_territory_assigned', date: dateParam, corridor_meters: corridorMeters, stops_used: stops.length };
+        await cache.set(cacheKey, result, 300);
+        return c.json(result);
+      }
+
+      if (psgcIds.length > 0) {
+        areaParams.push(psgcIds);
+        areaConditions.push(`c.psgc_id = ANY($${paramIndex}::int[])`);
+        paramIndex++;
+      }
+      if (fallbackKeys.length > 0) {
+        areaParams.push(fallbackKeys);
+        areaConditions.push(
+          `(LOWER(TRIM(COALESCE(c.province, ''))) || '|' || LOWER(TRIM(COALESCE(c.municipality, '')))) = ANY($${paramIndex}::text[])`
+        );
+        paramIndex++;
+      }
+    }
+
+    // 3. Candidate query with bounding-box pre-filter
+    const bbParams = [...areaParams, minLat, maxLat, minLng, maxLng];
+    const areaWhere = areaConditions.length > 0 ? `AND (${areaConditions.join(' OR ')})` : '';
+
+    const candidatesResult = await pool.query(
+      `SELECT c.id, c.first_name, c.last_name, c.middle_name, c.full_address,
+              c.latitude, c.longitude, c.touchpoint_number, c.last_touchpoint_date,
+              c.loan_released, c.touchpoint_reason_values,
+              ${BUCKET_CASE_SQL}
+       FROM clients c
+       WHERE c.deleted_at IS NULL
+         AND c.loan_released IS NOT TRUE
+         AND c.latitude IS NOT NULL
+         AND c.longitude IS NOT NULL
+         AND c.latitude BETWEEN $${paramIndex} AND $${paramIndex + 1}
+         AND c.longitude BETWEEN $${paramIndex + 2} AND $${paramIndex + 3}
+         ${areaWhere}`,
+      [...bbParams]
+    );
+    paramIndex += 4;
+
+    // 4. Compute perpendicular distance to route for each candidate
+    const segments: Array<[number, number, number, number]> = [];
+    for (let i = 0; i < stops.length - 1; i++) {
+      segments.push([stops[i].latitude, stops[i].longitude, stops[i + 1].latitude, stops[i + 1].longitude]);
+    }
+
+    type Suggestion = {
+      id: string;
+      first_name: string;
+      last_name: string;
+      middle_name: string | null;
+      full_address: string | null;
+      latitude: number;
+      longitude: number;
+      distance_to_route_meters: number;
+      bucket: string | null;
+      touchpoint_number: number;
+      last_touchpoint_date: string | null;
+    };
+
+    const suggestions: Suggestion[] = [];
+
+    for (const row of candidatesResult.rows as any[]) {
+      // Skip clients already in today's itinerary
+      if (existingInItinerary.has(row.id)) continue;
+
+      let minDist = Infinity;
+      for (const [ax, ay, bx, by] of segments) {
+        const d = pointToSegmentMeters(row.latitude, row.longitude, ax, ay, bx, by);
+        if (d < minDist) minDist = d;
+      }
+
+      if (minDist <= corridorMeters) {
+        suggestions.push({
+          id: row.id,
+          first_name: row.first_name,
+          last_name: row.last_name,
+          middle_name: row.middle_name ?? null,
+          full_address: row.full_address ?? null,
+          latitude: row.latitude,
+          longitude: row.longitude,
+          distance_to_route_meters: Math.round(minDist),
+          bucket: row.bucket ?? null,
+          touchpoint_number: row.touchpoint_number ?? 0,
+          last_touchpoint_date: row.last_touchpoint_date ?? null,
+        });
+      }
+    }
+
+    // Sort by distance ascending, take top limit
+    suggestions.sort((a, b) => a.distance_to_route_meters - b.distance_to_route_meters);
+    const topSuggestions = suggestions.slice(0, limit);
+
+    const result = {
+      suggestions: topSuggestions,
+      date: dateParam,
+      corridor_meters: corridorMeters,
+      stops_used: stops.length,
+    };
+
+    await cache.set(cacheKey, result, 300); // 5 min TTL
+    return c.json(result);
+  } catch (error) {
+    console.error('[/itineraries/route-suggestions] Error:', error);
+    throw new Error('Failed to compute route suggestions');
   }
 });
 

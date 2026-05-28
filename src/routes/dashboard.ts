@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
+import { getCacheService } from '../services/cache/redis-cache.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import {
@@ -901,6 +902,182 @@ dashboard.get('/kpi', authMiddleware, requirePermission('dashboard', 'read'), as
     }
     console.error('Get KPIs error:', error);
     throw new Error('Failed to get KPIs');
+  }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/dashboard/field-activity — proximity→arrival→touchpoint funnel
+// ─────────────────────────────────────────────────────────────────────────────
+dashboard.get('/field-activity', authMiddleware, requireRole('admin', 'area_manager', 'assistant_area_manager'), async (c) => {
+  try {
+    const user = c.get('user');
+
+    // Default: last 7 days
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const fmt = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const defaultFrom = fmt(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6));
+    const defaultTo = fmt(now);
+
+    const dateFrom = c.req.query('date_from') || defaultFrom;
+    const dateTo = c.req.query('date_to') || defaultTo;
+
+    const cache = getCacheService();
+    const cacheKey = `field_activity:${user.sub}:${dateFrom}:${dateTo}`;
+    const cached = await cache.get<object>(cacheKey);
+    if (cached) return c.json(cached);
+
+    // Territory filter for area_managers
+    let agentWhere = `u.role IN ('caravan', 'tele') AND u.is_active = true`;
+    const agentParams: any[] = [dateFrom, dateTo];
+    let paramIdx = 3;
+
+    if (user.role !== 'admin') {
+      // Manager sees only their group members
+      const groupResult = await pool.query(
+        `SELECT gm.user_id
+         FROM groups g
+         JOIN group_members gm ON gm.group_id = g.id
+         WHERE g.area_manager_id = $1 OR g.assistant_area_manager_id = $1`,
+        [user.sub]
+      );
+      const memberIds = groupResult.rows.map((r: any) => r.user_id);
+      if (memberIds.length === 0) {
+        // No group members — return empty
+        const emptyResult = {
+          range: { from: dateFrom, to: dateTo },
+          summary: {
+            proximity_events: 0, arrivals: 0, arrival_rate: 0,
+            touchpoints_from_arrivals: 0, touchpoint_follow_through: 0, distance_covered_km: 0,
+          },
+          per_agent: [],
+        };
+        await cache.set(cacheKey, emptyResult, 3600);
+        return c.json(emptyResult);
+      }
+      agentParams.push(memberIds);
+      agentWhere += ` AND u.id = ANY($${paramIdx}::uuid[])`;
+      paramIdx++;
+    }
+
+    // Aggregate proximity events, arrivals, and 30-minute touchpoint linking
+    const agentStatsResult = await pool.query(
+      `SELECT
+         u.id AS user_id,
+         u.first_name || ' ' || u.last_name AS name,
+         COALESCE(prox.cnt, 0) AS proximity_events,
+         COALESCE(arr.cnt, 0) AS arrivals,
+         COALESCE(tp_arr.cnt, 0) AS touchpoints_from_arrivals
+       FROM users u
+       LEFT JOIN (
+         SELECT user_id, COUNT(*) AS cnt
+         FROM geofence_proximity
+         WHERE detected_at::date BETWEEN $1::date AND $2::date
+         GROUP BY user_id
+       ) prox ON prox.user_id = u.id
+       LEFT JOIN (
+         SELECT user_id, COUNT(*) AS cnt
+         FROM geofence_arrivals
+         WHERE arrived_at::date BETWEEN $1::date AND $2::date
+         GROUP BY user_id
+       ) arr ON arr.user_id = u.id
+       LEFT JOIN (
+         SELECT a.user_id, COUNT(DISTINCT a.id) AS cnt
+         FROM geofence_arrivals a
+         JOIN touchpoints t ON t.user_id = a.user_id
+           AND t.client_id = a.client_id
+           AND t.created_at BETWEEN a.arrived_at AND a.arrived_at + INTERVAL '30 minutes'
+         WHERE a.arrived_at::date BETWEEN $1::date AND $2::date
+         GROUP BY a.user_id
+       ) tp_arr ON tp_arr.user_id = u.id
+       WHERE ${agentWhere}
+       ORDER BY COALESCE(arr.cnt, 0) DESC`,
+      agentParams
+    );
+
+    // Per-agent distance: sum haversine between consecutive arrivals ordered by arrived_at
+    const distResult = await pool.query(
+      `SELECT
+         user_id,
+         SUM(
+           2 * 6371 * ASIN(
+             SQRT(
+               POWER(SIN((lat2 - lat1) * PI() / 360), 2) +
+               COS(lat1 * PI() / 180) * COS(lat2 * PI() / 180) *
+               POWER(SIN((lng2 - lng1) * PI() / 360), 2)
+             )
+           )
+         ) AS dist_km
+       FROM (
+         SELECT
+           user_id,
+           agent_latitude AS lat1,
+           agent_longitude AS lng1,
+           LAG(agent_latitude)  OVER (PARTITION BY user_id ORDER BY arrived_at) AS lat2,
+           LAG(agent_longitude) OVER (PARTITION BY user_id ORDER BY arrived_at) AS lng2
+         FROM geofence_arrivals
+         WHERE arrived_at::date BETWEEN $1::date AND $2::date
+       ) sub
+       WHERE lat2 IS NOT NULL
+       GROUP BY user_id`,
+      [dateFrom, dateTo]
+    );
+    const distByAgent: Record<string, number> = {};
+    for (const r of distResult.rows as any[]) {
+      distByAgent[r.user_id] = parseFloat(r.dist_km) || 0;
+    }
+
+    // Build per-agent result with alert flags
+    let totalProximity = 0, totalArrivals = 0, totalTpFromArrivals = 0, totalDistKm = 0;
+
+    const perAgent = agentStatsResult.rows.map((r: any) => {
+      const proximityEvents = parseInt(r.proximity_events) || 0;
+      const arrivals = parseInt(r.arrivals) || 0;
+      const touchpoints = parseInt(r.touchpoints_from_arrivals) || 0;
+      const arrivalRate = proximityEvents > 0 ? arrivals / proximityEvents : 0;
+      const followThroughRate = arrivals > 0 ? touchpoints / arrivals : 0;
+      const distKm = distByAgent[r.user_id] || 0;
+
+      totalProximity += proximityEvents;
+      totalArrivals += arrivals;
+      totalTpFromArrivals += touchpoints;
+      totalDistKm += distKm;
+
+      let alertFlag: string | null = null;
+      if (followThroughRate < 0.6 && arrivals >= 5) {
+        alertFlag = 'low_follow_through';
+      }
+
+      return {
+        user_id: r.user_id,
+        name: r.name,
+        proximity_events: proximityEvents,
+        arrivals,
+        touchpoints,
+        arrival_rate: Math.round(arrivalRate * 100) / 100,
+        follow_through_rate: Math.round(followThroughRate * 100) / 100,
+        alert_flag: alertFlag,
+      };
+    });
+
+    const result = {
+      range: { from: dateFrom, to: dateTo },
+      summary: {
+        proximity_events: totalProximity,
+        arrivals: totalArrivals,
+        arrival_rate: totalProximity > 0 ? Math.round((totalArrivals / totalProximity) * 100) / 100 : 0,
+        touchpoints_from_arrivals: totalTpFromArrivals,
+        touchpoint_follow_through: totalArrivals > 0 ? Math.round((totalTpFromArrivals / totalArrivals) * 100) / 100 : 0,
+        distance_covered_km: Math.round(totalDistKm * 10) / 10,
+      },
+      per_agent: perAgent,
+    };
+
+    await cache.set(cacheKey, result, 3600); // 1 hour TTL
+    return c.json(result);
+  } catch (error) {
+    console.error('[/dashboard/field-activity] Error:', error);
+    throw new Error('Failed to compute field activity');
   }
 });
 
