@@ -988,8 +988,8 @@ clients.get('/nearby', authMiddleware, async (c) => {
   if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
     return c.json({ error: 'Invalid lat/lng' }, 400);
   }
-  if (isNaN(radius) || radius <= 0 || radius > 500000) {
-    return c.json({ error: 'radius must be between 1 and 500000 meters' }, 400);
+  if (isNaN(radius) || radius <= 0 || radius > 15000) {
+    return c.json({ error: 'radius must be between 1 and 15000 meters' }, 400);
   }
 
   const offset = (page - 1) * perPage;
