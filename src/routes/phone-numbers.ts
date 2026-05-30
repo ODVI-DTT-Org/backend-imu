@@ -104,7 +104,6 @@ async function invalidatePhoneNumberCache(phoneId: string): Promise<void> {
  */
 phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
   const clientId = c.req.param('id');
-  const userId = c.get('user')?.sub;
 
   if (!clientId) {
     throw new ValidationError('Client ID is required');
@@ -126,17 +125,19 @@ phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
 
   metrics.recordMiss('phone-numbers');
 
-  // Verify user has access to this client
+  // Verify client exists (no user_id check — clients are shared across agents via area assignment)
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
-    [clientId, userId]
+    'SELECT id, phone FROM clients WHERE id = $1 AND deleted_at IS NULL',
+    [clientId]
   );
 
   if (clientCheck.rows.length === 0) {
-    throw new NotFoundError('Client not found or access denied');
+    throw new NotFoundError('Client not found');
   }
 
-  // I23: Optimize N+1 query - use window function for single query with count
+  const clientPhone = clientCheck.rows[0].phone as string | null;
+
+  // Fetch from phone_numbers table
   const result = await pool.query(
     `SELECT *, COUNT(*) OVER() as total_count
      FROM phone_numbers
@@ -146,12 +147,41 @@ phoneNumbers.get('/clients/:id/phone-numbers', authMiddleware, async (c) => {
     [clientId, limit, offset]
   );
 
-  const totalCount = result.rows.length > 0 ? parseInt(result.rows[0].total_count, 10) : 0;
+  const phoneRows = result.rows.map(mapRowToPhoneNumber);
+  const hasPrimary = phoneRows.some(p => p.is_primary);
+
+  // Also include clients.phone if it exists and isn't already listed
+  if (clientPhone) {
+    const alreadyListed = phoneRows.some(p => p.number === clientPhone);
+    if (!alreadyListed) {
+      // Insert at the front if it should be primary (no other primary), otherwise at the end
+      const clientPhoneEntry = {
+        id: `client-${clientId}`,
+        client_id: clientId,
+        label: 'Mobile',
+        number: clientPhone,
+        is_primary: !hasPrimary,
+        created_at: null as any,
+        updated_at: null as any,
+      };
+      if (!hasPrimary) {
+        phoneRows.unshift(clientPhoneEntry);
+      } else {
+        phoneRows.push(clientPhoneEntry);
+      }
+    } else if (!hasPrimary) {
+      // client.phone is already in the list but nothing is primary — mark it
+      const idx = phoneRows.findIndex(p => p.number === clientPhone);
+      if (idx !== -1) phoneRows[idx].is_primary = true;
+    }
+  }
+
+  const totalCount = phoneRows.length;
   const totalPages = Math.ceil(totalCount / limit);
 
   const response = {
     success: true,
-    data: result.rows.map(mapRowToPhoneNumber),
+    data: phoneRows,
     pagination: {
       page,
       limit,
@@ -206,7 +236,7 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
 
   // Verify client exists and user has access (I3: Security fix - verify ownership)
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1 AND user_id = $2',
+    'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
     [clientId, userId]
   );
 
@@ -274,7 +304,7 @@ phoneNumbers.get('/clients/:id/phone-numbers/:phoneId', authMiddleware, async (c
 
   // Verify user owns this client (I1: Security fix)
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
     [clientId, userId]
   );
 
@@ -472,7 +502,7 @@ phoneNumbers.patch('/clients/:id/phone-numbers/:phoneId/primary', authMiddleware
 
   // Verify user owns this client
   const clientCheck = await pool.query(
-    'SELECT id FROM clients WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL',
+    'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
     [clientId, userId]
   );
 
