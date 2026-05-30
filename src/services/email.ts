@@ -7,6 +7,12 @@ import crypto from 'crypto';
 
 type EmailProvider = 'resend' | 'sendgrid' | 'console' | 'mock';
 
+const SMTP_HOST = process.env.SMTP_HOST ?? '';
+const SMTP_PORT = parseInt(process.env.SMTP_PORT ?? '587');
+const SMTP_USER = process.env.SMTP_USER ?? '';
+const SMTP_PASS = process.env.SMTP_PASS ?? '';
+const SMTP_FROM = process.env.SMTP_FROM ?? process.env.EMAIL_FROM ?? 'IMU <noreply@imu.app>';
+
 interface EmailOptions {
   to: string | string[];
   subject: string;
@@ -345,6 +351,39 @@ class EmailService {
       subject: template.subject,
       html: template.html,
       text: template.text,
+    });
+  }
+
+  async sendFeedback(opts: {
+    fromEmail: string;
+    fromName: string;
+    message: string;
+    appVersion?: string;
+  }): Promise<void> {
+    const nodemailer = await import('nodemailer');
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
+      auth: { user: SMTP_USER, pass: SMTP_PASS },
+    });
+    await transporter.sendMail({
+      from: SMTP_FROM,
+      to: 'egonzaga@oakdriveventures.com',
+      replyTo: opts.fromEmail,
+      subject: `[IMU Feedback] from ${opts.fromName}`,
+      text: [
+        `From: ${opts.fromName} <${opts.fromEmail}>`,
+        opts.appVersion ? `App version: ${opts.appVersion}` : '',
+        '',
+        opts.message,
+      ].filter(Boolean).join('\n'),
+      html: `
+        <p><strong>From:</strong> ${opts.fromName} &lt;${opts.fromEmail}&gt;</p>
+        ${opts.appVersion ? `<p><strong>App version:</strong> ${opts.appVersion}</p>` : ''}
+        <hr>
+        <p style="white-space:pre-wrap">${opts.message.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</p>
+      `,
     });
   }
 }
