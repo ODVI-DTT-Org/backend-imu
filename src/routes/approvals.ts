@@ -1888,13 +1888,26 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
 
       // Tele: CREATE calls record
       else if (user.role === 'tele') {
+        // phone_number is optional in the form — fall back to client's primary phone
+        let phoneNumber = validated.phone_number;
+        if (!phoneNumber) {
+          const phoneResult = await dbClient.query(
+            `SELECT number FROM phone_numbers
+             WHERE client_id = $1 AND deleted_at IS NULL
+             ORDER BY is_primary DESC NULLS LAST, created_at ASC
+             LIMIT 1`,
+            [validated.client_id]
+          );
+          phoneNumber = phoneResult.rows[0]?.number ?? '09000000000';
+        }
+
         const callResult = await dbClient.query(`
           INSERT INTO calls (
             id, client_id, user_id, phone_number, dial_time, duration, notes, reason, type
           ) VALUES (
             gen_random_uuid(), $1, $2, $3, NOW(), $4, $5, $6, 'release_loan'
           ) RETURNING id
-        `, [validated.client_id, user.sub, validated.phone_number,
+        `, [validated.client_id, user.sub, phoneNumber,
             validated.duration, validated.notes, 'Loan Release Request']);
 
         activityId = callResult.rows[0].id;
