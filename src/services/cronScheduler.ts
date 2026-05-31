@@ -217,21 +217,78 @@ function startCacheWarmingJob(): void {
 }
 
 async function notifyMissedVisits(): Promise<number> {
+  // Covers both sources:
+  //   A) missed itineraries — past-due scheduled visits still pending
+  //   B) overdue clients — no touchpoint in 7+ days, no future itinerary
+  // Skips users already sent a missed_visit notification today to prevent spam.
   const result = await pool.query(`
-    SELECT user_id, COUNT(*) AS overdue_count, MIN(scheduled_date)::text AS earliest_date
-    FROM itineraries
-    WHERE status = 'pending'
-      AND scheduled_date < CURRENT_DATE
-    GROUP BY user_id
+    WITH missed_itineraries AS (
+      SELECT i.user_id, i.client_id
+      FROM itineraries i
+      JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
+      WHERE i.status = 'pending'
+        AND i.scheduled_date < CURRENT_DATE
+        AND COALESCE(c.loan_released, false) IS NOT TRUE
+    ),
+    overdue_clients AS (
+      SELECT tp.user_id, c.id AS client_id
+      FROM clients c
+      JOIN touchpoints tp ON tp.client_id = c.id
+      WHERE c.deleted_at IS NULL
+        AND COALESCE(c.loan_released, false) IS NOT TRUE
+        AND c.next_touchpoint IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM itineraries i
+          WHERE i.client_id = c.id AND i.user_id = tp.user_id
+            AND i.status IN ('pending', 'in_progress')
+            AND i.scheduled_date >= CURRENT_DATE
+        )
+      GROUP BY tp.user_id, c.id
+      HAVING MAX(tp.date) < NOW() - INTERVAL '7 days'
+    ),
+    all_overdue AS (
+      SELECT user_id, client_id FROM missed_itineraries
+      UNION
+      SELECT user_id, client_id FROM overdue_clients
+    ),
+    user_counts AS (
+      SELECT user_id, COUNT(DISTINCT client_id) AS total
+      FROM all_overdue
+      GROUP BY user_id
+    )
+    SELECT
+      uc.user_id,
+      uc.total,
+      CASE WHEN uc.total = 1
+        THEN (SELECT client_id FROM all_overdue WHERE user_id = uc.user_id LIMIT 1)
+        ELSE NULL
+      END AS single_client_id
+    FROM user_counts uc
+    WHERE uc.total > 0
+      AND NOT EXISTS (
+        SELECT 1 FROM notifications n
+        WHERE n.user_id = uc.user_id
+          AND n.type = 'missed_visit'
+          AND n.created_at >= CURRENT_DATE
+      )
   `);
 
   for (const row of result.rows) {
+    const count = Number(row.total);
+    const title = 'Missed Visit Reminder';
+    const body = count === 1
+      ? 'You have 1 overdue client. Tap to follow up.'
+      : `You have ${count} overdue clients. Tap to review.`;
+    const fcmData: Record<string, string> = { type: 'missed_visit' };
+    if (row.single_client_id) fcmData.client_id = row.single_client_id;
+
     await createNotification(
       row.user_id,
       'missed_visit',
-      'Missed Visit Reminder',
-      `You have ${row.overdue_count} overdue visit(s) since ${row.earliest_date}. Please follow up.`,
-      { overdue_count: Number(row.overdue_count), earliest_date: row.earliest_date },
+      title,
+      body,
+      { overdue_count: count, client_id: row.single_client_id ?? null },
+      fcmData,
     );
   }
 

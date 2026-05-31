@@ -53,7 +53,7 @@ function initFirebase(): void {
  */
 export async function sendFcmPushToUser(
   userId: string,
-  options?: { title?: string; body?: string },
+  options?: { title?: string; body?: string; data?: Record<string, string> },
 ): Promise<void> {
   initFirebase();
   if (!_initialized) return;
@@ -75,7 +75,7 @@ export async function sendFcmPushToUser(
   const hasNotification = !!(options?.title);
   const message: admin.messaging.MulticastMessage = {
     tokens,
-    data: { type: 'sync' },
+    data: { type: 'sync', ...(options?.data ?? {}) },
     ...(hasNotification && {
       notification: { title: options!.title, body: options!.body },
     }),

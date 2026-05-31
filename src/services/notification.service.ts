@@ -17,6 +17,7 @@ export async function createNotification(
   title: string,
   body: string,
   data: Record<string, unknown> = {},
+  fcmData?: Record<string, string>,
 ): Promise<void> {
   try {
     await pool.query(
@@ -25,7 +26,7 @@ export async function createNotification(
       [userId, type, title, body, JSON.stringify(data)],
     );
     // Non-blocking FCM push — wakes PowerSync and shows system notification
-    sendFcmPushToUser(userId, { title, body }).catch(() => {});
+    sendFcmPushToUser(userId, { title, body, data: fcmData }).catch(() => {});
   } catch (e) {
     logger.error('notifications', 'Failed to create notification', { userId, type, error: e });
   }
