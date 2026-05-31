@@ -237,7 +237,7 @@ phoneNumbers.post('/clients/:id/phone-numbers', authMiddleware, auditMiddleware(
   // Verify client exists and user has access (I3: Security fix - verify ownership)
   const clientCheck = await pool.query(
     'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
-    [clientId, userId]
+    [clientId]
   );
 
   if (clientCheck.rows.length === 0) {
@@ -305,7 +305,7 @@ phoneNumbers.get('/clients/:id/phone-numbers/:phoneId', authMiddleware, async (c
   // Verify user owns this client (I1: Security fix)
   const clientCheck = await pool.query(
     'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
-    [clientId, userId]
+    [clientId]
   );
 
   if (clientCheck.rows.length === 0) {
@@ -503,7 +503,7 @@ phoneNumbers.patch('/clients/:id/phone-numbers/:phoneId/primary', authMiddleware
   // Verify user owns this client
   const clientCheck = await pool.query(
     'SELECT id FROM clients WHERE id = $1 AND deleted_at IS NULL',
-    [clientId, userId]
+    [clientId]
   );
 
   if (clientCheck.rows.length === 0) {
