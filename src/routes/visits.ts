@@ -499,8 +499,8 @@ visits.get('/missed', authMiddleware, async (c) => {
       const result = await client.query(`
         WITH missed_itineraries AS (
           SELECT
-            i.id,
-            i.client_id,
+            i.id::text AS id,
+            i.client_id::text AS client_id,
             (c.first_name || ' ' || COALESCE(NULLIF(c.middle_name, '') || ' ', '') || c.last_name) AS client_name,
             COALESCE(c.touchpoint_number, 1) AS touchpoint_number,
             COALESCE(c.next_touchpoint, 'Visit') AS touchpoint_type,
@@ -508,9 +508,9 @@ visits.get('/missed', authMiddleware, async (c) => {
             i.created_at,
             c.phone AS primary_phone,
             c.full_address AS primary_address,
-            'missedItinerary' AS source,
+            'missedItinerary'::text AS source,
             i.id::text AS itinerary_id,
-            (CURRENT_DATE - i.scheduled_date) AS days_overdue
+            (CURRENT_DATE - i.scheduled_date)::int AS days_overdue
           FROM itineraries i
           JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
           WHERE i.user_id = $1
@@ -519,8 +519,8 @@ visits.get('/missed', authMiddleware, async (c) => {
         ),
         overdue_clients AS (
           SELECT
-            c.id || '_overdue' AS id,
-            c.id AS client_id,
+            (c.id::text || '_overdue') AS id,
+            c.id::text AS client_id,
             (c.first_name || ' ' || COALESCE(NULLIF(c.middle_name, '') || ' ', '') || c.last_name) AS client_name,
             COALESCE(c.touchpoint_number, 1) + 1 AS touchpoint_number,
             COALESCE(c.next_touchpoint, 'Visit') AS touchpoint_type,
@@ -528,9 +528,9 @@ visits.get('/missed', authMiddleware, async (c) => {
             NOW() AS created_at,
             c.phone AS primary_phone,
             c.full_address AS primary_address,
-            'overdueClient' AS source,
+            'overdueClient'::text AS source,
             NULL::text AS itinerary_id,
-            (CURRENT_DATE - (last_tp.max_date + INTERVAL '7 days')::date) AS days_overdue
+            (CURRENT_DATE - (last_tp.max_date + INTERVAL '7 days')::date)::int AS days_overdue
           FROM clients c
           JOIN LATERAL (
             SELECT MAX(tp.date) AS max_date
@@ -540,7 +540,7 @@ visits.get('/missed', authMiddleware, async (c) => {
           WHERE c.deleted_at IS NULL
             AND COALESCE(c.loan_released, false) IS NOT TRUE
             AND c.next_touchpoint IS NOT NULL
-            AND c.id NOT IN (SELECT client_id FROM missed_itineraries)
+            AND c.id::text NOT IN (SELECT client_id FROM missed_itineraries)
             AND NOT EXISTS (
               SELECT 1 FROM itineraries i
               WHERE i.client_id = c.id AND i.user_id = $1
