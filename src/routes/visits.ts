@@ -509,7 +509,7 @@ visits.get('/missed', authMiddleware, async (c) => {
             c.phone AS primary_phone,
             c.full_address AS primary_address,
             'missedItinerary' AS source,
-            i.id AS itinerary_id,
+            i.id::text AS itinerary_id,
             (CURRENT_DATE - i.scheduled_date) AS days_overdue
           FROM itineraries i
           JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
