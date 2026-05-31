@@ -7,12 +7,6 @@ import crypto from 'crypto';
 
 type EmailProvider = 'resend' | 'sendgrid' | 'console' | 'mock';
 
-const SMTP_HOST = process.env.SMTP_HOST ?? '';
-const SMTP_PORT = parseInt(process.env.SMTP_PORT ?? '587');
-const SMTP_USER = process.env.SMTP_USER ?? '';
-const SMTP_PASS = process.env.SMTP_PASS ?? '';
-const SMTP_FROM = process.env.SMTP_FROM ?? process.env.EMAIL_FROM ?? 'IMU <noreply@imu.app>';
-
 interface EmailOptions {
   to: string | string[];
   subject: string;
@@ -365,14 +359,6 @@ class EmailService {
     notifyUser: boolean;
     context: Record<string, string | undefined> | null;
   }): Promise<void> {
-    const nodemailer = await import('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
-    });
-
     const typeLabel = opts.type.charAt(0).toUpperCase() + opts.type.slice(1);
     const sevLabel = opts.severity ? ` [${opts.severity.toUpperCase()}]` : '';
     const subject = `[IMU Feedback #${opts.id}] ${typeLabel}${sevLabel}: ${opts.title}`;
@@ -384,10 +370,8 @@ class EmailService {
           .join('')
       : '';
 
-    await transporter.sendMail({
-      from: SMTP_FROM,
+    await this.send({
       to: 'egonzaga@oakdriveventures.com',
-      replyTo: opts.fromEmail,
       subject,
       text: [
         `From: ${opts.fromName} <${opts.fromEmail}>`,
@@ -398,12 +382,12 @@ class EmailService {
         '',
         opts.description,
         '',
-        opts.context ? Object.entries(opts.context).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join('\n') : '',
+        opts.context ? Object.entries(opts.context).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join('\n') : '',
       ].filter(s => s !== undefined).join('\n'),
       html: `
         <p><strong>${opts.fromName}</strong> &lt;${opts.fromEmail}&gt; · ${typeLabel}${sevLabel} · Ref #${opts.id}</p>
-        <h3 style="margin:12px 0 6px">${opts.title.replace(/</g,'&lt;')}</h3>
-        <p style="white-space:pre-wrap;font-size:14px;line-height:1.6">${opts.description.replace(/</g,'&lt;')}</p>
+        <h3 style="margin:12px 0 6px">${opts.title.replace(/</g, '&lt;')}</h3>
+        <p style="white-space:pre-wrap;font-size:14px;line-height:1.6">${opts.description.replace(/</g, '&lt;')}</p>
         ${contextHtml ? `<table style="font-size:12px;border-collapse:collapse;margin-top:16px">${contextHtml}</table>` : ''}
         ${opts.notifyUser ? `<p style="color:#6b7280;font-size:12px;margin-top:12px">User requested email notification when resolved.</p>` : ''}
       `,
@@ -416,17 +400,8 @@ class EmailService {
     message: string;
     appVersion?: string;
   }): Promise<void> {
-    const nodemailer = await import('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS },
-    });
-    await transporter.sendMail({
-      from: SMTP_FROM,
+    await this.send({
       to: 'egonzaga@oakdriveventures.com',
-      replyTo: opts.fromEmail,
       subject: `[IMU Feedback] from ${opts.fromName}`,
       text: [
         `From: ${opts.fromName} <${opts.fromEmail}>`,
