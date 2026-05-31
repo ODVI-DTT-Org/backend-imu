@@ -171,6 +171,108 @@ async function recentVisitsByClient(
   return out;
 }
 
+// GET /api/duplicates/incomplete — clients missing one or more of:
+// phone number, primary address, or PSGC location. Used by the Clients
+// Review > Incomplete Information tab so admins can fix data quality
+// issues that block downstream features (geofencing, calling, location
+// filtering). Filter values: `all` | `phone` | `address` | `psgc`.
+duplicates.get('/incomplete', authMiddleware, requireRole('admin'), async (c) => {
+  const q = c.req.query();
+  const page = Math.max(1, parseInt(q.page || '1'));
+  const perPage = Math.min(100, Math.max(1, parseInt(q.per_page || '20')));
+  const offset = (page - 1) * perPage;
+  const search = (q.search || '').trim();
+  const filter = (q.filter || 'all').toLowerCase();
+
+  // Booleans for each missing-field condition. A client is considered
+  // "missing phone" only when BOTH the legacy clients.phone column is empty
+  // AND there are no rows in phone_numbers — matches the mobile fallback.
+  const missingPhoneSql = `
+    (COALESCE(NULLIF(c.phone, ''), NULL) IS NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM phone_numbers p
+       WHERE p.client_id = c.id AND p.deleted_at IS NULL
+     ))
+  `;
+  const missingAddressSql = `
+    NOT EXISTS (
+      SELECT 1 FROM addresses a
+      WHERE a.client_id = c.id AND a.deleted_at IS NULL
+    )
+  `;
+  // PSGC is considered missing when psgc_id is null OR province+municipality
+  // pair is incomplete (handles older rows synced before psgc_id was added).
+  const missingPsgcSql = `
+    (c.psgc_id IS NULL
+     OR COALESCE(NULLIF(c.province, ''), NULL) IS NULL
+     OR COALESCE(NULLIF(c.municipality, ''), NULL) IS NULL)
+  `;
+
+  let predicate: string;
+  switch (filter) {
+    case 'phone':   predicate = missingPhoneSql; break;
+    case 'address': predicate = missingAddressSql; break;
+    case 'psgc':    predicate = missingPsgcSql; break;
+    default:        predicate = `(${missingPhoneSql} OR ${missingAddressSql} OR ${missingPsgcSql})`;
+  }
+
+  const params: any[] = [perPage, offset];
+  let searchSql = '';
+  if (search) {
+    params.push(`%${search.toLowerCase()}%`);
+    searchSql = `AND (
+      LOWER(COALESCE(c.full_name, c.first_name || ' ' || c.last_name)) LIKE $3
+      OR LOWER(COALESCE(c.agency_name, '')) LIKE $3
+    )`;
+  }
+
+  const where = `c.deleted_at IS NULL AND ${predicate} ${searchSql}`;
+
+  const sql = `
+    WITH base AS (
+      SELECT
+        c.id, c.first_name, c.last_name, c.middle_name, c.full_name,
+        c.birth_date, c.agency_name, c.municipality, c.province, c.barangay,
+        c.psgc_id, c.phone, c.created_at,
+        ${missingPhoneSql}   AS missing_phone,
+        ${missingAddressSql} AS missing_address,
+        ${missingPsgcSql}    AS missing_psgc
+      FROM clients c
+      WHERE ${where}
+    )
+    SELECT *, COUNT(*) OVER() AS total_count
+    FROM base
+    ORDER BY created_at DESC
+    LIMIT $1 OFFSET $2
+  `;
+
+  const result = await pool.query(sql, params);
+  const totalItems = result.rows[0]?.total_count ? Number(result.rows[0].total_count) : 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / perPage));
+
+  return c.json({
+    items: result.rows.map((r: any) => ({
+      id: r.id,
+      first_name: r.first_name,
+      last_name: r.last_name,
+      middle_name: r.middle_name,
+      full_name: r.full_name,
+      birth_date: r.birth_date,
+      agency_name: r.agency_name,
+      municipality: r.municipality,
+      province: r.province,
+      barangay: r.barangay,
+      missing_phone: !!r.missing_phone,
+      missing_address: !!r.missing_address,
+      missing_psgc: !!r.missing_psgc,
+    })),
+    page,
+    perPage,
+    totalItems,
+    totalPages,
+  });
+});
+
 // GET /api/duplicates/:id/detail — the flagged client plus its candidate matches,
 // each with key fields and history-record counts, for the admin to compare before merging.
 duplicates.get('/:id/detail', authMiddleware, requireRole('admin'), async (c) => {
