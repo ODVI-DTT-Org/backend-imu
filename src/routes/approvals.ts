@@ -1814,7 +1814,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       source: z.string().max(200).optional(),
       photo_url: z.string().url('photo_url must be a valid URL').optional(),
       // Tele-specific fields
-      phone_number: z.string().regex(/^09\d{9}$/).optional(),
+      phone_number: z.string().min(1).max(20).optional(),
       duration: z.number().int().positive().optional(),
       // Common fields
       notes: z.string().optional(),
