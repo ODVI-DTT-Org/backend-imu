@@ -184,28 +184,29 @@ duplicates.get('/incomplete', authMiddleware, requireRole('admin'), async (c) =>
   const search = (q.search || '').trim();
   const filter = (q.filter || 'all').toLowerCase();
 
-  // Booleans for each missing-field condition. A client is considered
-  // "missing phone" only when BOTH the legacy clients.phone column is empty
-  // AND there are no rows in phone_numbers — matches the mobile fallback.
+  // Missing address: no full_address on the client OR no rows in addresses table.
+  const missingAddressSql = `
+    (COALESCE(NULLIF(c.full_address, ''), NULL) IS NULL
+     OR NOT EXISTS (
+       SELECT 1 FROM addresses a
+       WHERE a.client_id = c.id AND a.deleted_at IS NULL
+     ))
+  `;
+  // Missing PSGC: no psgc_id on the client OR no addresses with a psgc_id.
+  const missingPsgcSql = `
+    (c.psgc_id IS NULL
+     OR NOT EXISTS (
+       SELECT 1 FROM addresses a
+       WHERE a.client_id = c.id AND a.psgc_id IS NOT NULL AND a.deleted_at IS NULL
+     ))
+  `;
+  // Missing phone: no phone on the client OR no rows in phone_numbers table.
   const missingPhoneSql = `
     (COALESCE(NULLIF(c.phone, ''), NULL) IS NULL
-     AND NOT EXISTS (
+     OR NOT EXISTS (
        SELECT 1 FROM phone_numbers p
        WHERE p.client_id = c.id AND p.deleted_at IS NULL
      ))
-  `;
-  const missingAddressSql = `
-    NOT EXISTS (
-      SELECT 1 FROM addresses a
-      WHERE a.client_id = c.id AND a.deleted_at IS NULL
-    )
-  `;
-  // PSGC is considered missing when psgc_id is null OR province+municipality
-  // pair is incomplete (handles older rows synced before psgc_id was added).
-  const missingPsgcSql = `
-    (c.psgc_id IS NULL
-     OR COALESCE(NULLIF(c.province, ''), NULL) IS NULL
-     OR COALESCE(NULLIF(c.municipality, ''), NULL) IS NULL)
   `;
 
   let predicate: string;
