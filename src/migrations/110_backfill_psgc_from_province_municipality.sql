@@ -1,40 +1,34 @@
--- Migration 110: Backfill psgc_id and addresses for clients that have
--- full_address/province/municipality text but no psgc_id and no addresses row.
---
--- Uses a PROCEDURE (PostgreSQL 11+) so we can COMMIT every 1,000 rows,
--- keeping row locks brief and not blocking live touchpoint inserts.
---
--- Safe to re-run: skips clients that already have psgc_id set.
--- Expected: ~75,684 clients tagged.
+-- Migration 110: Backfill psgc_id and addresses using a JOIN (fast).
+-- Previous version used a correlated subquery per row — too slow on 84k clients.
+-- JOIN lets Postgres use hash/merge join; DISTINCT ON picks MIN psgc.id per client.
+-- Commits every 1,000 rows via a procedure to keep row locks brief.
 
--- Step 1: Temp table of matches (pure SELECT, no row locks)
+-- Step 1: Build match table via JOIN (seconds, not minutes)
 CREATE TEMP TABLE _psgc_backfill AS
-SELECT
-  c.id            AS client_id,
+SELECT DISTINCT ON (c.id)
+  c.id           AS client_id,
   c.full_address,
   c.municipality,
   c.province,
-  (
-    SELECT MIN(p.id)
-    FROM psgc p
-    WHERE LOWER(TRIM(p.province)) = LOWER(TRIM(c.province))
-      AND (
-        LOWER(TRIM(p.mun_city)) = LOWER(TRIM(c.municipality))
-        OR LOWER(TRIM(p.mun_city)) = 'city of ' || LOWER(TRIM(REGEXP_REPLACE(c.municipality, ' CITY$', '', 'i')))
-        OR LOWER(TRIM(p.mun_city)) = 'city of ' || LOWER(TRIM(c.municipality))
-        OR LOWER(TRIM(p.mun_city)) = LOWER(TRIM(c.municipality)) || ' city'
-      )
-  ) AS psgc_id
+  p.id           AS psgc_id
 FROM clients c
+JOIN psgc p ON (
+  LOWER(TRIM(p.province)) = LOWER(TRIM(c.province))
+  AND (
+    LOWER(TRIM(p.mun_city)) = LOWER(TRIM(c.municipality))
+    OR LOWER(TRIM(p.mun_city)) = 'city of ' || LOWER(TRIM(REGEXP_REPLACE(c.municipality, ' CITY$', '', 'i')))
+    OR LOWER(TRIM(p.mun_city)) = 'city of ' || LOWER(TRIM(c.municipality))
+    OR LOWER(TRIM(p.mun_city)) = LOWER(TRIM(c.municipality)) || ' city'
+  )
+)
 WHERE c.deleted_at IS NULL
   AND c.psgc_id IS NULL
-  AND COALESCE(NULLIF(c.full_address, ''), NULL) IS NOT NULL;
-
-DELETE FROM _psgc_backfill WHERE psgc_id IS NULL;
+  AND COALESCE(NULLIF(c.full_address, ''), NULL) IS NOT NULL
+ORDER BY c.id, p.id;  -- DISTINCT ON picks lowest p.id per client
 
 DO $$ BEGIN RAISE NOTICE 'Matchable clients: %', (SELECT COUNT(*) FROM _psgc_backfill); END $$;
 
--- Step 2: Procedure that commits every 1,000 rows
+-- Step 2: Apply in batches of 1,000 with a COMMIT between each
 CREATE OR REPLACE PROCEDURE _run_psgc_backfill()
 LANGUAGE plpgsql AS $proc$
 DECLARE
@@ -57,8 +51,6 @@ BEGIN
     WHERE clients.id = b.client_id
       AND clients.psgc_id IS NULL;
 
-    GET DIAGNOSTICS chunk = ROW_COUNT;
-
     INSERT INTO addresses (client_id, type, street_address, city, province, psgc_id, is_primary)
     SELECT b.client_id, 'home', b.full_address, b.municipality, b.province, b.psgc_id, true
     FROM (
@@ -69,20 +61,19 @@ BEGIN
     ) b
     ON CONFLICT (client_id, type) WHERE deleted_at IS NULL DO NOTHING;
 
+    GET DIAGNOSTICS chunk = ROW_COUNT;
     offset_val := offset_val + batch_size;
-    RAISE NOTICE 'Progress: %/% (batch updated: %)', LEAST(offset_val, total), total, chunk;
+    RAISE NOTICE 'Progress: %/% ', LEAST(offset_val, total), total;
 
     COMMIT;
-    PERFORM pg_sleep(0.1);
+    PERFORM pg_sleep(0.05);
   END LOOP;
 
   RAISE NOTICE 'Done.';
 END;
 $proc$;
 
--- Step 3: Run it
 CALL _run_psgc_backfill();
 
--- Cleanup
 DROP PROCEDURE _run_psgc_backfill();
 DROP TABLE _psgc_backfill;
