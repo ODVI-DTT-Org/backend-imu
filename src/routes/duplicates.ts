@@ -184,28 +184,28 @@ duplicates.get('/incomplete', authMiddleware, requireRole('admin'), async (c) =>
   const search = (q.search || '').trim();
   const filter = (q.filter || 'all').toLowerCase();
 
-  // Missing address: no full_address on the client OR no rows in addresses table.
+  // Missing phone: no phone on the client AND no rows in phone_numbers table.
+  const missingPhoneSql = `
+    (COALESCE(NULLIF(c.phone, ''), NULL) IS NULL
+     AND NOT EXISTS (
+       SELECT 1 FROM phone_numbers p
+       WHERE p.client_id = c.id AND p.deleted_at IS NULL
+     ))
+  `;
+  // Missing address: no full_address on the client AND no rows in addresses table.
   const missingAddressSql = `
     (COALESCE(NULLIF(c.full_address, ''), NULL) IS NULL
-     OR NOT EXISTS (
+     AND NOT EXISTS (
        SELECT 1 FROM addresses a
        WHERE a.client_id = c.id AND a.deleted_at IS NULL
      ))
   `;
-  // Missing PSGC: no psgc_id on the client OR no addresses with a psgc_id.
+  // Missing PSGC: no psgc_id on the client AND no addresses with a psgc_id.
   const missingPsgcSql = `
     (c.psgc_id IS NULL
-     OR NOT EXISTS (
+     AND NOT EXISTS (
        SELECT 1 FROM addresses a
        WHERE a.client_id = c.id AND a.psgc_id IS NOT NULL AND a.deleted_at IS NULL
-     ))
-  `;
-  // Missing phone: no phone on the client OR no rows in phone_numbers table.
-  const missingPhoneSql = `
-    (COALESCE(NULLIF(c.phone, ''), NULL) IS NULL
-     OR NOT EXISTS (
-       SELECT 1 FROM phone_numbers p
-       WHERE p.client_id = c.id AND p.deleted_at IS NULL
      ))
   `;
 
