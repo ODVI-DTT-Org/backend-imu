@@ -165,7 +165,7 @@ itineraries.get('/', authMiddleware, requirePermission('itineraries', 'read'), a
        LEFT JOIN users u ON u.id = i.user_id
        LEFT JOIN users cb ON cb.id = i.created_by
        ${whereClause}
-       ORDER BY i.scheduled_date DESC, i.scheduled_time DESC
+       ORDER BY i.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
       [...params, perPage, offset]
     );
