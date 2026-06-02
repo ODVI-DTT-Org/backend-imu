@@ -306,11 +306,24 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       datesMatch: targetDate === todayDate,
     });
 
+    // Parse optional status filter (comma-separated, e.g. ?status=pending,in_progress)
+    const statusParam = c.req.query('status');
+    const statusFilter = statusParam ? statusParam.split(',').map(s => s.trim()).filter(Boolean) : null;
+
     // Log returned client IDs for debugging
     console.log('[My Day Tasks] Query parameters:', {
       userId: caravanId,
       scheduledDate: targetDate,
+      statusFilter,
     });
+
+    // Build query with optional status filter
+    const params: any[] = [caravanId, targetDate];
+    let statusClause = '';
+    if (statusFilter && statusFilter.length > 0) {
+      params.push(statusFilter);
+      statusClause = `AND i.status = ANY($${params.length}::text[])`;
+    }
 
     // Get itineraries for the target date with client info
     const itinerariesResult = await pool.query(
@@ -322,9 +335,9 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
        JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
        LEFT JOIN agencies a ON a.id = c.agency_id
        LEFT JOIN users u ON u.id = i.created_by
-       WHERE i.user_id = $1 AND i.scheduled_date = $2
+       WHERE i.user_id = $1 AND i.scheduled_date = $2 ${statusClause}
        ORDER BY i.scheduled_time ASC NULLS LAST, i.priority DESC`,
-      [caravanId, targetDate]
+      params
     );
 
     // Log returned clients for debugging
