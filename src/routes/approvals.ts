@@ -918,6 +918,17 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
         newClientId = insertResult.rows[0].id;
         console.log(`Created new client ${newClientId} from approval`);
+
+        // Post-creation validation — confirm the client was actually persisted.
+        // Guards against silent INSERT drops from RLS, triggers, or future code changes.
+        const verify = await client.query(
+          `SELECT id FROM clients WHERE first_name = $1 AND last_name = $2 AND deleted_at IS NULL LIMIT 1`,
+          [clientData.first_name, clientData.last_name]
+        );
+        if (verify.rows.length === 0) {
+          await client.query('ROLLBACK');
+          throw new ValidationError('Client creation verification failed — no client found after insert');
+        }
       } catch (parseError) {
         console.error('Failed to parse client creation data or create client:', parseError);
         await client.query('ROLLBACK');
@@ -1361,6 +1372,54 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
           continue;
         }
 
+        let newClientId: string | null = null;
+
+        if (approval.type === 'client' && approval.reason === 'Client Creation Request') {
+          // Parse notes and insert the client
+          const clientData = JSON.parse(approval.notes);
+
+          if (!clientData.first_name || !clientData.last_name) {
+            failed.push({ id, error: 'Missing first_name or last_name in approval notes' });
+            continue;
+          }
+
+          const insertResult = await client.query(
+            `INSERT INTO clients (
+              first_name, last_name, middle_name, birth_date, email, phone,
+              agency_name, department, position, employment_status, payroll_date, tenure,
+              client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
+              agency_id, user_id, is_starred,
+              street, region, province, municipality, barangay, full_address
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+              $23, $24, $25, $26, $27, $28
+            ) RETURNING id`,
+            [
+              clientData.first_name, clientData.last_name, clientData.middle_name, clientData.birth_date,
+              clientData.email, clientData.phone, clientData.agency_name, clientData.department,
+              clientData.position, clientData.employment_status, clientData.payroll_date, clientData.tenure,
+              clientData.client_type, clientData.product_type, clientData.market_type, clientData.pension_type,
+              clientData.pan, clientData.facebook_link, clientData.remarks, clientData.agency_id,
+              clientData.user_id ?? approval.user_id, clientData.is_starred,
+              clientData.street ?? null, clientData.region ?? null, clientData.province ?? null,
+              clientData.municipality ?? null, clientData.barangay ?? null, clientData.full_address ?? null
+            ]
+          );
+          newClientId = insertResult.rows[0].id;
+
+          // Post-creation validation: confirm a client with this name actually exists.
+          // If somehow the INSERT was silently dropped (trigger, RLS, etc.), this catches it
+          // and prevents the approval from being marked 'approved' for a missing client.
+          const verify = await client.query(
+            `SELECT id FROM clients WHERE first_name = $1 AND last_name = $2 AND deleted_at IS NULL LIMIT 1`,
+            [clientData.first_name, clientData.last_name]
+          );
+          if (verify.rows.length === 0) {
+            failed.push({ id, error: 'Client creation verification failed — no client found after insert' });
+            continue;
+          }
+        }
+
         if (approval.type === 'client' && approval.reason === 'Client Edit Request') {
           try {
             const changes = JSON.parse(approval.notes || '{}');
@@ -1385,8 +1444,9 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         }
 
         await client.query(
-          `UPDATE approvals SET status = 'approved', approved_by = $1, approved_at = NOW(), updated_at = NOW() WHERE id = $2`,
-          [user.sub, id]
+          `UPDATE approvals SET status = 'approved', approved_by = $1, approved_at = NOW(),
+            client_id = COALESCE($2, client_id), updated_at = NOW() WHERE id = $3`,
+          [user.sub, newClientId, id]
         );
         succeeded.push(id);
       } catch (err: any) {
