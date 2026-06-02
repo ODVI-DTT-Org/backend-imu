@@ -456,7 +456,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
         touchpoint_number: nextTpNumber,
         touchpoint_type: null, // No pattern - type determined by user role
         time_in: latestTp?.created_at || null,
-        next_touchpoint_number: row.next_touchpoint ?? null,
+        next_touchpoint_number: row.client_touchpoint_number != null ? row.client_touchpoint_number + 1 : null,
         previous_touchpoint_number: latestTp?.touchpoint_number ?? null,
         previous_touchpoint_type: latestTp?.type ?? null,
         previous_touchpoint_status: latestTp?.status ?? null,
