@@ -340,7 +340,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       `SELECT i.*, c.first_name, c.middle_name, c.last_name, c.email, c.phone, c.client_type,
               c.full_address, c.region, c.province, c.municipality, c.barangay,
               a.name as agency_name,
-              u.name as assigned_by_name
+              (u.first_name || ' ' || u.last_name) as assigned_by_name
        FROM itineraries i
        JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
        LEFT JOIN agencies a ON a.id = c.agency_id
