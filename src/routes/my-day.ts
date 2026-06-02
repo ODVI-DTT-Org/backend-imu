@@ -24,6 +24,9 @@ const MAX_REQUEST_SIZE = parseInt(process.env.MAX_REQUEST_SIZE || '52428800'); /
 // Valid touchpoint statuses
 const VALID_STATUSES = ['Interested', 'Undecided', 'Not Interested', 'Completed', 'Follow-up Needed'];
 
+// Valid itinerary statuses
+const VALID_ITINERARY_STATUSES = ['pending', 'assigned', 'in_progress', 'completed', 'cancelled'];
+
 // Validation schemas
 const visitFormSchema = z.object({
   client_id: z.string().uuid(),
@@ -310,7 +313,6 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     const statusParam = c.req.query('status');
     const statusFilter = statusParam ? statusParam.split(',').map(s => s.trim()).filter(Boolean) : null;
 
-    const VALID_ITINERARY_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'];
     if (statusFilter) {
       const invalid = statusFilter.filter(s => !VALID_ITINERARY_STATUSES.includes(s));
       if (invalid.length > 0) {
