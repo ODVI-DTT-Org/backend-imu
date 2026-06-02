@@ -310,6 +310,14 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     const statusParam = c.req.query('status');
     const statusFilter = statusParam ? statusParam.split(',').map(s => s.trim()).filter(Boolean) : null;
 
+    const VALID_ITINERARY_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'];
+    if (statusFilter) {
+      const invalid = statusFilter.filter(s => !VALID_ITINERARY_STATUSES.includes(s));
+      if (invalid.length > 0) {
+        return c.json({ message: `Invalid status value(s): ${invalid.join(', ')}. Valid: ${VALID_ITINERARY_STATUSES.join(', ')}` }, 400);
+      }
+    }
+
     // Log returned client IDs for debugging
     console.log('[My Day Tasks] Query parameters:', {
       userId: caravanId,
@@ -318,7 +326,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     });
 
     // Build query with optional status filter
-    const params: any[] = [caravanId, targetDate];
+    const params: (string | string[])[] = [caravanId, targetDate];
     let statusClause = '';
     if (statusFilter && statusFilter.length > 0) {
       params.push(statusFilter);
