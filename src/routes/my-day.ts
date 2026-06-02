@@ -339,6 +339,8 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     const itinerariesResult = await pool.query(
       `SELECT i.*, c.first_name, c.middle_name, c.last_name, c.email, c.phone, c.client_type,
               c.full_address, c.region, c.province, c.municipality, c.barangay,
+              c.product_type, c.pension_type, c.loan_type, c.loan_released,
+              c.latitude, c.longitude, c.next_touchpoint, c.touchpoint_number as client_touchpoint_number,
               a.name as agency_name,
               (u.first_name || ' ' || u.last_name) as assigned_by_name
        FROM itineraries i
@@ -388,7 +390,8 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
 
     // Fetch latest touchpoint for each client
     const touchpointsResult = clientIds.length > 0 ? await pool.query(
-      `SELECT DISTINCT ON (t.client_id) t.client_id, t.touchpoint_number, t.type, t.visit_id, t.call_id, t.created_at
+      `SELECT DISTINCT ON (t.client_id) t.client_id, t.touchpoint_number, t.type,
+              t.status, t.rejection_reason, t.visit_id, t.call_id, t.created_at
        FROM touchpoints t
        WHERE t.client_id = ANY($1)
        ORDER BY t.client_id, t.created_at DESC`,
@@ -396,11 +399,13 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     ) : { rows: [] };
 
     // Create a map of client_id -> latest touchpoint
-    const latestTouchpoints = new Map<string, { touchpoint_number: number; type: string; created_at: string }>();
+    const latestTouchpoints = new Map<string, { touchpoint_number: number; type: string; status: string | null; rejection_reason: string | null; created_at: string }>();
     for (const tp of touchpointsResult.rows) {
       latestTouchpoints.set(tp.client_id, {
         touchpoint_number: tp.touchpoint_number,
         type: tp.type,
+        status: tp.status || null,
+        rejection_reason: tp.rejection_reason || null,
         created_at: tp.created_at,
       });
     }
@@ -451,6 +456,12 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
         touchpoint_number: nextTpNumber,
         touchpoint_type: null, // No pattern - type determined by user role
         time_in: latestTp?.created_at || null,
+        next_touchpoint_number: row.next_touchpoint ?? null,
+        previous_touchpoint_number: latestTp?.touchpoint_number ?? null,
+        previous_touchpoint_type: latestTp?.type ?? null,
+        previous_touchpoint_status: latestTp?.status ?? null,
+        previous_touchpoint_reason: latestTp?.rejection_reason ?? null,
+        previous_touchpoint_date: latestTp?.created_at ?? null,
         client: {
           first_name: row.first_name,
           middle_name: row.middle_name,
@@ -464,6 +475,12 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
           municipality: row.municipality,
           barangay: row.barangay,
           agency: row.agency_name,
+          product_type: row.product_type ?? null,
+          pension_type: row.pension_type ?? null,
+          loan_type: row.loan_type ?? null,
+          loan_released: row.loan_released ?? false,
+          latitude: row.latitude ?? null,
+          longitude: row.longitude ?? null,
           addresses: addresses,
         },
         assigned_by_name: row.assigned_by_name || null,
