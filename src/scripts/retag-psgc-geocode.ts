@@ -67,9 +67,32 @@ const pool = new Pool({ connectionString: dbUrl, max: 5 });
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+function cleanAddress(raw: string): string {
+  return raw
+    // Remove "REGION X (REGION NAME)" suffixes
+    .replace(/,?\s*REGION\s+[IVXLCDM]+[^,]*/gi, '')
+    .replace(/,?\s*NATIONAL CAPITAL REGION[^,]*/gi, '')
+    // Remove empty comma-separated segments ", , ,"
+    .replace(/(,\s*){2,}/g, ', ')
+    // Remove trailing/leading commas and whitespace
+    .replace(/^[\s,]+|[\s,]+$/g, '')
+    // Collapse multiple spaces
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 function buildAddress(row: any): string {
+  // Prefer full_address (scripted, has real street numbers/names).
+  // Fall back to PSGC barangay/municipality/province only when absent.
+  if (row.full_address && row.full_address.trim()) {
+    const cleaned = cleanAddress(row.full_address);
+    if (cleaned) {
+      return cleaned.toLowerCase().includes('philippines')
+          ? cleaned
+          : `${cleaned}, Philippines`;
+    }
+  }
   const parts = [
-    row.street,
     row.barangay,
     row.municipality,
     row.province,
@@ -162,8 +185,8 @@ async function main() {
     WHERE c.deleted_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM tagged_psgc_clients t WHERE t.client_id = c.id)
       AND (
-        c.street IS NOT NULL OR c.barangay IS NOT NULL
-        OR c.municipality IS NOT NULL OR c.province IS NOT NULL
+        (c.full_address IS NOT NULL AND c.full_address != '')
+        OR c.barangay IS NOT NULL OR c.municipality IS NOT NULL OR c.province IS NOT NULL
       )
   `);
   const totalPending = Math.min(parseInt(pendingRes.rows[0].cnt), LIMIT === Infinity ? Infinity : LIMIT);
@@ -189,13 +212,13 @@ async function main() {
     // Fetch next batch
     const batch = await pool.query(`
       SELECT c.id, c.latitude, c.longitude,
-             c.street, c.barangay, c.municipality, c.province
+             c.full_address, c.barangay, c.municipality, c.province
       FROM clients c
       WHERE c.deleted_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM tagged_psgc_clients t WHERE t.client_id = c.id)
         AND (
-          c.street IS NOT NULL OR c.barangay IS NOT NULL
-          OR c.municipality IS NOT NULL OR c.province IS NOT NULL
+          (c.full_address IS NOT NULL AND c.full_address != '')
+          OR c.barangay IS NOT NULL OR c.municipality IS NOT NULL OR c.province IS NOT NULL
         )
       ORDER BY c.id
       LIMIT $1 OFFSET $2
@@ -207,7 +230,7 @@ async function main() {
       if (processed >= (LIMIT === Infinity ? Infinity : LIMIT)) break;
 
       const address = buildAddress(row);
-      if (!address.replace(/,\s*/g, '').replace('Philippines', '').trim()) {
+      if (!address.replace(/,\s*/g, '').replace(/philippines/i, '').trim()) {
         // No usable address parts
         if (!DRY_RUN) {
           await pool.query(`
