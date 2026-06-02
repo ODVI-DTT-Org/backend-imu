@@ -910,7 +910,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             clientData.position, clientData.employment_status, clientData.payroll_date, clientData.tenure,
             clientData.client_type, clientData.product_type, clientData.market_type, clientData.pension_type,
             clientData.pan, clientData.facebook_link, clientData.remarks, clientData.agency_id,
-            clientData.user_id, clientData.is_starred,
+            clientData.user_id ?? approval.user_id, clientData.is_starred,
             clientData.street ?? null, clientData.region ?? null, clientData.province ?? null,
             clientData.municipality ?? null, clientData.barangay ?? null, clientData.full_address ?? null
           ]
