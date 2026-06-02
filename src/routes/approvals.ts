@@ -898,7 +898,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             first_name, last_name, middle_name, birth_date, email, phone,
             agency_name, department, position, employment_status, payroll_date, tenure,
             client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
-            agency_id, user_id, is_starred,
+            agency_id, created_by, is_starred,
             street, region, province, municipality, barangay, full_address
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
@@ -1388,7 +1388,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
               first_name, last_name, middle_name, birth_date, email, phone,
               agency_name, department, position, employment_status, payroll_date, tenure,
               client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
-              agency_id, user_id, is_starred,
+              agency_id, created_by, is_starred,
               street, region, province, municipality, barangay, full_address
             ) VALUES (
               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
