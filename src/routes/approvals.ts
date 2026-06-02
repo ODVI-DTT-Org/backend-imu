@@ -8,6 +8,32 @@ import { storageService } from '../services/storage.js';
 import { createNotification } from '../services/notification.service.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
 import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
+import { getCacheService } from '../services/cache/redis-cache.js';
+
+// Mirror of clients.ts:invalidateClientsListCache. Kept inline to avoid an export
+// from that file; both routes are the only writers of the v1:clients:* keys.
+async function invalidateClientsListCacheInline(): Promise<void> {
+  try {
+    const cache = getCacheService();
+    await Promise.all([
+      cache.delPattern('v1:clients:list:*'),
+      cache.delPattern('v1:clients:count:*'),
+    ]);
+  } catch (e) {
+    console.warn('Failed to invalidate clients cache:', e);
+  }
+}
+
+// Compose the legacy `full_name` column the same way the PowerSync SQLite
+// trigger does. The Postgres `search_vector` GENERATED column reads from
+// `full_name`, so a NULL here makes the client invisible to FTS search.
+function computeFullName(firstName?: string | null, lastName?: string | null, middleName?: string | null): string | null {
+  const fn = (firstName ?? '').trim();
+  const ln = (lastName ?? '').trim();
+  if (!fn && !ln) return null;
+  const mn = (middleName ?? '').trim();
+  return `${ln}, ${fn}${mn ? ` ${mn}` : ''}`;
+}
 import {
   ValidationError,
   NotFoundError,
@@ -899,10 +925,10 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             agency_name, department, position, employment_status, payroll_date, tenure,
             client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
             agency_id, created_by, is_starred,
-            street, region, province, municipality, barangay, full_address
+            street, region, province, municipality, barangay, full_address, full_name
           ) VALUES (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-            $23, $24, $25, $26, $27, $28
+            $23, $24, $25, $26, $27, $28, $29
           ) RETURNING id`,
           [
             clientData.first_name, clientData.last_name, clientData.middle_name, clientData.birth_date,
@@ -912,7 +938,8 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             clientData.pan, clientData.facebook_link, clientData.remarks, clientData.agency_id,
             clientData.user_id ?? approval.user_id, clientData.is_starred,
             clientData.street ?? null, clientData.region ?? null, clientData.province ?? null,
-            clientData.municipality ?? null, clientData.barangay ?? null, clientData.full_address ?? null
+            clientData.municipality ?? null, clientData.barangay ?? null, clientData.full_address ?? null,
+            computeFullName(clientData.first_name, clientData.last_name, clientData.middle_name)
           ]
         );
 
@@ -1191,6 +1218,12 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
     await client.query('COMMIT');
 
+    // Invalidate the v1:clients:list cache so the newly-created/edited client
+    // appears immediately in the web app instead of being hidden by stale 60s TTL.
+    if (approval.type === 'client') {
+      await invalidateClientsListCacheInline();
+    }
+
     createNotification(
       approval.user_id,
       'approval_approved',
@@ -1389,10 +1422,10 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
               agency_name, department, position, employment_status, payroll_date, tenure,
               client_type, product_type, market_type, pension_type, pan, facebook_link, remarks,
               agency_id, created_by, is_starred,
-              street, region, province, municipality, barangay, full_address
+              street, region, province, municipality, barangay, full_address, full_name
             ) VALUES (
               $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
-              $23, $24, $25, $26, $27, $28
+              $23, $24, $25, $26, $27, $28, $29
             ) RETURNING id`,
             [
               clientData.first_name, clientData.last_name, clientData.middle_name, clientData.birth_date,
@@ -1402,7 +1435,8 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
               clientData.pan, clientData.facebook_link, clientData.remarks, clientData.agency_id,
               clientData.user_id ?? approval.user_id, clientData.is_starred,
               clientData.street ?? null, clientData.region ?? null, clientData.province ?? null,
-              clientData.municipality ?? null, clientData.barangay ?? null, clientData.full_address ?? null
+              clientData.municipality ?? null, clientData.barangay ?? null, clientData.full_address ?? null,
+              computeFullName(clientData.first_name, clientData.last_name, clientData.middle_name)
             ]
           );
           newClientId = insertResult.rows[0].id;
@@ -1455,6 +1489,12 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
     }
 
     await client.query('COMMIT');
+
+    // Invalidate the v1:clients:list cache so newly-created/edited clients
+    // appear immediately in the web app instead of being hidden by stale 60s TTL.
+    if (succeeded.length > 0) {
+      await invalidateClientsListCacheInline();
+    }
 
     // Notify each submitter non-blocking (fetch user_id per approval)
     if (succeeded.length > 0) {
