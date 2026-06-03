@@ -49,7 +49,9 @@ const SHARD       = arg('shard')  ? parseInt(arg('shard')!)  : 0;
 const SHARDS      = arg('shards') ? parseInt(arg('shards')!) : 1;
 const FETCH_SIZE  = 100;        // rows per SELECT
 const MAPBOX_RPS  = 10;         // requests/sec for Mapbox
-const MIN_SCORE   = 0.5;        // Mapbox relevance threshold
+const MIN_SCORE   = 0.3;        // Mapbox relevance threshold — lowered from 0.5
+                                // to keep more borderline Mapbox results and reduce
+                                // expensive (and rate-limited) Nominatim fallbacks.
 
 // ── DB ────────────────────────────────────────────────────────────────────────
 
