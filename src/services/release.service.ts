@@ -9,10 +9,10 @@ export const createReleaseSchema = z.object({
   visit_id: z.string().uuid('Invalid visit ID format'),
   product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP'], {
     errorMap: () => ({ message: 'Product type must be one of: BFP_ACTIVE, BFP_PENSION, PNP_PENSION, NAPOLCOM, BFP_STP' })
-  }),
+  }).optional(),
   loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM'], {
     errorMap: () => ({ message: 'Loan type must be one of: NEW, ADDITIONAL, RENEWAL, PRETERM' })
-  }),
+  }).optional(),
   udi_number: z.union([z.number().int().positive(), z.string().min(1)]).optional(),
   remarks: z.string().max(2000).optional(),
   approval_notes: z.string().max(2000).optional(),
@@ -29,8 +29,8 @@ export interface Release {
   client_id: string;
   user_id: string;
   visit_id: string;
-  product_type: 'BFP_ACTIVE' | 'BFP_PENSION' | 'PNP_PENSION' | 'NAPOLCOM' | 'BFP_STP';
-  loan_type: 'NEW' | 'ADDITIONAL' | 'RENEWAL' | 'PRETERM';
+  product_type?: 'BFP_ACTIVE' | 'BFP_PENSION' | 'PNP_PENSION' | 'NAPOLCOM' | 'BFP_STP';
+  loan_type?: 'NEW' | 'ADDITIONAL' | 'RENEWAL' | 'PRETERM';
   udi_number?: number | string;
   remarks?: string;
   approval_notes?: string;
