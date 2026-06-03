@@ -13,6 +13,7 @@ import {
 } from '../errors/index.js';
 import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
+import { computeOdometerDeparture } from '../services/visit.service.js';
 import { storageService } from '../services/storage.js';
 
 const SIGNED_URL_EXPIRY = 3600; // 1 hour
@@ -744,7 +745,12 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         );
         callId = callResult.rows[0].id;
       } else {
-        // Caravan path: auto-create visit record from body fields
+        // Caravan path: auto-create visit record from body fields.
+        // odometer_departure is server-computed — client-supplied value is ignored.
+        const computedDeparture = await computeOdometerDeparture(
+          validated.user_id as string,
+          body.time_in ? String(body.time_in) : undefined,
+        );
         const visitResult = await pool.query(
           `INSERT INTO visits (
             client_id, user_id, type, time_in, time_out,
@@ -761,7 +767,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
             body.time_in || null,
             body.time_out || null,
             body.odometer_arrival || null,
-            body.odometer_departure || null,
+            computedDeparture,
             body.photo_url || '',
             body.remarks || body.notes || null,
             body.reason || null,

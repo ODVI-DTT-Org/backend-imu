@@ -1,6 +1,53 @@
 import { pool } from '../db/index.js';
 import { z } from 'zod';
 
+/**
+ * Compute the server-side odometer_departure for a new visit.
+ *
+ * Rule: departure = odometer_arrival of the most recent earlier same-day
+ * visit for the same user.  If there is no prior same-day visit, return '0'.
+ *
+ * The look-up uses a pooled client passed in so it can participate in
+ * an existing transaction (pass `pool` directly when outside a transaction).
+ */
+export async function computeOdometerDeparture(
+  userId: string,
+  visitDate: Date | string | undefined,
+  dbClient: { query: (text: string, values?: any[]) => Promise<{ rows: any[] }> } = pool,
+): Promise<string> {
+  // Determine the calendar date to scope the query.
+  // Fall back to CURRENT_DATE (server/DB timezone) when no date is provided.
+  let dateParam: string | null = null;
+  if (visitDate) {
+    const d = typeof visitDate === 'string' ? new Date(visitDate) : visitDate;
+    if (!isNaN(d.getTime())) {
+      dateParam = d.toISOString().slice(0, 10); // 'YYYY-MM-DD'
+    }
+  }
+
+  const result = await dbClient.query(
+    `SELECT odometer_arrival
+     FROM visits
+     WHERE user_id = $1
+       AND (
+         CASE WHEN $2::date IS NULL
+              THEN created_at::date = CURRENT_DATE
+              ELSE created_at::date = $2::date
+         END
+       )
+       AND odometer_arrival IS NOT NULL
+       AND odometer_arrival != ''
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [userId, dateParam],
+  );
+
+  if (result.rows.length > 0) {
+    return result.rows[0].odometer_arrival as string;
+  }
+  return '0';
+}
+
 // Validation schemas
 export const createVisitSchema = z.object({
   id: z.string().uuid('Invalid visit ID format').optional(),
@@ -56,12 +103,13 @@ export interface Visit {
   updated_at?: Date;
 }
 
-// Allowlist of updateable fields to prevent SQL injection
+// Allowlist of updateable fields to prevent SQL injection.
+// NOTE: odometer_departure is intentionally excluded — it is server-computed
+// on create and should not be overwritten by client-supplied values.
 const UPDATEABLE_VISIT_FIELDS = [
   'time_in',
   'time_out',
   'odometer_arrival',
-  'odometer_departure',
   'photo_url',
   'notes',
   'remarks',
@@ -131,6 +179,14 @@ export const visitService = {
     // Validate input data
     const validated = createVisitSchema.parse(data);
 
+    // Auto-compute departure: ignore client-supplied value.
+    // Uses the arrival reading from the most recent earlier same-day visit
+    // for this user; falls back to '0' when there is no prior same-day visit.
+    const computedDeparture = await computeOdometerDeparture(
+      validated.user_id as string,
+      validated.time_in,
+    );
+
     const result = await pool.query(
       `INSERT INTO visits (id, client_id, user_id, type, time_in, time_out,
         odometer_arrival, odometer_departure, photo_url, remarks, reason, status,
@@ -141,7 +197,7 @@ export const visitService = {
       [
         validated.id ?? null,
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
-        validated.odometer_arrival, validated.odometer_departure, validated.photo_url,
+        validated.odometer_arrival, computedDeparture, validated.photo_url,
         validated.remarks ?? validated.notes ?? null, validated.reason, validated.status, validated.address,
         validated.latitude, validated.longitude, validated.source ?? 'IMU',
         validated.barangay, validated.municipality, validated.province, validated.region

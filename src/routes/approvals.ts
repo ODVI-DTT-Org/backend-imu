@@ -9,6 +9,7 @@ import { createNotification } from '../services/notification.service.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
 import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
 import { getCacheService } from '../services/cache/redis-cache.js';
+import { computeOdometerDeparture } from '../services/visit.service.js';
 
 // Mirror of clients.ts:invalidateClientsListCache. Kept inline to avoid an export
 // from that file; both routes are the only writers of the v1:clients:* keys.
@@ -1947,6 +1948,12 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           return c.json({ error: 'Photo is required for loan release', errorCode: 'PHOTO_REQUIRED' }, 400);
         }
 
+        // odometer_departure is server-computed; client-supplied odometer_out is ignored.
+        const computedDeparture = await computeOdometerDeparture(
+          user.sub,
+          validated.time_in,
+          dbClient as any,
+        );
         const visitResult = await dbClient.query(`
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
@@ -1958,7 +1965,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
             $15, $16, 'Loan Release', 'Completed'
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
-            validated.odometer_in ?? null, validated.odometer_out ?? null,
+            validated.odometer_in ?? null, computedDeparture,
             validated.latitude, validated.longitude, validated.address,
             validated.barangay, validated.municipality, validated.province, validated.region,
             validated.source ?? 'IMU',
