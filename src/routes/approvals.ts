@@ -9,7 +9,7 @@ import { createNotification } from '../services/notification.service.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
 import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
 import { getCacheService } from '../services/cache/redis-cache.js';
-import { computeOdometerDeparture } from '../services/visit.service.js';
+import { computeOdometerDeparture, computeKilometersTraveled } from '../services/visit.service.js';
 
 // Mirror of clients.ts:invalidateClientsListCache. Kept inline to avoid an export
 // from that file; both routes are the only writers of the v1:clients:* keys.
@@ -1959,18 +1959,22 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           validated.time_in,
           dbClient as any,
         );
+        const computedKm = computeKilometersTraveled(
+          (validated.odometer_in ?? null) as string | null,
+          computedDeparture,
+        );
         const visitResult = await dbClient.query(`
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
-            odometer_arrival, odometer_departure,
+            odometer_arrival, odometer_departure, kilometers_traveled,
             latitude, longitude, address, barangay, municipality, province, region, source,
             photo_url, notes, reason, status
           ) VALUES (
-            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-            $15, $16, 'Loan Release', 'Completed'
+            gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+            $16, $17, 'Loan Release', 'Completed'
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
-            validated.odometer_in ?? null, computedDeparture,
+            validated.odometer_in ?? null, computedDeparture, computedKm,
             validated.latitude, validated.longitude, validated.address,
             validated.barangay, validated.municipality, validated.province, validated.region,
             validated.source ?? 'IMU',

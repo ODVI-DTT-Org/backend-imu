@@ -48,6 +48,25 @@ export async function computeOdometerDeparture(
   return '0';
 }
 
+/**
+ * kilometers_traveled = max(0, currentArrival - departure).
+ * departure is what computeOdometerDeparture() returned (= previous
+ * same-day arrival, or '0' if first visit of the day).
+ * Returns '0' when either value is empty / non-numeric — caller can
+ * treat that as "no measurement available".
+ */
+export function computeKilometersTraveled(
+  currentArrival: string | null | undefined,
+  departure: string | null | undefined,
+): string {
+  if (!currentArrival || !departure) return '0';
+  const arr = parseFloat(currentArrival);
+  const dep = parseFloat(departure);
+  if (!Number.isFinite(arr) || !Number.isFinite(dep)) return '0';
+  const delta = arr - dep;
+  return (delta > 0 ? delta : 0).toString();
+}
+
 // Validation schemas
 export const createVisitSchema = z.object({
   id: z.string().uuid('Invalid visit ID format').optional(),
@@ -186,18 +205,22 @@ export const visitService = {
       validated.user_id as string,
       validated.time_in,
     );
+    const computedKm = computeKilometersTraveled(
+      validated.odometer_arrival as string | null | undefined,
+      computedDeparture,
+    );
 
     const result = await pool.query(
       `INSERT INTO visits (id, client_id, user_id, type, time_in, time_out,
-        odometer_arrival, odometer_departure, photo_url, remarks, reason, status,
+        odometer_arrival, odometer_departure, kilometers_traveled, photo_url, remarks, reason, status,
         address, latitude, longitude, source, barangay, municipality, province, region)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
        ON CONFLICT (id) DO UPDATE SET updated_at = visits.updated_at
        RETURNING *`,
       [
         validated.id ?? null,
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
-        validated.odometer_arrival, computedDeparture, validated.photo_url,
+        validated.odometer_arrival, computedDeparture, computedKm, validated.photo_url,
         validated.remarks ?? validated.notes ?? null, validated.reason, validated.status, validated.address,
         validated.latitude, validated.longitude, validated.source ?? 'IMU',
         validated.barangay, validated.municipality, validated.province, validated.region

@@ -13,7 +13,7 @@ import {
 } from '../errors/index.js';
 import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
-import { computeOdometerDeparture } from '../services/visit.service.js';
+import { computeOdometerDeparture, computeKilometersTraveled } from '../services/visit.service.js';
 import { storageService } from '../services/storage.js';
 
 const SIGNED_URL_EXPIRY = 3600; // 1 hour
@@ -751,14 +751,18 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
           validated.user_id as string,
           body.time_in ? String(body.time_in) : undefined,
         );
+        const computedKm = computeKilometersTraveled(
+          body.odometer_arrival as string | null | undefined,
+          computedDeparture,
+        );
         const visitResult = await pool.query(
           `INSERT INTO visits (
             client_id, user_id, type, time_in, time_out,
-            odometer_arrival, odometer_departure, photo_url, remarks,
+            odometer_arrival, odometer_departure, kilometers_traveled, photo_url, remarks,
             reason, status, address, latitude, longitude, source,
             barangay, municipality, province, region
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20
           ) RETURNING *`,
           [
             validated.client_id,
@@ -768,6 +772,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
             body.time_out || null,
             body.odometer_arrival || null,
             computedDeparture,
+            computedKm,
             body.photo_url || '',
             body.remarks || body.notes || null,
             body.reason || null,
