@@ -97,6 +97,8 @@ const editApprovalSchema = z.object({
   role: z.string().optional(),
   udi_number: z.string().optional(),
   visit_remarks: z.string().optional(),
+  product_type: z.string().optional(),
+  loan_type: z.string().optional(),
   updated_client_information: z.record(z.unknown()).optional(),
   updated_udi: z.string().optional(),
 });
@@ -743,15 +745,18 @@ approvals.post('/:id/edit', authMiddleware, requirePermission('approvals', 'upda
       paramIndex++;
     }
 
-    if (validated.visit_remarks !== undefined) {
-      // visit_remarks is stored in notes field as JSON
+    // visit_remarks, product_type, loan_type are all stored inside the notes JSON column.
+    // Merge all three in one pass to avoid multiple writes clobbering each other.
+    if (validated.visit_remarks !== undefined || validated.product_type !== undefined || validated.loan_type !== undefined) {
       let notes: any = {};
       try {
         notes = JSON.parse(approval.notes || '{}');
       } catch (_) {
         notes = {};
       }
-      notes.visit_remarks = validated.visit_remarks;
+      if (validated.visit_remarks !== undefined) notes.visit_remarks = validated.visit_remarks;
+      if (validated.product_type !== undefined) notes.product_type = validated.product_type;
+      if (validated.loan_type !== undefined) notes.loan_type = validated.loan_type;
       updates.push(`notes = $${paramIndex}`);
       params.push(JSON.stringify(notes));
       paramIndex++;
