@@ -105,7 +105,7 @@ users.get('/', authMiddleware, requirePermission('users', 'read'), async (c) => 
     let paramIndex = 1;
 
     if (search) {
-      conditions.push(`(first_name ILIKE $${paramIndex} OR last_name ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`);
+      conditions.push(`(first_name ILIKE $${paramIndex} OR last_name ILIKE $${paramIndex} OR (first_name || ' ' || last_name) ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`);
       params.push(`%${search}%`);
       paramIndex++;
     }

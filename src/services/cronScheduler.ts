@@ -228,6 +228,7 @@ async function notifyMissedVisits(): Promise<number> {
       JOIN clients c ON c.id = i.client_id AND c.deleted_at IS NULL
       WHERE i.status = 'pending'
         AND i.scheduled_date < CURRENT_DATE
+        AND i.scheduled_date >= CURRENT_DATE - INTERVAL '30 days'
         AND COALESCE(c.loan_released, false) IS NOT TRUE
     ),
     overdue_clients AS (

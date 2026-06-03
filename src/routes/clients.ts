@@ -175,9 +175,11 @@ export function buildClientFilters(
   if (q.barangay) {
     const values = Array.isArray(q.barangay) ? q.barangay : [q.barangay];
     if (values.length > 0) {
+      // Do NOT split by comma: many barangay names contain commas (e.g. "Bgy. No. 36, Araniw").
+      // The frontend sends each selected barangay as a separate query param, so each element
+      // in `values` is already a single barangay name.
       const normalizedBarangayValues = values
-        .flatMap(v => String(v).split(','))
-        .map(v => v.trim().toLowerCase())
+        .map(v => String(v).trim().toLowerCase())
         .filter(v => v.length > 0 && v !== 'all');
 
       if (normalizedBarangayValues.length > 0) {

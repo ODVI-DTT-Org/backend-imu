@@ -516,6 +516,7 @@ visits.get('/missed', authMiddleware, async (c) => {
           WHERE i.user_id = $1
             AND i.status = 'pending'
             AND i.scheduled_date < CURRENT_DATE
+            AND i.scheduled_date >= CURRENT_DATE - INTERVAL '30 days'
         ),
         overdue_clients AS (
           SELECT
