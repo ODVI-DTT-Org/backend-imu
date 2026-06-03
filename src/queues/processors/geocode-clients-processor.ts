@@ -166,7 +166,7 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
     if (client.psgc_id) {
       const coords = await this.lookupPsgcCoords(client.psgc_id);
       if (coords) {
-        await this.saveCoords(client.id, coords.lat, coords.lng);
+        await this.saveCoords(client.id, coords.lat, coords.lng, 'psgc');
         logger.info('GeocodeClients', `Client ${client.id} geocoded via PSGC (step 1)`);
         return 'psgc';
       }
@@ -179,7 +179,7 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
       if (coords) {
         // Persist the resolved psgc_id so future lookups skip Haiku
         await pool.query(`UPDATE clients SET psgc_id = $1 WHERE id = $2`, [haikuPsgcId, client.id]);
-        await this.saveCoords(client.id, coords.lat, coords.lng);
+        await this.saveCoords(client.id, coords.lat, coords.lng, 'haiku');
         logger.info('GeocodeClients', `Client ${client.id} geocoded via Haiku+PSGC (step 2)`);
         return 'haiku';
       }
@@ -191,7 +191,7 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
       const query = this.buildRawAddressString(client);
       const feature = await this.forwardGeocode(query, token);
       if (feature && this.isWithinPhilippines(feature.center[0], feature.center[1])) {
-        await this.saveCoords(client.id, feature.center[1], feature.center[0]);
+        await this.saveCoords(client.id, feature.center[1], feature.center[0], 'mapbox');
         logger.info('GeocodeClients', `Client ${client.id} geocoded via Mapbox (step 3)`);
         return 'mapbox';
       }
@@ -352,12 +352,18 @@ export class GeocodeClientsProcessor extends BaseProcessor<GeocodingJobData, Job
 
   // ── Shared helpers ──────────────────────────────────────────────────────
 
-  private async saveCoords(clientId: string, lat: number, lng: number): Promise<void> {
+  private async saveCoords(
+    clientId: string,
+    lat: number,
+    lng: number,
+    method: 'psgc' | 'haiku' | 'mapbox'
+  ): Promise<void> {
     await pool.query(
       `UPDATE clients
-       SET latitude = $1, longitude = $2, geocoded_at = NOW(), geocode_status = 'success'
+       SET latitude = $1, longitude = $2, geocoded_at = NOW(), geocode_status = 'success',
+           geocode_method = $4
        WHERE id = $3`,
-      [lat, lng, clientId]
+      [lat, lng, clientId, method]
     );
   }
 

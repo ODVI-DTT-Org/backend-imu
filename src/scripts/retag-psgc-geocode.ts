@@ -20,6 +20,8 @@
  *   --limit=N      Stop after N clients
  *   --cap=N        Monthly Mapbox cap (default 95000)
  *   --chunk=N      Rows per commit batch (default 500)
+ *   --shard=N      Which shard this process owns (0-based, default 0)
+ *   --shards=N     Total number of shards (default 1 = no sharding)
  */
 
 import 'dotenv/config';
@@ -43,6 +45,8 @@ const DRY_RUN   = hasFlag('dry-run');
 const LIMIT     = arg('limit')  ? parseInt(arg('limit')!)  : Infinity;
 const MAPBOX_CAP  = arg('cap')  ? parseInt(arg('cap')!)    : 95_000;
 const CHUNK_SIZE  = arg('chunk')? parseInt(arg('chunk')!)  : 500;
+const SHARD       = arg('shard')  ? parseInt(arg('shard')!)  : 0;
+const SHARDS      = arg('shards') ? parseInt(arg('shards')!) : 1;
 const FETCH_SIZE  = 100;        // rows per SELECT
 const MAPBOX_RPS  = 10;         // requests/sec for Mapbox
 const MIN_SCORE   = 0.5;        // Mapbox relevance threshold
@@ -152,9 +156,10 @@ async function commitChunk(results: GeoResult[]): Promise<void> {
         [r.clientId, r.oldLat, r.oldLng, r.newLat, r.newLng, r.source, r.confidence, r.address]
       );
       if (r.newLat !== null && r.newLng !== null) {
+        const geocodeMethod = r.source === 'mapbox' ? 'mapbox' : null;
         await client.query(
-          'UPDATE clients SET latitude=$1,longitude=$2 WHERE id=$3',
-          [r.newLat, r.newLng, r.clientId]
+          'UPDATE clients SET latitude=$1,longitude=$2,geocode_method=$4 WHERE id=$3',
+          [r.newLat, r.newLng, r.clientId, geocodeMethod]
         );
       }
     }
@@ -171,7 +176,7 @@ async function commitChunk(results: GeoResult[]): Promise<void> {
 
 async function main() {
   log(`🌍  IMU PSGC Re-geocoder starting`);
-  log(`   mode=${DRY_RUN?'DRY-RUN':'LIVE'} cap=${MAPBOX_CAP} chunk=${CHUNK_SIZE} limit=${LIMIT===Infinity?'all':LIMIT}`);
+  log(`   mode=${DRY_RUN?'DRY-RUN':'LIVE'} cap=${MAPBOX_CAP} chunk=${CHUNK_SIZE} limit=${LIMIT===Infinity?'all':LIMIT} shard=${SHARD}/${SHARDS}`);
 
   if (!DRY_RUN) {
     await pool.query(`
@@ -186,12 +191,15 @@ async function main() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_tagged_psgc_source ON tagged_psgc_clients(geocode_source)`);
   }
 
+  const shardClause = SHARDS > 1 ? `AND abs(hashtext(c.id::text)) % ${SHARDS} = ${SHARD}` : '';
+
   const { rows: [{ cnt }] } = await pool.query<{cnt:string}>(`
     SELECT COUNT(*) AS cnt FROM clients c
     WHERE deleted_at IS NULL
       AND NOT EXISTS (SELECT 1 FROM tagged_psgc_clients t WHERE t.client_id=c.id)
       AND ((full_address IS NOT NULL AND full_address!='')
-           OR barangay IS NOT NULL OR municipality IS NOT NULL OR province IS NOT NULL)`);
+           OR barangay IS NOT NULL OR municipality IS NOT NULL OR province IS NOT NULL)
+      ${shardClause}`);
 
   const total = parseInt(cnt);
   const toProcess = LIMIT === Infinity ? total : Math.min(total, LIMIT);
@@ -220,6 +228,7 @@ async function main() {
         AND NOT EXISTS (SELECT 1 FROM tagged_psgc_clients t WHERE t.client_id=c.id)
         AND ((c.full_address IS NOT NULL AND c.full_address!='')
              OR c.barangay IS NOT NULL OR c.municipality IS NOT NULL OR c.province IS NOT NULL)
+        ${shardClause}
       ORDER BY c.id
       LIMIT $1`, [FETCH_SIZE]);
 

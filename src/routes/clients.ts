@@ -334,14 +334,26 @@ const addressSchema = z.object({
   postal_code: z.string().optional(),
   latitude: z.number().optional(),
   longitude: z.number().optional(),
-  is_primary: z.boolean().default(false),
+  // Mobile/PowerSync stores booleans as 0/1 in SQLite — accept either form.
+  is_primary: z.preprocess(
+    (v) => v === 1 || v === '1' || v === 'true' ? true
+         : v === 0 || v === '0' || v === 'false' ? false
+         : v,
+    z.boolean().default(false),
+  ),
 });
 
 const phoneSchema = z.object({
   type: z.enum(['mobile', 'landline']),
   number: z.string().min(1),
   label: z.string().optional(),
-  is_primary: z.boolean().default(false),
+  // Mobile/PowerSync stores booleans as 0/1 in SQLite — accept either form.
+  is_primary: z.preprocess(
+    (v) => v === 1 || v === '1' || v === 'true' ? true
+         : v === 0 || v === '0' || v === 'false' ? false
+         : v,
+    z.boolean().default(false),
+  ),
 });
 
 const CLIENT_LIST_SELECT_COLUMNS = `
