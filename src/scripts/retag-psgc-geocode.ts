@@ -92,31 +92,85 @@ function buildAddress(row: any): string {
 
 // ── Geocoding APIs ────────────────────────────────────────────────────────────
 
+// Returns true if the response indicates a transient failure (429 rate-limit
+// or 5xx server error). Such failures are retryable; permanent 4xx errors
+// (other than 429) and "no match" results are not.
+function isTransient(status: number): boolean {
+  return status === 429 || status === 408 || status >= 500;
+}
+
+// Sleep with exponential backoff + small jitter. Attempts are 1-indexed.
+async function backoff(attempt: number, baseMs = 1000, capMs = 16000): Promise<void> {
+  const exp = Math.min(baseMs * 2 ** (attempt - 1), capMs);
+  const jitter = Math.floor(Math.random() * 500);
+  await sleep(exp + jitter);
+}
+
+const MAX_RETRIES = 4;
+
 async function geocodeMapbox(addr: string): Promise<{ lat: number; lng: number; score: number } | null> {
   if (!MAPBOX_TOKEN) return null;
   const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(addr)}.json` +
     `?access_token=${MAPBOX_TOKEN}&country=PH&limit=1&types=address,place,locality,neighborhood`;
-  try {
-    const r = await fetch(url);
-    if (!r.ok) return null;
-    const d = await r.json() as any;
-    const f = d.features?.[0];
-    if (!f) return null;
-    return { lng: f.center[0], lat: f.center[1], score: f.relevance ?? 0 };
-  } catch { return null; }
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const r = await fetch(url);
+      if (isTransient(r.status)) {
+        log(`  mapbox ${r.status} — backoff attempt=${attempt}/${MAX_RETRIES} addr="${addr.slice(0, 60)}"`);
+        if (attempt === MAX_RETRIES) return null;
+        await backoff(attempt);
+        continue;
+      }
+      if (!r.ok) return null; // permanent 4xx (e.g. 401, 400) — don't retry
+      const d = await r.json() as any;
+      const f = d.features?.[0];
+      if (!f) return null; // genuine no-match
+      return { lng: f.center[0], lat: f.center[1], score: f.relevance ?? 0 };
+    } catch (e: any) {
+      // Network blip — retry
+      log(`  mapbox network err: ${e?.message ?? e} — backoff attempt=${attempt}/${MAX_RETRIES}`);
+      if (attempt === MAX_RETRIES) return null;
+      await backoff(attempt);
+    }
+  }
+  return null;
 }
 
 async function geocodeNominatim(addr: string): Promise<{ lat: number; lng: number } | null> {
   const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(addr)}&format=json&limit=1&countrycodes=ph`;
-  try {
-    const r = await fetch(url, {
-      headers: { 'User-Agent': 'IMU-Field-App-Geocoder/1.0 (contact@cfbtools.app)' },
-    });
-    if (!r.ok) return null;
-    const d = await r.json() as any[];
-    if (!d.length) return null;
-    return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
-  } catch { return null; }
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const r = await fetch(url, {
+        headers: { 'User-Agent': 'IMU-Field-App-Geocoder/1.0 (contact@cfbtools.app)' },
+      });
+      if (isTransient(r.status)) {
+        log(`  nominatim ${r.status} — backoff attempt=${attempt}/${MAX_RETRIES} addr="${addr.slice(0, 60)}"`);
+        if (attempt === MAX_RETRIES) return null;
+        // Nominatim is slower; bump the base backoff
+        await backoff(attempt, 2000, 32000);
+        continue;
+      }
+      if (!r.ok) return null;
+      // Some 429s come back as HTML 200 cached by Varnish — guard the JSON parse.
+      const text = await r.text();
+      let d: any[];
+      try { d = JSON.parse(text); } catch {
+        log(`  nominatim non-JSON body (likely 429 HTML) — backoff attempt=${attempt}/${MAX_RETRIES}`);
+        if (attempt === MAX_RETRIES) return null;
+        await backoff(attempt, 2000, 32000);
+        continue;
+      }
+      if (!d.length) return null;
+      return { lat: parseFloat(d[0].lat), lng: parseFloat(d[0].lon) };
+    } catch (e: any) {
+      log(`  nominatim network err: ${e?.message ?? e} — backoff attempt=${attempt}/${MAX_RETRIES}`);
+      if (attempt === MAX_RETRIES) return null;
+      await backoff(attempt, 2000, 32000);
+    }
+  }
+  return null;
 }
 
 async function mapboxUsedThisMonth(): Promise<number> {
