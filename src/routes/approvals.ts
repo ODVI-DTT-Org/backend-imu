@@ -1849,6 +1849,9 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         return c.json({ message: 'Client not found' }, 404);
       }
 
+      // `?? null` so that an undefined optional value (now allowed by Zod)
+      // is bound as SQL NULL rather than an empty string or driver-dependent
+      // behaviour.
       await client.query(`
         INSERT INTO releases (
           id, client_id, user_id, visit_id, call_id, product_type, loan_type,
@@ -1856,9 +1859,6 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         ) VALUES (
           gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved', $7, NOW()
         )
-      // `?? null` so that an undefined optional value (now allowed by Zod)
-      // is bound as SQL NULL rather than an empty string or driver-dependent
-      // behaviour.
       `, [validated.client_id, user.sub,
           validated.product_type ?? null,
           validated.loan_type ?? null,
