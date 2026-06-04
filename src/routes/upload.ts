@@ -393,9 +393,32 @@ upload.post('/file', authMiddleware, requirePermission('clients', 'update'), asy
       entity_id: entityId,
       file_id: fileRecord.rows[0]?.id,
     });
-  } catch (error) {
-    console.error('File upload error:', error);
-    throw new Error('Failed to upload file');
+  } catch (error: any) {
+    // Surface the actual reason so the mobile (and logs) say more than
+    // "Failed to upload file". Was previously rethrown as a generic
+    // Error which the framework converted to an opaque 500.
+    console.error('[Upload /file] error:', {
+      name: error?.name,
+      message: error?.message,
+      code: error?.code,
+      cause: error?.cause,
+      stack: error?.stack,
+    });
+
+    // ValidationErrors are already in the right shape — re-throw.
+    if (error instanceof ValidationError) throw error;
+
+    // Postgres/connection errors expose `.code` (e.g. '23505', '57P01').
+    const pgCode = typeof error?.code === 'string' ? error.code : undefined;
+
+    return c.json(
+      {
+        message: 'Failed to upload file',
+        error: error?.message ?? 'unknown',
+        code: pgCode,
+      },
+      500
+    );
   }
 });
 
