@@ -4,6 +4,7 @@ import { authMiddleware, requireRole } from '../middleware/auth.js';
 import { visitService, createVisitSchema, updateVisitSchema, type Visit } from '../services/visit.service.js';
 import { ValidationError } from '../errors/index.js';
 import { storageService } from '../services/storage.js';
+import { signVisitPhotoFields } from '../utils/photo-signing.js';
 import { pool } from '../db/index.js';
 import { getCacheService, CACHE_TTL } from '../services/cache/redis-cache.js';
 
@@ -31,16 +32,8 @@ function extractS3Key(url: string): string | null {
   return null;
 }
 
-async function signVisitPhoto<T extends { photo_url?: string | null }>(visit: T): Promise<T> {
-  if (!visit.photo_url || !storageService.isS3Ready()) return visit;
-  const key = extractS3Key(visit.photo_url);
-  if (!key) return visit;
-  try {
-    const signed = await storageService.getSignedUrl(key, SIGNED_URL_EXPIRY);
-    return { ...visit, photo_url: signed };
-  } catch {
-    return visit;
-  }
+async function signVisitPhoto<T extends { photo_url?: string | null; remarks?: string | null }>(visit: T): Promise<T> {
+  return signVisitPhotoFields(visit);
 }
 
 async function signVisitPhotos<T extends { photo_url?: string | null }>(items: T[]): Promise<T[]> {

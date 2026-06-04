@@ -5,6 +5,7 @@ import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware, auditLog } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import { storageService } from '../services/storage.js';
+import { signVisitPhotoFields } from '../utils/photo-signing.js';
 import { createNotification } from '../services/notification.service.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
 import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
@@ -56,16 +57,8 @@ function extractS3Key(url: string): string | null {
   return null;
 }
 
-async function signApprovalPhoto<T extends { photo_url?: string | null }>(item: T): Promise<T> {
-  if (!item.photo_url || !storageService.isS3Ready()) return item;
-  const key = extractS3Key(item.photo_url);
-  if (!key) return item;
-  try {
-    const signed = await storageService.getSignedUrl(key, SIGNED_URL_EXPIRY);
-    return { ...item, photo_url: signed };
-  } catch {
-    return item;
-  }
+async function signApprovalPhoto<T extends { photo_url?: string | null; visit_remarks?: string | null }>(item: T): Promise<T> {
+  return signVisitPhotoFields(item);
 }
 
 // Manager roles for authorization
@@ -374,8 +367,9 @@ approvals.get('/:id', authMiddleware, requirePermission('approvals', 'read'), as
       throw new NotFoundError('Approval');
     }
 
+    const mapped = await signApprovalPhoto(mapRowToApproval(row));
     return c.json({
-      ...mapRowToApproval(row),
+      ...mapped,
       expand: {
         client_id: row.client_id ? {
           id: row.client_id,

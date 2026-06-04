@@ -5,6 +5,7 @@ import { releaseService, createReleaseSchema, updateReleaseSchema } from '../ser
 import { ValidationError } from '../errors/index.js';
 import { pool } from '../db/index.js';
 import { createNotification } from '../services/notification.service.js';
+import { signVisitPhotoFieldsAll } from '../utils/photo-signing.js';
 
 const releases = new Hono();
 
@@ -93,7 +94,8 @@ LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, perPage, offset]
     );
 
-    return c.json({ items: dataResult.rows, page, perPage, totalItems, totalPages });
+    const items = await signVisitPhotoFieldsAll(dataResult.rows);
+    return c.json({ items, page, perPage, totalItems, totalPages });
   } finally {
     dbClient.release();
   }
