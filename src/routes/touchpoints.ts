@@ -15,6 +15,7 @@ import { getClientCacheInvalidation } from '../services/cache/client-cache-inval
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
 import { computeOdometerDeparture, computeKilometersTraveled } from '../services/visit.service.js';
 import { storageService } from '../services/storage.js';
+import { signVisitPhotoFields } from '../utils/photo-signing.js';
 
 const SIGNED_URL_EXPIRY = 3600; // 1 hour
 
@@ -279,8 +280,10 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
       const nameParts = [row.client_first_name, middleName].filter((p: string) => p && p.trim().length > 0);
       const clientDisplayName = `${row.client_last_name}, ${nameParts.join(' ')}`;
 
-      // Sign photo URL if stored in S3
-      row.photo_url = await signPhotoUrl(row.photo_url);
+      // Sign photo URL and any envelope additional_photos in remarks
+      const signed = await signVisitPhotoFields(row);
+      row.photo_url = signed.photo_url;
+      row.remarks = signed.remarks;
 
       return {
         ...mapRowToTouchpoint(row),
@@ -488,8 +491,10 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
       return c.json({ message: 'Forbidden' }, 403);
     }
 
-    // Sign photo URL if stored in S3
-    touchpoint.photo_url = await signPhotoUrl(touchpoint.photo_url);
+    // Sign photo URL and any envelope additional_photos in remarks
+    const signedTp = await signVisitPhotoFields(touchpoint);
+    touchpoint.photo_url = signedTp.photo_url;
+    touchpoint.remarks = signedTp.remarks;
 
     const clientFirstName = touchpoint.client_first_name || '';
     const clientMiddleName = touchpoint.client_middle_name || '';
