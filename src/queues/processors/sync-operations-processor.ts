@@ -154,6 +154,20 @@ export class SyncOperationsProcessor extends BaseProcessor<SyncJobData, JobResul
   private async processPutOperation(client: any, table: string, data: any, userId: string): Promise<void> {
     const { id, ...dataWithoutId } = data;
 
+    // Refuse to resurrect tombstoned itineraries — a web admin or the
+    // owner already deleted this row, and the mobile cache shouldn't
+    // override that.
+    if (table === 'itineraries') {
+      const tombstone = await client.query(
+        `SELECT 1 FROM deleted_itineraries WHERE id = $1`,
+        [id]
+      );
+      if (tombstone.rows.length > 0) {
+        console.log(`[Sync] Skipping put for tombstoned itinerary ${id}`);
+        return;
+      }
+    }
+
     // Check if record exists
     const existingResult = await client.query(
       `SELECT id FROM ${table} WHERE id = $1`,

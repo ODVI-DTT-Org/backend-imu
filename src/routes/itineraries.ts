@@ -578,7 +578,24 @@ itineraries.delete('/:id', authMiddleware, requirePermission('itineraries', 'del
       }
     }
 
-    await pool.query('DELETE FROM itineraries WHERE id = $1', [id]);
+    // Hard delete + tombstone so a stale PowerSync upload from mobile
+    // doesn't resurrect the row via the sync-operations processor.
+    const dbClient = await pool.connect();
+    try {
+      await dbClient.query('BEGIN');
+      await dbClient.query('DELETE FROM itineraries WHERE id = $1', [id]);
+      await dbClient.query(
+        `INSERT INTO deleted_itineraries (id, deleted_by) VALUES ($1, $2)
+         ON CONFLICT (id) DO UPDATE SET deleted_at = NOW(), deleted_by = EXCLUDED.deleted_by`,
+        [id, user.sub]
+      );
+      await dbClient.query('COMMIT');
+    } catch (e) {
+      await dbClient.query('ROLLBACK');
+      throw e;
+    } finally {
+      dbClient.release();
+    }
     return c.json({ message: 'Itinerary deleted successfully' });
   } catch (error) {
     console.error('Delete itinerary error:', error);
@@ -599,11 +616,30 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
 
     const { ids } = bulkDeleteSchema.parse(await c.req.json());
 
-    const result = await pool.query(
-      'DELETE FROM itineraries WHERE id = ANY($1::uuid[]) RETURNING id',
-      [ids]
-    );
-    const deleted = result.rows.map((r: any) => r.id);
+    const dbClient = await pool.connect();
+    let deleted: string[];
+    try {
+      await dbClient.query('BEGIN');
+      const result = await dbClient.query(
+        'DELETE FROM itineraries WHERE id = ANY($1::uuid[]) RETURNING id',
+        [ids]
+      );
+      deleted = result.rows.map((r: any) => r.id);
+      if (deleted.length > 0) {
+        await dbClient.query(
+          `INSERT INTO deleted_itineraries (id, deleted_by)
+           SELECT UNNEST($1::uuid[]), $2
+           ON CONFLICT (id) DO UPDATE SET deleted_at = NOW(), deleted_by = EXCLUDED.deleted_by`,
+          [deleted, user.sub]
+        );
+      }
+      await dbClient.query('COMMIT');
+    } catch (e) {
+      await dbClient.query('ROLLBACK');
+      throw e;
+    } finally {
+      dbClient.release();
+    }
 
     return c.json({
       success: deleted,
