@@ -108,8 +108,10 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     photo_url: row.photo_url ?? null,
     phone_number: row.phone_number ?? null,
     visit_address: row.visit_address ?? null,
+    visit_barangay: row.visit_barangay ?? null,
     visit_municipality: row.visit_municipality ?? null,
     visit_province: row.visit_province ?? null,
+    visit_region: row.visit_region ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     expand: row.expand,
@@ -457,13 +459,21 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               COALESCE(v.remarks, ca.remarks, t.remarks) AS remarks,
               ca.phone_number,
               v.address as visit_address,
+              v.barangay as visit_barangay,
               v.municipality as visit_municipality,
-              v.province as visit_province
+              v.province as visit_province,
+              v.region as visit_region,
+              addr.street as client_addr_street,
+              addr.barangay as client_addr_barangay,
+              addr.municipality as client_addr_municipality,
+              addr.province as client_addr_province,
+              addr.region as client_addr_region
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
        LEFT JOIN visits v ON v.id = t.visit_id
        LEFT JOIN calls ca ON ca.id = t.call_id
+       LEFT JOIN addresses addr ON addr.client_id = c.id AND addr.is_primary = true
        WHERE t.id = $1`,
       [id]
     );
@@ -499,6 +509,13 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
           email: touchpoint.client_email || null,
           phone: touchpoint.client_phone || null,
           client_type: touchpoint.client_client_type || null,
+          primary_address: {
+            street: touchpoint.client_addr_street || null,
+            barangay: touchpoint.client_addr_barangay || null,
+            municipality: touchpoint.client_addr_municipality || null,
+            province: touchpoint.client_addr_province || null,
+            region: touchpoint.client_addr_region || null,
+          },
         },
         user_id: touchpoint.user_id ? {
           id: touchpoint.user_id,
