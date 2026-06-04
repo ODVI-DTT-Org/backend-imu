@@ -465,9 +465,8 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               v.region as visit_region,
               addr.street as client_addr_street,
               addr.barangay as client_addr_barangay,
-              addr.municipality as client_addr_municipality,
-              addr.province as client_addr_province,
-              addr.region as client_addr_region
+              addr.city as client_addr_municipality,
+              addr.province as client_addr_province
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
@@ -514,7 +513,7 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
             barangay: touchpoint.client_addr_barangay || null,
             municipality: touchpoint.client_addr_municipality || null,
             province: touchpoint.client_addr_province || null,
-            region: touchpoint.client_addr_region || null,
+            region: null,
           },
         },
         user_id: touchpoint.user_id ? {
