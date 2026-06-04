@@ -1935,11 +1935,19 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       // Tele-specific fields
       phone_number: z.string().min(1).max(20).optional(),
       duration: z.number().int().positive().optional(),
-      // Common fields
+      // Common fields. Accept `remarks` as a legacy alias for `notes` so
+      // mobile clients (which historically sent `remarks` for the admin
+      // path of the same endpoint) don't get their payload silently dropped
+      // here. We collapse them into `notes` right after parsing below.
       notes: z.string().optional(),
+      remarks: z.string().optional(),
     });
 
-    const validated = schema.parse(await c.req.json());
+    const rawPayload = await c.req.json();
+    const validated = schema.parse(rawPayload);
+    // Single source of truth downstream: prefer the explicit `notes` value,
+    // fall back to `remarks` if the client only sent that.
+    validated.notes = validated.notes ?? validated.remarks;
 
     const dbClient = await pool.connect();
     try {
