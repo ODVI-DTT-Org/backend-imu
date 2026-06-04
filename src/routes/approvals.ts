@@ -1815,9 +1815,12 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
   if (user.role === 'admin') {
     const schema = z.object({
       client_id: z.string().uuid(),
-      udi_number: z.string().min(1).max(50),
-      product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']),
-      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']),
+      // udi / product / loan are OPTIONAL in the releases table (see
+      // migration 111 for product_type and loan_type; udi_number was always
+      // nullable). Mobile omits these keys when the agent leaves them blank.
+      udi_number: z.string().min(1).max(50).optional(),
+      product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']).optional(),
+      loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']).optional(),
       latitude: z.number().optional(),
       longitude: z.number().optional(),
       address: z.string().optional(),
@@ -1853,8 +1856,15 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         ) VALUES (
           gen_random_uuid(), $1, $2, NULL, NULL, $3, $4, $5, $6, 'approved', $7, NOW()
         )
-      `, [validated.client_id, user.sub, validated.product_type,
-          validated.loan_type, validated.udi_number, validated.remarks, user.sub]);
+      // `?? null` so that an undefined optional value (now allowed by Zod)
+      // is bound as SQL NULL rather than an empty string or driver-dependent
+      // behaviour.
+      `, [validated.client_id, user.sub,
+          validated.product_type ?? null,
+          validated.loan_type ?? null,
+          validated.udi_number ?? null,
+          validated.remarks ?? null,
+          user.sub]);
 
       await client.query(`
         UPDATE clients
@@ -1888,7 +1898,10 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
   else {
     const schema = z.object({
       client_id: z.string().uuid(),
-      udi_number: z.string().min(1).max(50),
+      // UDI is OPTIONAL — agents often record the visit before the UDI is
+      // assigned. Mobile omits the key entirely when blank. The releases
+      // table allows udi_number to be NULL.
+      udi_number: z.string().min(1).max(50).optional(),
       product_type: z.enum(['BFP_ACTIVE', 'BFP_PENSION', 'PNP_PENSION', 'NAPOLCOM', 'BFP_STP']).optional(),
       loan_type: z.enum(['NEW', 'ADDITIONAL', 'RENEWAL', 'PRETERM']).optional(),
       // Caravan-specific fields
@@ -2047,7 +2060,9 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       `, [validated.client_id, user.sub, user.role,
           user.role === 'tele' ? 'Loan Release Request (Tele)' : 'Loan Release Request',
           JSON.stringify(notesData),
-          validated.udi_number]);
+          // udi_number column in approvals is nullable; bind as SQL NULL when
+          // the agent submitted without one (now allowed by the Zod schema).
+          validated.udi_number ?? null]);
 
       await dbClient.query('COMMIT');
 
