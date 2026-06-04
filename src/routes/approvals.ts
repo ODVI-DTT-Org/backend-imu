@@ -1984,12 +1984,16 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           (validated.odometer_in ?? null) as string | null,
           computedDeparture,
         );
+        // Write the user-facing free text to `remarks` (the active column;
+        // visits.notes is marked legacy in the schema). This is what the
+        // visits API and the web detail dialogs read. The mobile sends the
+        // multi-photo envelope here so the web display can parse it.
         const visitResult = await dbClient.query(`
           INSERT INTO visits (
             id, client_id, user_id, type, time_in, time_out,
             odometer_arrival, odometer_departure, kilometers_traveled,
             latitude, longitude, address, barangay, municipality, province, region, source,
-            photo_url, notes, reason, status
+            photo_url, remarks, reason, status
           ) VALUES (
             gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
             $16, $17, 'Loan Release', 'Completed'
