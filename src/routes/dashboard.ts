@@ -54,7 +54,7 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     const isCaravan = user.role === 'caravan';
 
     if (isCaravan) {
-      const [touchpointResult] = await Promise.all([
+      const [touchpointResult, releasesResult] = await Promise.all([
         pool.query(
           `SELECT COUNT(*) as total,
                   COUNT(*) FILTER (WHERE type = 'Visit') as visits,
@@ -63,14 +63,23 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
            WHERE created_at::date >= $1 AND created_at::date <= $2 AND user_id = $3`,
           [start, end, user.sub]
         ),
+        pool.query(
+          `SELECT COUNT(*) as total_releases,
+                  COUNT(*) FILTER (WHERE status = 'approved') as released
+           FROM releases WHERE created_at::date >= $1 AND created_at::date <= $2 AND user_id = $3`,
+          [start, end, user.sub]
+        ),
       ]);
       const tp = touchpointResult.rows[0];
+      const rel = releasesResult.rows[0];
       return c.json({
         period: { start_date: start, end_date: end },
         summary: {
           total_touchpoints: parseInt(tp.total),
           visits: parseInt(tp.visits),
           calls: parseInt(tp.calls),
+          total_releases: parseInt(rel.total_releases),
+          released: parseInt(rel.released),
         },
         top_caravans: [],
         top_teles: [],
@@ -91,13 +100,19 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
       groupName = groupNameResult.rows[0]?.name ?? null;
     }
 
-    const [touchpointResult, caravanResult, teleResult, groupResult] = await Promise.all([
+    const [touchpointResult, releasesResult, caravanResult, teleResult, groupResult] = await Promise.all([
       pool.query(
         `SELECT COUNT(*) as total,
                 COUNT(*) FILTER (WHERE type = 'Visit') as visits,
                 COUNT(*) FILTER (WHERE type = 'Call') as calls
          FROM touchpoints
          WHERE created_at::date >= $1 AND created_at::date <= $2`,
+        [start, end]
+      ),
+      pool.query(
+        `SELECT COUNT(*) as total_releases,
+                COUNT(*) FILTER (WHERE status = 'approved') as released
+         FROM releases WHERE created_at::date >= $1 AND created_at::date <= $2`,
         [start, end]
       ),
       pool.query(
@@ -143,12 +158,15 @@ dashboard.get('/', authMiddleware, requirePermission('dashboard', 'read'), async
     ]);
 
     const tp = touchpointResult.rows[0];
+    const rel = releasesResult.rows[0];
     const response: any = {
       period: { start_date: start, end_date: end },
       summary: {
         total_touchpoints: parseInt(tp.total),
         visits: parseInt(tp.visits),
         calls: parseInt(tp.calls),
+        total_releases: parseInt(rel.total_releases),
+        released: parseInt(rel.released),
       },
       top_caravans: caravanResult.rows.map((r: any) => ({
         user_id: r.user_id,

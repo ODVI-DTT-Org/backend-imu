@@ -2070,6 +2070,66 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           // the agent submitted without one (now allowed by the Zod schema).
           validated.udi_number ?? null]);
 
+      // If the agent filled in a street address on this visit AND it
+      // differs structurally from the client's recorded primary address,
+      // create a second approval for the address update so an admin can
+      // review it. We only create it when at least one of the structured
+      // PSGC fields (barangay/municipality/province) is present AND the
+      // street is non-empty — same guard as gps_address_saver.dart so
+      // empty-street submits don't produce garbage approvals.
+      const hasStreet = typeof validated.address === 'string' &&
+        validated.address.trim().length > 0;
+      const hasStructured = !!(validated.barangay || validated.municipality || validated.province);
+
+      if (hasStreet && hasStructured) {
+        // Check if the client already has a primary address row
+        const primaryAddrResult = await dbClient.query(
+          `SELECT id, street, barangay, city, province FROM addresses
+           WHERE client_id = $1 AND is_primary = true AND deleted_at IS NULL
+           ORDER BY created_at DESC LIMIT 1`,
+          [validated.client_id]
+        );
+
+        const shouldCreateAddressApproval = (() => {
+          if (primaryAddrResult.rows.length === 0) return true; // no primary → treat as add
+          const existing = primaryAddrResult.rows[0];
+          const norm = (v: string | null | undefined) =>
+            (v ?? '').toLowerCase().trim().replace(/\s+/g, ' ');
+          // Only create if something actually changed
+          return (
+            norm(existing.street) !== norm(validated.address) ||
+            norm(existing.barangay) !== norm(validated.barangay) ||
+            norm(existing.city) !== norm(validated.municipality) ||
+            norm(existing.province) !== norm(validated.province)
+          );
+        })();
+
+        if (shouldCreateAddressApproval) {
+          const addrType = primaryAddrResult.rows.length === 0 ? 'address_add' : 'address_edit';
+          const addrPayload: Record<string, any> = {
+            type: 'home',
+            street: validated.address,
+            barangay: validated.barangay ?? null,
+            city: validated.municipality ?? null,
+            province: validated.province ?? null,
+            region: validated.region ?? null,
+            latitude: validated.latitude ?? null,
+            longitude: validated.longitude ?? null,
+            is_primary: true,
+          };
+          if (addrType === 'address_edit' && primaryAddrResult.rows.length > 0) {
+            addrPayload.address_id = primaryAddrResult.rows[0].id;
+          }
+
+          await dbClient.query(`
+            INSERT INTO approvals (id, type, client_id, user_id, role, reason, notes, status)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, 'pending')
+          `, [addrType, validated.client_id, user.sub, user.role,
+              'Address Update from Loan Release',
+              JSON.stringify(addrPayload)]);
+        }
+      }
+
       await dbClient.query('COMMIT');
 
       if (shouldRefreshTouchpointSummary) {
