@@ -565,25 +565,26 @@ itineraries.delete('/:id', authMiddleware, requirePermission('itineraries', 'del
        WHERE i.id = $1`,
       [id]
     );
-    if (existing.rows.length === 0) {
-      throw new NotFoundError('Itinerary');
-    }
+    // Idempotent: if the row is already gone (previously deleted from
+    // web or a prior mobile upload that 500d and is being retried),
+    // still write the tombstone and return success so PowerSync stops
+    // retrying. A 404/500 here causes PowerSync to retry indefinitely.
+    const alreadyGone = existing.rows.length === 0;
 
-    const itinerary = existing.rows[0];
-
-    // For caravans, verify they own this itinerary
-    if (user.role === 'caravan') {
-      if (itinerary.user_id !== user.sub) {
+    if (!alreadyGone) {
+      const itinerary = existing.rows[0];
+      if (user.role === 'caravan' && itinerary.user_id !== user.sub) {
         throw new AuthorizationError('You can only modify your own itineraries');
       }
     }
 
-    // Hard delete + tombstone so a stale PowerSync upload from mobile
-    // doesn't resurrect the row via the sync-operations processor.
+    // Hard delete + tombstone in one transaction.
     const dbClient = await pool.connect();
     try {
       await dbClient.query('BEGIN');
-      await dbClient.query('DELETE FROM itineraries WHERE id = $1', [id]);
+      if (!alreadyGone) {
+        await dbClient.query('DELETE FROM itineraries WHERE id = $1', [id]);
+      }
       await dbClient.query(
         `INSERT INTO deleted_itineraries (id, deleted_by) VALUES ($1, $2)
          ON CONFLICT (id) DO UPDATE SET deleted_at = NOW(), deleted_by = EXCLUDED.deleted_by`,
