@@ -102,6 +102,7 @@ export function buildClientFilters(
     pension_type?: string | string[];
     loan_type?: string | string[];
     agency_id?: string;
+    region?: string | string[];
     municipality?: string | string[];
     province?: string | string[];
     barangay?: string | string[];
@@ -138,6 +139,18 @@ export function buildClientFilters(
     conditions.push(`c.agency_id = $${idx}`);
     params.push(q.agency_id);
     idx++;
+  }
+
+  if (q.region) {
+    const values = Array.isArray(q.region) ? q.region : [q.region];
+    if (values.length > 0) {
+      const normalized = values.map(v => normalizeLocationName(v)).map(v => v.toLowerCase()).filter(v => v.length > 0);
+      if (normalized.length > 0) {
+        conditions.push(`LOWER(COALESCE(c.region,'')) = ANY($${idx}::text[])`);
+        params.push(normalized);
+        idx++;
+      }
+    }
   }
 
   if (q.municipality) {
@@ -597,6 +610,8 @@ clients.get('/', authMiddleware, async (c) => {
     const municipality = municipalityQuery?.length ? municipalityQuery : undefined;
     const province = provinceQuery?.length ? provinceQuery : undefined;
     const barangay = barangayQuery?.length ? barangayQuery : undefined;
+    const regionQuery = c.req.queries('region');
+    const region = regionQuery?.length ? regionQuery : undefined;
 
     const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
       client_type: c.req.queries('client_type')?.length ? c.req.queries('client_type') : undefined,
@@ -605,6 +620,7 @@ clients.get('/', authMiddleware, async (c) => {
       pension_type: c.req.queries('pension_type')?.length ? c.req.queries('pension_type') : undefined,
       loan_type: c.req.queries('loan_type')?.length ? c.req.queries('loan_type') : undefined,
       agency_id: c.req.query('agency_id'),
+      region,
       municipality,
       province,
       barangay,
@@ -1371,6 +1387,8 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const municipality = municipalityQuery?.length ? municipalityQuery : undefined;
     const province = provinceQuery?.length ? provinceQuery : undefined;
     const barangay = barangayQuery?.length ? barangayQuery : undefined;
+    const regionQuery = c.req.queries('region');
+    const region = regionQuery?.length ? regionQuery : undefined;
 
     const { conditions: sharedConditions, params: sharedParams, nextIdx: sharedNextIdx } = buildClientFilters({
       client_type: c.req.queries('client_type')?.length ? c.req.queries('client_type') : undefined,
@@ -1379,6 +1397,7 @@ clients.get('/assigned', authMiddleware, async (c) => {
       pension_type: c.req.queries('pension_type')?.length ? c.req.queries('pension_type') : undefined,
       loan_type: c.req.queries('loan_type')?.length ? c.req.queries('loan_type') : undefined,
       agency_id: c.req.query('agency_id'),
+      region,
       municipality,
       province,
       barangay,
