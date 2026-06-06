@@ -157,14 +157,33 @@ export class SyncOperationsProcessor extends BaseProcessor<SyncJobData, JobResul
     // Refuse to resurrect tombstoned itineraries — a web admin or the
     // owner already deleted this row, and the mobile cache shouldn't
     // override that.
+    // Check both the exact UUID and the composite (user+client+date) key so
+    // resurrection-with-a-new-UUID is also blocked.
     if (table === 'itineraries') {
-      const tombstone = await client.query(
+      const tombstoneById = await client.query(
         `SELECT 1 FROM deleted_itineraries WHERE id = $1`,
         [id]
       );
-      if (tombstone.rows.length > 0) {
-        console.log(`[Sync] Skipping put for tombstoned itinerary ${id}`);
+      if (tombstoneById.rows.length > 0) {
+        console.log(`[Sync] Skipping put for tombstoned itinerary ${id} (UUID match)`);
         return;
+      }
+
+      // Composite check: block if (user_id, client_id, scheduled_date) was deleted.
+      const userId = dataWithoutId.user_id;
+      const clientId = dataWithoutId.client_id;
+      const scheduledDate = dataWithoutId.scheduled_date;
+      if (userId && clientId && scheduledDate) {
+        const tombstoneByComposite = await client.query(
+          `SELECT 1 FROM deleted_itineraries
+           WHERE user_id = $1 AND client_id = $2 AND scheduled_date = $3::date
+           LIMIT 1`,
+          [userId, clientId, scheduledDate]
+        );
+        if (tombstoneByComposite.rows.length > 0) {
+          console.log(`[Sync] Skipping put for tombstoned itinerary ${id} (composite match: user=${userId} client=${clientId} date=${scheduledDate})`);
+          return;
+        }
       }
     }
 

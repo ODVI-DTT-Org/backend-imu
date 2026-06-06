@@ -389,6 +389,41 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
           continue;
         }
 
+        // Refuse to create if a tombstone exists for this logical itinerary
+        // (same user + client + date). This blocks mobile resurrection even
+        // when the mobile re-uploads with a fresh UUID.
+        const tombstoneComposite = await client.query(
+          `SELECT 1 FROM deleted_itineraries
+           WHERE user_id = $1 AND client_id = $2 AND scheduled_date = $3::date
+           LIMIT 1`,
+          [user_id, clientId, scheduled_date]
+        );
+        if (tombstoneComposite.rows.length > 0) {
+          console.log(`[Itineraries POST] Blocking creation: tombstone exists for user=${user_id} client=${clientId} date=${scheduled_date}`);
+          errors.push({
+            client_id: clientId,
+            error: 'Itinerary was deleted and cannot be re-created automatically',
+          });
+          continue;
+        }
+
+        // Also block by exact UUID if mobile sends one that was tombstoned.
+        const incomingId = body.id && client_ids.length === 1 ? body.id : null;
+        if (incomingId) {
+          const tombstoneId = await client.query(
+            `SELECT 1 FROM deleted_itineraries WHERE id = $1`,
+            [incomingId]
+          );
+          if (tombstoneId.rows.length > 0) {
+            console.log(`[Itineraries POST] Blocking creation: tombstoned UUID ${incomingId}`);
+            errors.push({
+              client_id: clientId,
+              error: 'Itinerary was deleted and cannot be re-created automatically',
+            });
+            continue;
+          }
+        }
+
         // Check if itinerary already exists for this client, user, and date
         const existingCheck = await client.query(
           `SELECT id FROM itineraries
@@ -405,14 +440,21 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
           continue;
         }
 
+        // Use the UUID sent by the mobile (PowerSync PUT op includes the local
+        // row id). Honouring the mobile UUID means the CRUD queue entry is
+        // satisfied and won't re-upload. Fall back to gen_random_uuid() for
+        // web-originated creates that don't send an id.
+        const itineraryId = (incomingId) || null;
+
         // Insert itinerary
         const result = await client.query(
           `INSERT INTO itineraries (
             id, user_id, client_id, scheduled_date, scheduled_time, status, priority, notes, created_by
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8
+            COALESCE($1::uuid, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9
           ) RETURNING *`,
           [
+            itineraryId,
             user_id, clientId, scheduled_date,
             scheduled_time || null, status, priority,
             notes || null, user.sub
@@ -579,6 +621,10 @@ itineraries.delete('/:id', authMiddleware, requirePermission('itineraries', 'del
     }
 
     // Hard delete + tombstone in one transaction.
+    // Capture composite key before deleting so the tombstone can block
+    // resurrection-with-new-UUID from mobile PowerSync.
+    const compositeKey = alreadyGone ? null : existing.rows[0];
+
     const dbClient = await pool.connect();
     try {
       await dbClient.query('BEGIN');
@@ -586,9 +632,21 @@ itineraries.delete('/:id', authMiddleware, requirePermission('itineraries', 'del
         await dbClient.query('DELETE FROM itineraries WHERE id = $1', [id]);
       }
       await dbClient.query(
-        `INSERT INTO deleted_itineraries (id, deleted_by) VALUES ($1, $2)
-         ON CONFLICT (id) DO UPDATE SET deleted_at = NOW(), deleted_by = EXCLUDED.deleted_by`,
-        [id, user.sub]
+        `INSERT INTO deleted_itineraries (id, deleted_by, user_id, client_id, scheduled_date)
+         VALUES ($1, $2, $3, $4, $5::date)
+         ON CONFLICT (id) DO UPDATE
+           SET deleted_at = NOW(),
+               deleted_by = EXCLUDED.deleted_by,
+               user_id = COALESCE(deleted_itineraries.user_id, EXCLUDED.user_id),
+               client_id = COALESCE(deleted_itineraries.client_id, EXCLUDED.client_id),
+               scheduled_date = COALESCE(deleted_itineraries.scheduled_date, EXCLUDED.scheduled_date)`,
+        [
+          id,
+          user.sub,
+          compositeKey?.user_id ?? null,
+          compositeKey?.client_id ?? null,
+          compositeKey?.scheduled_date ?? null,
+        ]
       );
       await dbClient.query('COMMIT');
     } catch (e) {
@@ -621,17 +679,33 @@ itineraries.post('/bulk-delete', authMiddleware, requirePermission('itineraries'
     let deleted: string[];
     try {
       await dbClient.query('BEGIN');
+      // Capture composite keys before deleting so tombstones can block
+      // resurrection-with-new-UUID from mobile PowerSync.
       const result = await dbClient.query(
-        'DELETE FROM itineraries WHERE id = ANY($1::uuid[]) RETURNING id',
+        'DELETE FROM itineraries WHERE id = ANY($1::uuid[]) RETURNING id, user_id, client_id, scheduled_date',
         [ids]
       );
       deleted = result.rows.map((r: any) => r.id);
       if (deleted.length > 0) {
+        // Build per-row tombstone inserts with composite keys.
+        const tombstoneValues = result.rows
+          .map((_: any, i: number) => `($${i * 5 + 1}::uuid, $${i * 5 + 2}, $${i * 5 + 3}::uuid, $${i * 5 + 4}::uuid, $${i * 5 + 5}::date)`)
+          .join(', ');
+        // Flatten: [id, deleted_by, user_id, client_id, scheduled_date, ...]
+        const tombstoneParams: any[] = [];
+        for (const row of result.rows) {
+          tombstoneParams.push(row.id, user.sub, row.user_id, row.client_id, row.scheduled_date);
+        }
         await dbClient.query(
-          `INSERT INTO deleted_itineraries (id, deleted_by)
-           SELECT UNNEST($1::uuid[]), $2
-           ON CONFLICT (id) DO UPDATE SET deleted_at = NOW(), deleted_by = EXCLUDED.deleted_by`,
-          [deleted, user.sub]
+          `INSERT INTO deleted_itineraries (id, deleted_by, user_id, client_id, scheduled_date)
+           VALUES ${tombstoneValues}
+           ON CONFLICT (id) DO UPDATE
+             SET deleted_at = NOW(),
+                 deleted_by = EXCLUDED.deleted_by,
+                 user_id = COALESCE(deleted_itineraries.user_id, EXCLUDED.user_id),
+                 client_id = COALESCE(deleted_itineraries.client_id, EXCLUDED.client_id),
+                 scheduled_date = COALESCE(deleted_itineraries.scheduled_date, EXCLUDED.scheduled_date)`,
+          tombstoneParams
         );
       }
       await dbClient.query('COMMIT');
