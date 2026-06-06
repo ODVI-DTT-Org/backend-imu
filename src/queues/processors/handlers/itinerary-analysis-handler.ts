@@ -34,6 +34,11 @@ export function calcAvgQualityVisit(qualityVisits: number, workingDays: number):
   return parseFloat((qualityVisits / workingDays).toFixed(2));
 }
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const TARGET_VISITS_PER_DAY = 15;
+const TARGET_WORKING_DAYS   = 25;
+
 // ─── Row types ────────────────────────────────────────────────────────────────
 
 interface AgentRow {
@@ -56,7 +61,7 @@ interface AgentRow {
   r_undecided: number;
   r_with_existing_loan: number;
   quality_visits: number;
-  days_attended: number;
+  absent_weekdays: number;
 }
 
 interface VisitDetailRow {
@@ -70,20 +75,24 @@ interface VisitDetailRow {
   remarks: string | null;
 }
 
-// ─── Main export function ─────────────────────────────────────────────────────
+// ─── Data fetch helper (shared by queue worker and preview endpoint) ──────────
 
-export async function generateItineraryAnalysisReport(
+export async function fetchItineraryAnalysisData(
   db: Pool,
-  s3Client: S3Client,
-  s3Bucket: string,
   from: string,
   to: string
-): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+): Promise<{ agents: AgentRow[]; visitDetails: VisitDetailRow[]; workingDays: number }> {
   const fromDate = new Date(from);
   const toDate   = new Date(to);
   const workingDays = countWorkingDays(fromDate, toDate);
 
   const [agentResult, visitDetailResult] = await Promise.all([
+    // ── Agent summary query ──────────────────────────────────────────────────
+    //
+    // NOTE: There is no users↔groups mapping in this DB (group_members is
+    // clients↔groups only). All caravan agents are therefore shown as UNASSIGNED.
+    // If a team linkage table is added later, replace the literal below.
+    //
     db.query<{
       user_id: string; agent_name: string; team_name: string;
       total_visits: string; total_releases: string;
@@ -91,47 +100,61 @@ export async function generateItineraryAnalysisReport(
       r_interested: string; r_loan_inquiry: string; r_moved_out: string;
       r_borrowed: string; r_not_around: string; r_not_interested: string;
       r_overaged: string; r_poor_health: string; r_undecided: string;
-      r_with_existing_loan: string; quality_visits: string; days_attended: string;
+      r_with_existing_loan: string; quality_visits: string; absent_weekdays: string;
     }>(`
+      WITH weekdays AS (
+        SELECT d::date AS day
+        FROM generate_series($1::date, $2::date, '1 day') d
+        WHERE EXTRACT(DOW FROM d) BETWEEN 1 AND 5
+      ),
+      visit_days AS (
+        SELECT user_id, date(time_in) AS day, COUNT(*) AS n
+        FROM visits
+        WHERE time_in::date BETWEEN $1 AND $2
+        GROUP BY user_id, date(time_in)
+      )
       SELECT
         u.id                                                              AS user_id,
         u.first_name || ' ' || u.last_name                               AS agent_name,
-        g.name                                                            AS team_name,
+        'UNASSIGNED'::text                                                AS team_name,
         COUNT(DISTINCT v.id)                                              AS total_visits,
         COUNT(DISTINCT r.id)                                              AS total_releases,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Deceased')           AS r_deceased,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'For Processing')     AS r_for_processing,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'For Verification')   AS r_for_verification,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Interested')         AS r_interested,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Loan Inquiry')       AS r_loan_inquiry,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Moved Out')          AS r_moved_out,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Borrowed')           AS r_borrowed,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Not Around')         AS r_not_around,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Not Interested')     AS r_not_interested,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Overaged')           AS r_overaged,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Poor Health')        AS r_poor_health,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'Undecided')          AS r_undecided,
-        COUNT(DISTINCT v.id) FILTER (WHERE tr.label = 'With Existing Loan') AS r_with_existing_loan,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('DECEASED','L3_DECEASED'))                                    AS r_deceased,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('FOR_PROCESSING','FOR_ADA_COMPLIANCE','FOR_UPDATE'))          AS r_for_processing,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason = 'FOR_VERIFICATION')                                            AS r_for_verification,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('INTERESTED','L1_INTERESTED'))                               AS r_interested,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('LOAN_INQUIRY','L1_LOAN_INQUIRY'))                           AS r_loan_inquiry,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason = 'MOVED_OUT')                                                   AS r_moved_out,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason = 'L1_BORROWED')                                                 AS r_borrowed,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('NOT_AROUND','L2_NOT_AROUND'))                               AS r_not_around,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('NOT_INTERESTED','L1_NOT_INTERESTED'))                       AS r_not_interested,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('OVERAGE','L3_DISQUALIFIED','L3_NOT_QUALIFIED'))             AS r_overaged,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason = 'POOR_HEALTH')                                                 AS r_poor_health,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('UNDECIDED','L1_UNDECIDED'))                                 AS r_undecided,
+        COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('WITH_OTHER_LENDING','L2_WITH_OTHER_LENDING'))               AS r_with_existing_loan,
         COUNT(DISTINCT v.id) FILTER (
           WHERE tr.category IN ('Favorable', 'Processing')
         )                                                                 AS quality_visits,
-        COUNT(DISTINCT a.date)                                            AS days_attended
+        (SELECT COUNT(*) FROM weekdays w
+         WHERE NOT EXISTS (
+           SELECT 1 FROM visit_days vd WHERE vd.user_id = u.id AND vd.day = w.day
+         ))                                                               AS absent_weekdays
       FROM users u
-      JOIN group_members gm ON gm.client_id = u.id
-      JOIN groups g          ON g.id         = gm.group_id
       LEFT JOIN visits v ON v.user_id = u.id
-        AND v.created_at::date BETWEEN $1 AND $2
+        AND v.time_in::date BETWEEN $1 AND $2
       LEFT JOIN touchpoint_reasons tr ON tr.reason_code = v.reason
       LEFT JOIN releases r ON r.user_id = u.id
         AND r.created_at::date BETWEEN $1 AND $2
         AND r.status IN ('approved', 'released')
-      LEFT JOIN attendance a ON a.user_id = u.id
-        AND a.date BETWEEN $1 AND $2
-      WHERE u.role = 'Caravan'
-      GROUP BY u.id, u.first_name, u.last_name, g.name
-      ORDER BY g.name, u.last_name, u.first_name
+      WHERE u.role = 'caravan'
+      GROUP BY u.id, u.first_name, u.last_name
+      ORDER BY u.last_name, u.first_name
     `, [from, to]),
 
+    // ── Visit detail query ───────────────────────────────────────────────────
+    //
+    // NOTE: Same no-team-linkage caveat — team_name is UNASSIGNED for all caravans.
+    //
     db.query<{
       id: string; created_at: string; agent_name: string; team_name: string;
       client_name: string; visit_reason: string | null;
@@ -139,21 +162,20 @@ export async function generateItineraryAnalysisReport(
     }>(`
       SELECT
         v.id,
-        v.created_at::text,
-        u.first_name || ' ' || u.last_name  AS agent_name,
-        g.name                               AS team_name,
-        c.first_name || ' ' || c.last_name  AS client_name,
-        tr.label                             AS visit_reason,
-        tr.category                          AS reason_category,
+        v.time_in::text                              AS created_at,
+        u.first_name || ' ' || u.last_name          AS agent_name,
+        'UNASSIGNED'::text                           AS team_name,
+        c.first_name || ' ' || c.last_name          AS client_name,
+        tr.label                                     AS visit_reason,
+        tr.category                                  AS reason_category,
         v.remarks
       FROM visits v
-      JOIN users u  ON u.id = v.user_id
-      JOIN group_members gm ON gm.client_id = u.id
-      JOIN groups g  ON g.id = gm.group_id
+      JOIN users u ON u.id = v.user_id
       LEFT JOIN clients c ON c.id = v.client_id
       LEFT JOIN touchpoint_reasons tr ON tr.reason_code = v.reason
-      WHERE v.created_at::date BETWEEN $1 AND $2
-      ORDER BY g.name, agent_name, v.created_at ASC
+      WHERE v.time_in::date BETWEEN $1 AND $2
+        AND u.role = 'caravan'
+      ORDER BY agent_name, v.time_in ASC
     `, [from, to]),
   ]);
 
@@ -177,10 +199,24 @@ export async function generateItineraryAnalysisReport(
     r_undecided:          parseInt(r.r_undecided),
     r_with_existing_loan: parseInt(r.r_with_existing_loan),
     quality_visits:       parseInt(r.quality_visits),
-    days_attended:        parseInt(r.days_attended),
+    absent_weekdays:      parseInt(r.absent_weekdays),
   }));
 
   const visitDetails: VisitDetailRow[] = visitDetailResult.rows;
+
+  return { agents, visitDetails, workingDays };
+}
+
+// ─── Main export function ─────────────────────────────────────────────────────
+
+export async function generateItineraryAnalysisReport(
+  db: Pool,
+  s3Client: S3Client,
+  s3Bucket: string,
+  from: string,
+  to: string
+): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+  const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(db, from, to);
 
   const buffer = await buildWorkbook(agents, visitDetails, workingDays);
 
@@ -191,6 +227,11 @@ export async function generateItineraryAnalysisReport(
 }
 
 // ─── Column headers (A–AF, 32 columns) ───────────────────────────────────────
+// Index:  0        1           2                              3
+// Col:    A        B           C                              D
+// ...
+// Index:  17       18          19          20            21             22               23               24             25             26             27                       28              29                              30               31
+// Col:    R        S           T           U             V              W                X                Y              Z              AA             AB                       AC              AD                              AE               AF
 
 const HEADERS = [
   "TEAM'S", "Caravan's", "Total Production UDI Amount", "Total Production No. of acc.",
@@ -205,66 +246,87 @@ const HEADERS = [
 
 // ─── Row builders ─────────────────────────────────────────────────────────────
 
-function buildAgentRowValues(agent: AgentRow, workingDays: number): (string | number)[] {
-  const R = agent.total_visits;
-  const T = 0; // placeholder until targets feature is implemented
+function buildAgentRowValues(agent: AgentRow, _workingDays: number): (string | number)[] {
+  const R  = agent.total_visits;
+  const D  = agent.total_releases;
+  const AB = agent.absent_weekdays;
+  const T  = TARGET_VISITS_PER_DAY * TARGET_WORKING_DAYS;   // 375
+  const V  = D * TARGET_VISITS_PER_DAY;                     // Less Releases credit
+  const W  = (T - V) - AB * TARGET_VISITS_PER_DAY;          // Adjusted Target
+  const X  = W === 0 ? 0 : parseFloat((W / TARGET_VISITS_PER_DAY).toFixed(2)); // Effective working days
+  const Y  = X === 0 ? 0 : parseFloat((R / X).toFixed(2));  // Daily avg (stored in "Final Target" col)
+  const Z  = W - R;                                          // Adjusted/Final deficit
+  const AA = calcAchievementPct(R, T);                       // Achievement %
+  const AC = agent.quality_visits;
+  const AD = R === 0 ? 0 : parseFloat(((AC / R) * 100).toFixed(1));
+  const AE = AC === 0 ? 0 : parseFloat(((D / AC) * 100).toFixed(1)); // % Conversion = releases / quality_visits
+  const AF = parseFloat((AC / TARGET_WORKING_DAYS).toFixed(2));
+
   return [
-    agent.team_name,                                          // A
-    agent.agent_name,                                         // B
-    0,                                                        // C: UDI Amount (placeholder)
-    agent.total_releases,                                     // D: acc count
-    agent.r_deceased,                                         // E
-    agent.r_for_processing,                                   // F
-    agent.r_for_verification,                                 // G
-    agent.r_interested,                                       // H
-    agent.r_loan_inquiry,                                     // I
-    agent.r_moved_out,                                        // J
-    agent.r_borrowed,                                         // K
-    agent.r_not_around,                                       // L
-    agent.r_not_interested,                                   // M
-    agent.r_overaged,                                         // N
-    agent.r_poor_health,                                      // O
-    agent.r_undecided,                                        // P
-    agent.r_with_existing_loan,                               // Q
-    R,                                                        // R: Grand Total
-    0,                                                        // S: Borrowed (duplicate placeholder)
-    T,                                                        // T: Target Itinerary
-    T - R,                                                    // U: Total Deficit
-    agent.total_releases,                                     // V: Less Releases
-    0,                                                        // W: Adjusted Target
-    0,                                                        // X: Adjusted Deficit
-    0,                                                        // Y: Final Target
-    0,                                                        // Z: Final Deficit
-    calcAchievementPct(R, T),                                 // AA: Achievement %
-    workingDays - agent.days_attended,                        // AB: Leave/Meeting/Absent
-    agent.quality_visits,                                     // AC: Quality Visit
-    calcAchievementPct(agent.quality_visits, R),              // AD: Quality Visit vs Itinerary %
-    calcConversionPct(agent.total_releases, R),               // AE: % Conversion
-    calcAvgQualityVisit(agent.quality_visits, workingDays),   // AF: Avg Quality Visit
+    agent.team_name,    // A  [0]
+    agent.agent_name,   // B  [1]
+    0,                  // C  [2]: UDI Amount (placeholder)
+    D,                  // D  [3]: acc count = releases
+    agent.r_deceased,           // E  [4]
+    agent.r_for_processing,     // F  [5]
+    agent.r_for_verification,   // G  [6]
+    agent.r_interested,         // H  [7]
+    agent.r_loan_inquiry,       // I  [8]
+    agent.r_moved_out,          // J  [9]
+    agent.r_borrowed,           // K  [10]
+    agent.r_not_around,         // L  [11]
+    agent.r_not_interested,     // M  [12]
+    agent.r_overaged,           // N  [13]
+    agent.r_poor_health,        // O  [14]
+    agent.r_undecided,          // P  [15]
+    agent.r_with_existing_loan, // Q  [16]
+    R,                  // R  [17]: Grand Total = total_visits
+    D,                  // S  [18]: Borrowed duplicate = D (releases)
+    T,                  // T  [19]: Target Itinerary = 375
+    T - R,              // U  [20]: Total Deficit
+    V,                  // V  [21]: Less Releases
+    W,                  // W  [22]: Adjusted Target
+    X,                  // X  [23]: Adjusted Deficit (effective working days)
+    Y,                  // Y  [24]: Final Target (daily avg)
+    Z,                  // Z  [25]: Final Deficit
+    AA,                 // AA [26]: Achievement %
+    AB,                 // AB [27]: Leave/Meeting/Absent (absent weekdays)
+    AC,                 // AC [28]: Quality Visit
+    AD,                 // AD [29]: Quality Visit vs Itinerary %
+    AE,                 // AE [30]: % Conversion
+    AF,                 // AF [31]: Average Quality Visit
   ];
 }
 
-function buildTeamTotalRow(teamName: string, teamAgents: AgentRow[], workingDays: number): (string | number)[] {
+function buildTeamTotalRow(teamName: string, teamAgents: AgentRow[], _workingDays: number): (string | number)[] {
   const sum = (key: keyof AgentRow) =>
     teamAgents.reduce((acc, a) => acc + (a[key] as number), 0);
 
-  const R = sum('total_visits');
-  const T = 0;
+  const R  = sum('total_visits');
+  const D  = sum('total_releases');
+  const AB = sum('absent_weekdays');
+  const T  = TARGET_VISITS_PER_DAY * TARGET_WORKING_DAYS;
+  const V  = D * TARGET_VISITS_PER_DAY;
+  const W  = (T - V) - AB * TARGET_VISITS_PER_DAY;
+  const X  = W === 0 ? 0 : parseFloat((W / TARGET_VISITS_PER_DAY).toFixed(2));
+  const Y  = X === 0 ? 0 : parseFloat((R / X).toFixed(2));
+  const Z  = W - R;
+  const AA = calcAchievementPct(R, T);
+  const AC = sum('quality_visits');
+  const AD = R === 0 ? 0 : parseFloat(((AC / R) * 100).toFixed(1));
+  const AE = AC === 0 ? 0 : parseFloat(((D / AC) * 100).toFixed(1));
+  const AF = parseFloat((AC / TARGET_WORKING_DAYS).toFixed(2));
+
   return [
     teamName, 'TOTAL',
-    0, sum('total_releases'),
+    0, D,
     sum('r_deceased'), sum('r_for_processing'), sum('r_for_verification'),
     sum('r_interested'), sum('r_loan_inquiry'), sum('r_moved_out'), sum('r_borrowed'),
     sum('r_not_around'), sum('r_not_interested'), sum('r_overaged'),
     sum('r_poor_health'), sum('r_undecided'), sum('r_with_existing_loan'),
-    R, 0, T, T - R, sum('total_releases'),
-    0, 0, 0, 0,
-    calcAchievementPct(R, T),
-    workingDays - sum('days_attended'),
-    sum('quality_visits'),
-    calcAchievementPct(sum('quality_visits'), R),
-    calcConversionPct(sum('total_releases'), R),
-    calcAvgQualityVisit(sum('quality_visits'), workingDays),
+    R, D, T, T - R, V,
+    W, X, Y, Z,
+    AA, AB, AC, AD, AE, AF,
   ];
 }
 
@@ -341,7 +403,7 @@ function addDataRows(
 
 // ─── Workbook builder ─────────────────────────────────────────────────────────
 
-async function buildWorkbook(
+export async function buildWorkbook(
   agents: AgentRow[],
   visitDetails: VisitDetailRow[],
   workingDays: number,

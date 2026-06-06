@@ -1288,4 +1288,592 @@ reports.get('/export/excel', authMiddleware, requirePermission('reports', 'expor
   }
 });
 
+// GET /api/reports/daily-visits - Daily visit counts per agent (caravan touchpoints)
+reports.get('/daily-visits', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const detail = c.req.query('detail') === 'true';
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    // Default last 30 days if both dates missing
+    const now = new Date();
+    const defaultEnd = now.toISOString().split('T')[0];
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = c.req.query('start_date') || defaultStart;
+    const endDate = c.req.query('end_date') || defaultEnd;
+    const filterUserId = c.req.query('user_id');
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let whereClause = 'WHERE 1=1';
+
+    // Date range
+    whereClause += ` AND v.time_in >= $${paramIndex++}`;
+    params.push(startDate);
+    whereClause += ` AND v.time_in <= $${paramIndex++}`;
+    params.push(endDate + 'T23:59:59.999Z');
+
+    // Caravan agents see only their own; admin/staff can filter by user_id
+    if (user.role === 'caravan') {
+      whereClause += ` AND v.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    } else if (filterUserId) {
+      whereClause += ` AND v.user_id = $${paramIndex++}`;
+      params.push(filterUserId);
+    }
+
+    if (detail) {
+      const detailQuery = `
+        SELECT
+          v.id,
+          v.user_id,
+          u.first_name || ' ' || u.last_name AS agent_name,
+          u.role,
+          c.first_name || ' ' || c.last_name AS client_name,
+          v.time_in,
+          v.time_out,
+          v.address,
+          v.type,
+          v.remarks
+        FROM visits v
+        JOIN users u ON u.id = v.user_id
+        JOIN clients c ON c.id = v.client_id
+        ${whereClause}
+        ORDER BY v.time_in DESC
+        LIMIT $${paramIndex}
+      `;
+      params.push(limit);
+      const result = await pool.query(detailQuery, params);
+      return c.json({ items: result.rows, total: result.rows.length });
+    }
+
+    const aggregateQuery = `
+      SELECT
+        date(v.time_in) AS visit_date,
+        v.user_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        u.role,
+        COUNT(*) AS visit_count,
+        COUNT(*) FILTER (WHERE v.type = 'release_loan') AS release_visit_count,
+        COUNT(*) FILTER (WHERE v.type = 'regular_visit') AS regular_visit_count
+      FROM visits v
+      JOIN users u ON u.id = v.user_id
+      ${whereClause}
+      GROUP BY date(v.time_in), v.user_id, u.first_name, u.last_name, u.role
+      ORDER BY visit_date DESC, agent_name
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(aggregateQuery, params);
+    return c.json({ items: result.rows, total: result.rows.length });
+  } catch (error) {
+    console.error('Daily visits report error:', error);
+    throw new Error('Failed to fetch daily visits report');
+  }
+});
+
+// GET /api/reports/daily-calls - Daily call counts per agent (tele touchpoints)
+reports.get('/daily-calls', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const detail = c.req.query('detail') === 'true';
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    // Default last 30 days if both dates missing
+    const now = new Date();
+    const defaultEnd = now.toISOString().split('T')[0];
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = c.req.query('start_date') || defaultStart;
+    const endDate = c.req.query('end_date') || defaultEnd;
+    const filterUserId = c.req.query('user_id');
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let whereClause = 'WHERE 1=1';
+
+    // Date range
+    whereClause += ` AND c.dial_time >= $${paramIndex++}`;
+    params.push(startDate);
+    whereClause += ` AND c.dial_time <= $${paramIndex++}`;
+    params.push(endDate + 'T23:59:59.999Z');
+
+    // Caravan agents see only their own; admin/staff can filter by user_id
+    if (user.role === 'caravan') {
+      whereClause += ` AND c.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    } else if (filterUserId) {
+      whereClause += ` AND c.user_id = $${paramIndex++}`;
+      params.push(filterUserId);
+    }
+
+    if (detail) {
+      const detailQuery = `
+        SELECT
+          c.id,
+          c.user_id,
+          u.first_name || ' ' || u.last_name AS agent_name,
+          u.role,
+          cl.first_name || ' ' || cl.last_name AS client_name,
+          c.phone_number,
+          c.dial_time,
+          c.duration,
+          c.type,
+          c.notes
+        FROM calls c
+        JOIN users u ON u.id = c.user_id
+        JOIN clients cl ON cl.id = c.client_id
+        ${whereClause}
+        ORDER BY c.dial_time DESC
+        LIMIT $${paramIndex}
+      `;
+      params.push(limit);
+      const result = await pool.query(detailQuery, params);
+      return c.json({ items: result.rows, total: result.rows.length });
+    }
+
+    const aggregateQuery = `
+      SELECT
+        date(c.dial_time) AS call_date,
+        c.user_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        u.role,
+        COUNT(*) AS call_count,
+        COUNT(*) FILTER (WHERE c.type = 'release_loan') AS release_call_count,
+        COUNT(*) FILTER (WHERE c.type = 'regular_call') AS regular_call_count
+      FROM calls c
+      JOIN users u ON u.id = c.user_id
+      ${whereClause}
+      GROUP BY date(c.dial_time), c.user_id, u.first_name, u.last_name, u.role
+      ORDER BY call_date DESC, agent_name
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(aggregateQuery, params);
+    return c.json({ items: result.rows, total: result.rows.length });
+  } catch (error) {
+    console.error('Daily calls report error:', error);
+    throw new Error('Failed to fetch daily calls report');
+  }
+});
+
+// GET /api/reports/caravan-releases - Releases originating from a caravan visit
+reports.get('/caravan-releases', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    // Default last 30 days if both dates missing
+    const now = new Date();
+    const defaultEnd = now.toISOString().split('T')[0];
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = c.req.query('start_date') || defaultStart;
+    const endDate = c.req.query('end_date') || defaultEnd;
+    const filterUserId = c.req.query('user_id');
+    const productType = c.req.query('product_type');
+    const loanType = c.req.query('loan_type');
+    const status = c.req.query('status');
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let whereClause = 'WHERE r.visit_id IS NOT NULL';
+
+    // Date range
+    whereClause += ` AND r.created_at >= $${paramIndex++}`;
+    params.push(startDate);
+    whereClause += ` AND r.created_at <= $${paramIndex++}`;
+    params.push(endDate + 'T23:59:59.999Z');
+
+    // Caravan agents see only their own; admin/staff can filter by user_id
+    if (user.role === 'caravan') {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    } else if (filterUserId) {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(filterUserId);
+    }
+
+    if (productType) {
+      whereClause += ` AND r.product_type = $${paramIndex++}`;
+      params.push(productType);
+    }
+
+    if (loanType) {
+      whereClause += ` AND r.loan_type = $${paramIndex++}`;
+      params.push(loanType);
+    }
+
+    if (status) {
+      whereClause += ` AND r.status = $${paramIndex++}`;
+      params.push(status);
+    }
+
+    const query = `
+      SELECT
+        r.id,
+        r.created_at,
+        cl.first_name || ' ' || cl.last_name AS client_name,
+        cl.id AS client_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        u.id AS agent_id,
+        r.product_type,
+        r.loan_type,
+        r.udi_number,
+        r.status,
+        r.approved_at,
+        r.visit_id,
+        v.time_in AS visit_time_in,
+        v.time_out AS visit_time_out,
+        v.address AS visit_address
+      FROM releases r
+      JOIN clients cl ON cl.id = r.client_id
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN visits v ON v.id = r.visit_id
+      ${whereClause}
+      ORDER BY r.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+    return c.json({ items: result.rows, total: result.rows.length });
+  } catch (error) {
+    console.error('Caravan releases report error:', error);
+    throw new Error('Failed to fetch caravan releases report');
+  }
+});
+
+// GET /api/reports/tele-releases - Releases originating from a tele call
+reports.get('/tele-releases', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    // Default last 30 days if both dates missing
+    const now = new Date();
+    const defaultEnd = now.toISOString().split('T')[0];
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = c.req.query('start_date') || defaultStart;
+    const endDate = c.req.query('end_date') || defaultEnd;
+    const filterUserId = c.req.query('user_id');
+    const productType = c.req.query('product_type');
+    const loanType = c.req.query('loan_type');
+    const status = c.req.query('status');
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let whereClause = 'WHERE r.call_id IS NOT NULL';
+
+    // Date range
+    whereClause += ` AND r.created_at >= $${paramIndex++}`;
+    params.push(startDate);
+    whereClause += ` AND r.created_at <= $${paramIndex++}`;
+    params.push(endDate + 'T23:59:59.999Z');
+
+    // Caravan agents see only their own; admin/staff can filter by user_id
+    if (user.role === 'caravan') {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    } else if (filterUserId) {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(filterUserId);
+    }
+
+    if (productType) {
+      whereClause += ` AND r.product_type = $${paramIndex++}`;
+      params.push(productType);
+    }
+
+    if (loanType) {
+      whereClause += ` AND r.loan_type = $${paramIndex++}`;
+      params.push(loanType);
+    }
+
+    if (status) {
+      whereClause += ` AND r.status = $${paramIndex++}`;
+      params.push(status);
+    }
+
+    const query = `
+      SELECT
+        r.id,
+        r.created_at,
+        cl.first_name || ' ' || cl.last_name AS client_name,
+        cl.id AS client_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        u.id AS agent_id,
+        r.product_type,
+        r.loan_type,
+        r.udi_number,
+        r.status,
+        r.approved_at,
+        r.call_id,
+        ca.phone_number AS call_phone_number,
+        ca.dial_time AS call_dial_time,
+        ca.duration AS call_duration
+      FROM releases r
+      JOIN clients cl ON cl.id = r.client_id
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN calls ca ON ca.id = r.call_id
+      ${whereClause}
+      ORDER BY r.created_at DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(query, params);
+    return c.json({ items: result.rows, total: result.rows.length });
+  } catch (error) {
+    console.error('Tele releases report error:', error);
+    throw new Error('Failed to fetch tele releases report');
+  }
+});
+
+// GET /api/reports/odometer - Odometer/kilometers traveled per visit + daily agent rollup
+reports.get('/odometer', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    // Default last 30 days if both dates missing
+    const now = new Date();
+    const defaultEnd = now.toISOString().split('T')[0];
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = c.req.query('start_date') || defaultStart;
+    const endDate = c.req.query('end_date') || defaultEnd;
+    const filterUserId = c.req.query('user_id');
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let whereClause = 'WHERE 1=1';
+
+    // Date range
+    whereClause += ` AND v.time_in >= $${paramIndex++}`;
+    params.push(startDate);
+    whereClause += ` AND v.time_in <= $${paramIndex++}`;
+    params.push(endDate + 'T23:59:59.999Z');
+
+    // Caravan agents see only their own; admin/staff can filter by user_id
+    if (user.role === 'caravan') {
+      whereClause += ` AND v.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    } else if (filterUserId) {
+      whereClause += ` AND v.user_id = $${paramIndex++}`;
+      params.push(filterUserId);
+    }
+
+    // Detail rows: one per visit
+    const detailQuery = `
+      SELECT
+        v.id,
+        date(v.time_in) AS visit_date,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        u.id AS agent_id,
+        cl.first_name || ' ' || cl.last_name AS client_name,
+        v.odometer_departure,
+        v.odometer_arrival,
+        v.kilometers_traveled,
+        NULLIF(v.odometer_arrival, '')::numeric - NULLIF(v.odometer_departure, '')::numeric AS estimated_km
+      FROM visits v
+      JOIN users u ON u.id = v.user_id
+      JOIN clients cl ON cl.id = v.client_id
+      ${whereClause}
+      ORDER BY v.time_in DESC
+      LIMIT $${paramIndex}
+    `;
+
+    // Daily totals: per agent per day
+    const dailyParams = params.slice(0, paramIndex - 1);
+    let dailyParamIndex = paramIndex;
+    const dailyQuery = `
+      SELECT
+        date(v.time_in) AS visit_date,
+        v.user_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        COUNT(*) AS visit_count,
+        SUM(
+          COALESCE(
+            NULLIF(v.kilometers_traveled, '')::numeric,
+            NULLIF(v.odometer_arrival, '')::numeric - NULLIF(v.odometer_departure, '')::numeric,
+            0
+          )
+        ) AS total_km
+      FROM visits v
+      JOIN users u ON u.id = v.user_id
+      ${whereClause}
+      GROUP BY date(v.time_in), v.user_id, u.first_name, u.last_name
+      ORDER BY visit_date DESC, agent_name
+      LIMIT $${dailyParamIndex}
+    `;
+
+    const detailParamsFull = [...params, limit];
+    const dailyParamsFull = [...dailyParams, limit];
+
+    const [detailResult, dailyResult] = await Promise.all([
+      pool.query(detailQuery, detailParamsFull),
+      pool.query(dailyQuery, dailyParamsFull),
+    ]);
+
+    return c.json({
+      daily_totals: dailyResult.rows,
+      details: detailResult.rows,
+      total: detailResult.rows.length,
+    });
+  } catch (error) {
+    console.error('Odometer report error:', error);
+    throw new Error('Failed to fetch odometer report');
+  }
+});
+
+// GET /api/reports/releases-by-loan-type - Caravan-only releases with touchpoints-before-release count
+reports.get('/releases-by-loan-type', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  try {
+    const user = c.get('user');
+    const limit = parseInt(c.req.query('limit') || '1000');
+
+    // Default last 30 days if both dates missing
+    const now = new Date();
+    const defaultEnd = now.toISOString().split('T')[0];
+    const defaultStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const startDate = c.req.query('start_date') || defaultStart;
+    const endDate = c.req.query('end_date') || defaultEnd;
+    const filterUserId = c.req.query('user_id');
+    const productType = c.req.query('product_type');
+    const loanType = c.req.query('loan_type');
+
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    let whereClause = 'WHERE r.visit_id IS NOT NULL';
+
+    // Date range
+    whereClause += ` AND r.created_at >= $${paramIndex++}`;
+    params.push(startDate);
+    whereClause += ` AND r.created_at <= $${paramIndex++}`;
+    params.push(endDate + 'T23:59:59.999Z');
+
+    // Caravan agents see only their own; admin/staff can filter by user_id
+    if (user.role === 'caravan') {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(user.sub);
+    } else if (filterUserId) {
+      whereClause += ` AND r.user_id = $${paramIndex++}`;
+      params.push(filterUserId);
+    }
+
+    if (loanType) {
+      whereClause += ` AND r.loan_type = $${paramIndex++}`;
+      params.push(loanType);
+    }
+
+    if (productType) {
+      whereClause += ` AND r.product_type = $${paramIndex++}`;
+      params.push(productType);
+    }
+
+    const itemsQuery = `
+      SELECT
+        r.id,
+        r.created_at AS released_at,
+        r.loan_type,
+        r.product_type,
+        r.udi_number,
+        r.status,
+        cl.first_name || ' ' || cl.last_name AS client_name,
+        cl.id AS client_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        u.id AS agent_id,
+        (
+          SELECT COUNT(*)
+          FROM touchpoints t
+          WHERE t.client_id = r.client_id
+            AND t.created_at <= r.created_at
+        ) AS touchpoints_before_release
+      FROM releases r
+      JOIN clients cl ON cl.id = r.client_id
+      JOIN users u ON u.id = r.user_id
+      ${whereClause}
+      ORDER BY released_at DESC
+      LIMIT $${paramIndex}
+    `;
+    params.push(limit);
+
+    const result = await pool.query(itemsQuery, params);
+
+    // Aggregate avg touchpoints per loan_type from the result set
+    const byLoanType: Record<string, { loan_type: string; count: number; avg_touchpoints_before_release: number }> = {};
+    for (const row of result.rows) {
+      const lt = row.loan_type || 'unknown';
+      if (!byLoanType[lt]) {
+        byLoanType[lt] = { loan_type: lt, count: 0, avg_touchpoints_before_release: 0 };
+      }
+      byLoanType[lt].count += 1;
+      byLoanType[lt].avg_touchpoints_before_release += Number(row.touchpoints_before_release) || 0;
+    }
+    for (const lt of Object.keys(byLoanType)) {
+      const entry = byLoanType[lt];
+      entry.avg_touchpoints_before_release = entry.count > 0
+        ? Math.round((entry.avg_touchpoints_before_release / entry.count) * 100) / 100
+        : 0;
+    }
+
+    return c.json({
+      items: result.rows,
+      by_loan_type: Object.values(byLoanType),
+      total: result.rows.length,
+    });
+  } catch (error) {
+    console.error('Releases by loan type report error:', error);
+    throw new Error('Failed to fetch releases by loan type report');
+  }
+});
+
+// GET /api/reports/itinerary-analysis-preview - Sync preview (no Excel, no S3)
+reports.get('/itinerary-analysis-preview', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  const startDate = c.req.query('start_date');
+  const endDate   = c.req.query('end_date');
+
+  if (!startDate || !endDate) {
+    throw new ValidationError('start_date and end_date are required');
+  }
+
+  const { fetchItineraryAnalysisData } = await import('../queues/processors/handlers/itinerary-analysis-handler.js');
+  const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(pool, startDate, endDate);
+
+  return c.json({
+    working_days: workingDays,
+    agents,
+    visit_details_count: visitDetails.length,
+  });
+});
+
+// POST /api/reports/itinerary-analysis/generate - Queue background Excel generation
+reports.post('/itinerary-analysis/generate', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+
+  const body = await c.req.json();
+  const schema = z.object({
+    start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'start_date must be YYYY-MM-DD'),
+    end_date:   z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'end_date must be YYYY-MM-DD'),
+  });
+
+  const { start_date, end_date } = schema.parse(body);
+
+  const job = await addReportJob(
+    ReportJobType.REPORT_ITINERARY_ANALYSIS,
+    user.sub,
+    { startDate: start_date, endDate: end_date }
+  );
+
+  return c.json({ jobId: job.id }, 202);
+});
+
 export default reports;
+
