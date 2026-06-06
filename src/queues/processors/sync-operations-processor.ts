@@ -211,11 +211,24 @@ export class SyncOperationsProcessor extends BaseProcessor<SyncJobData, JobResul
       const placeholders = fields.map((_, index) => `$${index + 1}`).join(', ');
       const values = [id, ...Object.values(dataWithoutId)];
 
-      await client.query(
-        `INSERT INTO ${table} (${fields.join(', ')}, created_at, updated_at)
-         VALUES (${placeholders}, NOW(), NOW())`,
-        values
-      );
+      try {
+        await client.query(
+          `INSERT INTO ${table} (${fields.join(', ')}, created_at, updated_at)
+           VALUES (${placeholders}, NOW(), NOW())`,
+          values
+        );
+      } catch (insertErr: any) {
+        // Duplicate touchpoint same Manila day — treat as already-applied, skip silently
+        if (
+          table === 'touchpoints' &&
+          insertErr?.code === '23505' &&
+          insertErr?.constraint === 'uq_touchpoints_client_user_day'
+        ) {
+          console.log(`[Sync] Skipping duplicate touchpoint ${id}: same client/user/day already recorded`);
+          return;
+        }
+        throw insertErr;
+      }
     }
   }
 

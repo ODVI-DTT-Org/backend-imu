@@ -593,6 +593,23 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       }
     }
 
+    // === Duplicate touchpoint guard: one per (client, user, Manila day) ===
+    const dupCheck = await pool.query(
+      `SELECT 1 FROM touchpoints
+       WHERE client_id = $1
+         AND user_id = $2
+         AND (created_at AT TIME ZONE 'Asia/Manila')::date = (now() AT TIME ZONE 'Asia/Manila')::date
+         AND is_legacy = false
+       LIMIT 1`,
+      [validated.client_id, validated.user_id ?? user.sub]
+    );
+    if (dupCheck.rows.length > 0) {
+      return c.json({
+        error: 'DUPLICATE_TOUCHPOINT_TODAY',
+        message: 'A touchpoint for this client was already submitted today.',
+      }, 409);
+    }
+
     // === Role Type Validation (Unli Touchpoint) ===
     // Caravan can only create Visit, Tele can only create Call
     // Managers can create both types
@@ -865,6 +882,13 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         validationError.addFieldError(err.path[0] || 'unknown', err.message);
       });
       throw validationError;
+    }
+    // Unique index violation: duplicate touchpoint same day (defense in depth)
+    if ((error as any)?.code === '23505' && (error as any)?.constraint === 'uq_touchpoints_client_user_day') {
+      return c.json({
+        error: 'DUPLICATE_TOUCHPOINT_TODAY',
+        message: 'A touchpoint for this client was already submitted today.',
+      }, 409);
     }
     console.error('Create touchpoint error:', error);
     throw new Error('Failed to create touchpoint');
