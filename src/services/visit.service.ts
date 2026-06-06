@@ -2,21 +2,34 @@ import { pool } from '../db/index.js';
 import { z } from 'zod';
 
 /**
- * Compute the server-side odometer_departure for a new visit.
+ * Compute server-side odometer fields for a new visit per spec:
  *
- * Rule: departure = odometer_arrival of the most recent earlier same-day
- * visit for the same user.  If there is no prior same-day visit, return '0'.
+ * First visit of the day (no prior same-day visit by this user):
+ *   odometer_departure = '0'
+ *   kilometers_traveled = '0'
  *
- * The look-up uses a pooled client passed in so it can participate in
- * an existing transaction (pass `pool` directly when outside a transaction).
+ * Subsequent visits:
+ *   kilometers_traveled = current.arrival - previous.arrival
+ *   odometer_departure  = current.arrival + kilometers_traveled
+ *
+ * "Same day" is scoped by time_in::date; falls back to CURRENT_DATE when
+ * time_in is not provided.
+ *
+ * Returns all three computed values so callers can store them atomically.
  */
-export async function computeOdometerDeparture(
+export async function computeOdometerFields(
   userId: string,
+  currentArrival: string | null | undefined,
   visitDate: Date | string | undefined,
   dbClient: { query: (text: string, values?: any[]) => Promise<{ rows: any[] }> } = pool,
-): Promise<string> {
+): Promise<{ departure: string; km: string }> {
+  // If arrival is absent we cannot compute anything meaningful.
+  if (!currentArrival || currentArrival.trim() === '') {
+    console.warn(`[visit.service] odometer_arrival is blank for user ${userId} — leaving computed fields as '0'`);
+    return { departure: '0', km: '0' };
+  }
+
   // Determine the calendar date to scope the query.
-  // Fall back to CURRENT_DATE (server/DB timezone) when no date is provided.
   let dateParam: string | null = null;
   if (visitDate) {
     const d = typeof visitDate === 'string' ? new Date(visitDate) : visitDate;
@@ -31,29 +44,83 @@ export async function computeOdometerDeparture(
      WHERE user_id = $1
        AND (
          CASE WHEN $2::date IS NULL
-              THEN created_at::date = CURRENT_DATE
-              ELSE created_at::date = $2::date
+              THEN time_in::date = CURRENT_DATE
+              ELSE time_in::date = $2::date
          END
        )
        AND odometer_arrival IS NOT NULL
        AND odometer_arrival != ''
-     ORDER BY created_at DESC
+     ORDER BY time_in DESC, created_at DESC
      LIMIT 1`,
     [userId, dateParam],
   );
 
-  if (result.rows.length > 0) {
-    return result.rows[0].odometer_arrival as string;
+  // No prior same-day visit → first visit of the day.
+  if (result.rows.length === 0) {
+    return { departure: '0', km: '0' };
   }
-  return '0';
+
+  const prevArrival = parseFloat(result.rows[0].odometer_arrival as string);
+  const currArrival = parseFloat(currentArrival);
+
+  if (!Number.isFinite(prevArrival) || !Number.isFinite(currArrival)) {
+    return { departure: '0', km: '0' };
+  }
+
+  // Per spec (unusual formula — do not "normalise"):
+  //   km = current.arrival - previous.arrival
+  //   departure = current.arrival + km
+  const km = currArrival - prevArrival;
+  const departure = currArrival + km;
+
+  return {
+    departure: departure.toString(),
+    km: km.toString(),
+  };
 }
 
 /**
- * kilometers_traveled = max(0, currentArrival - departure).
- * departure is what computeOdometerDeparture() returned (= previous
- * same-day arrival, or '0' if first visit of the day).
- * Returns '0' when either value is empty / non-numeric — caller can
- * treat that as "no measurement available".
+ * Kept for backward compatibility with touchpoints.ts which imports this.
+ * Delegates to computeOdometerFields internally.
+ *
+ * @deprecated Use computeOdometerFields() directly for new code.
+ */
+export async function computeOdometerDeparture(
+  userId: string,
+  visitDate: Date | string | undefined,
+  dbClient: { query: (text: string, values?: any[]) => Promise<{ rows: any[] }> } = pool,
+): Promise<string> {
+  // Legacy callers don't have currentArrival available here, so we can only
+  // return the previous visit's arrival (the old behaviour). This shim exists
+  // so touchpoints.ts doesn't need a simultaneous refactor.
+  let dateParam: string | null = null;
+  if (visitDate) {
+    const d = typeof visitDate === 'string' ? new Date(visitDate) : visitDate;
+    if (!isNaN(d.getTime())) {
+      dateParam = d.toISOString().slice(0, 10);
+    }
+  }
+  const result = await dbClient.query(
+    `SELECT odometer_arrival
+     FROM visits
+     WHERE user_id = $1
+       AND (
+         CASE WHEN $2::date IS NULL
+              THEN time_in::date = CURRENT_DATE
+              ELSE time_in::date = $2::date
+         END
+       )
+       AND odometer_arrival IS NOT NULL
+       AND odometer_arrival != ''
+     ORDER BY time_in DESC, created_at DESC
+     LIMIT 1`,
+    [userId, dateParam],
+  );
+  return result.rows.length > 0 ? (result.rows[0].odometer_arrival as string) : '0';
+}
+
+/**
+ * @deprecated Use computeOdometerFields() which computes both values together.
  */
 export function computeKilometersTraveled(
   currentArrival: string | null | undefined,
@@ -198,16 +265,11 @@ export const visitService = {
     // Validate input data
     const validated = createVisitSchema.parse(data);
 
-    // Auto-compute departure: ignore client-supplied value.
-    // Uses the arrival reading from the most recent earlier same-day visit
-    // for this user; falls back to '0' when there is no prior same-day visit.
-    const computedDeparture = await computeOdometerDeparture(
+    // Auto-compute odometer fields per spec. Client-supplied departure is ignored.
+    const { departure: computedDeparture, km: computedKm } = await computeOdometerFields(
       validated.user_id as string,
-      validated.time_in,
-    );
-    const computedKm = computeKilometersTraveled(
       validated.odometer_arrival as string | null | undefined,
-      computedDeparture,
+      validated.time_in,
     );
 
     const result = await pool.query(

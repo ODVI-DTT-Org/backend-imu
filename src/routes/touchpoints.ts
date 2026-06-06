@@ -13,7 +13,7 @@ import {
 } from '../errors/index.js';
 import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
-import { computeOdometerDeparture, computeKilometersTraveled } from '../services/visit.service.js';
+import { computeOdometerDeparture, computeKilometersTraveled, computeOdometerFields } from '../services/visit.service.js';
 import { storageService } from '../services/storage.js';
 import { signVisitPhotoFields } from '../utils/photo-signing.js';
 
@@ -767,14 +767,11 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         callId = callResult.rows[0].id;
       } else {
         // Caravan path: auto-create visit record from body fields.
-        // odometer_departure is server-computed — client-supplied value is ignored.
-        const computedDeparture = await computeOdometerDeparture(
+        // odometer_departure and kilometers_traveled are server-computed per spec.
+        const { departure: computedDeparture, km: computedKm } = await computeOdometerFields(
           validated.user_id as string,
-          body.time_in ? String(body.time_in) : undefined,
-        );
-        const computedKm = computeKilometersTraveled(
           body.odometer_arrival as string | null | undefined,
-          computedDeparture,
+          body.time_in ? String(body.time_in) : undefined,
         );
         const visitResult = await pool.query(
           `INSERT INTO visits (
