@@ -82,6 +82,7 @@ releases.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
   v.longitude AS visit_longitude,
   v.time_in  AS visit_time_in,
   v.time_out AS visit_time_out,
+  v.kilometers_traveled AS visit_kilometers_traveled,
   v.photo_url AS visit_photo_url,
   v.remarks  AS visit_remarks
 FROM releases r

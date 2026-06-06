@@ -139,6 +139,7 @@ function mapRowToApproval(row: Record<string, any>) {
     visit_region: row.visit_region ?? null,
     visit_time_in: row.visit_time_in ?? null,
     visit_time_out: row.visit_time_out ?? null,
+    visit_kilometers_traveled: row.visit_kilometers_traveled ?? null,
     updated_client_information: row.updated_client_information,
     updated_udi: row.updated_udi,
     udi_number: row.udi_number,
@@ -250,6 +251,7 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
               v.region as visit_region,
               v.time_in as visit_time_in,
               v.time_out as visit_time_out,
+              v.kilometers_traveled as visit_kilometers_traveled,
               COALESCE(tp.tp_number, a.touchpoint_number) AS touchpoint_number_resolved,
               COALESCE(v.remarks, tp.tp_remarks) AS visit_remarks_resolved
        FROM approvals a
@@ -257,7 +259,7 @@ approvals.get('/', authMiddleware, requirePermission('approvals', 'read'), async
        LEFT JOIN users car ON car.id = a.user_id
        LEFT JOIN users u ON u.id = a.approved_by
        LEFT JOIN LATERAL (
-         SELECT remarks, photo_url, latitude, longitude, address, barangay, municipality, province, region, time_in, time_out FROM visits
+         SELECT remarks, photo_url, latitude, longitude, address, barangay, municipality, province, region, time_in, time_out, kilometers_traveled FROM visits
          WHERE a.type IN ('udi', 'loan_release_v2')
            AND left(a.notes, 1) = '{'
            AND id = (a.notes::jsonb->>'visit_id')::uuid
@@ -333,6 +335,7 @@ approvals.get('/:id', authMiddleware, requirePermission('approvals', 'read'), as
               v.remarks as visit_remarks, v.photo_url as visit_photo_url,
               v.latitude as visit_latitude, v.longitude as visit_longitude,
               v.address as visit_address, v.time_in as visit_time_in, v.time_out as visit_time_out,
+              v.kilometers_traveled as visit_kilometers_traveled,
               COALESCE(tp.tp_number, a.touchpoint_number) AS touchpoint_number_resolved,
               COALESCE(v.remarks, tp.tp_remarks) AS visit_remarks_resolved
        FROM approvals a
