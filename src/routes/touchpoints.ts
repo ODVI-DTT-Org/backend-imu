@@ -113,6 +113,9 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     visit_municipality: row.visit_municipality ?? null,
     visit_province: row.visit_province ?? null,
     visit_region: row.visit_region ?? null,
+    odometer_arrival: row.odometer_arrival ?? null,
+    odometer_departure: row.odometer_departure ?? null,
+    kilometers_traveled: row.kilometers_traveled ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     expand: row.expand,
@@ -262,7 +265,10 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
               ca.phone_number,
               v.address as visit_address,
               v.municipality as visit_municipality,
-              v.province as visit_province
+              v.province as visit_province,
+              v.odometer_arrival as odometer_arrival,
+              v.odometer_departure as odometer_departure,
+              v.kilometers_traveled as kilometers_traveled
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
@@ -466,6 +472,9 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               v.municipality as visit_municipality,
               v.province as visit_province,
               v.region as visit_region,
+              v.odometer_arrival as odometer_arrival,
+              v.odometer_departure as odometer_departure,
+              v.kilometers_traveled as kilometers_traveled,
               addr.street as client_addr_street,
               addr.barangay as client_addr_barangay,
               addr.city as client_addr_municipality,
