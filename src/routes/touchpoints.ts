@@ -767,8 +767,8 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
         callId = callResult.rows[0].id;
       } else {
         // Caravan path: auto-create visit record from body fields.
-        // odometer_departure and kilometers_traveled are server-computed per spec.
-        const { departure: computedDeparture, km: computedKm } = await computeOdometerFields(
+        // kilometers_traveled is server-computed. odometer_departure is always null per spec.
+        const { km: computedKm } = await computeOdometerFields(
           validated.user_id as string,
           body.odometer_arrival as string | null | undefined,
           body.time_in ? String(body.time_in) : undefined,
@@ -789,7 +789,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
             body.time_in || null,
             body.time_out || null,
             body.odometer_arrival || null,
-            computedDeparture,
+            null, /* odometer_departure: always null per spec */
             computedKm,
             body.photo_url || '',
             body.remarks || body.notes || null,

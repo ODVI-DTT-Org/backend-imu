@@ -5,28 +5,26 @@ import { z } from 'zod';
  * Compute server-side odometer fields for a new visit per spec:
  *
  * First visit of the day (no prior same-day visit by this user):
- *   odometer_departure = '0'
  *   kilometers_traveled = '0'
  *
  * Subsequent visits:
  *   kilometers_traveled = current.arrival - previous.arrival
- *   odometer_departure  = current.arrival + kilometers_traveled
+ *
+ * odometer_departure is always null — it is no longer stored.
  *
  * "Same day" is scoped by time_in::date; falls back to CURRENT_DATE when
  * time_in is not provided.
- *
- * Returns all three computed values so callers can store them atomically.
  */
 export async function computeOdometerFields(
   userId: string,
   currentArrival: string | null | undefined,
   visitDate: Date | string | undefined,
   dbClient: { query: (text: string, values?: any[]) => Promise<{ rows: any[] }> } = pool,
-): Promise<{ departure: string; km: string }> {
+): Promise<{ departure: null; km: string }> {
   // If arrival is absent we cannot compute anything meaningful.
   if (!currentArrival || currentArrival.trim() === '') {
-    console.warn(`[visit.service] odometer_arrival is blank for user ${userId} — leaving computed fields as '0'`);
-    return { departure: '0', km: '0' };
+    console.warn(`[visit.service] odometer_arrival is blank for user ${userId} — leaving km as '0'`);
+    return { departure: null, km: '0' };
   }
 
   // Determine the calendar date to scope the query.
@@ -57,24 +55,21 @@ export async function computeOdometerFields(
 
   // No prior same-day visit → first visit of the day.
   if (result.rows.length === 0) {
-    return { departure: '0', km: '0' };
+    return { departure: null, km: '0' };
   }
 
   const prevArrival = parseFloat(result.rows[0].odometer_arrival as string);
   const currArrival = parseFloat(currentArrival);
 
   if (!Number.isFinite(prevArrival) || !Number.isFinite(currArrival)) {
-    return { departure: '0', km: '0' };
+    return { departure: null, km: '0' };
   }
 
-  // Per spec (unusual formula — do not "normalise"):
-  //   km = current.arrival - previous.arrival
-  //   departure = current.arrival + km
+  // km = current.arrival - previous.arrival (first-principles spec).
   const km = currArrival - prevArrival;
-  const departure = currArrival + km;
 
   return {
-    departure: departure.toString(),
+    departure: null,
     km: km.toString(),
   };
 }
@@ -282,7 +277,7 @@ export const visitService = {
       [
         validated.id ?? null,
         validated.client_id, validated.user_id, validated.type, validated.time_in, validated.time_out,
-        validated.odometer_arrival, computedDeparture, computedKm, validated.photo_url,
+        validated.odometer_arrival, null /* odometer_departure: always null per spec */, computedKm, validated.photo_url,
         validated.remarks ?? validated.notes ?? null, validated.reason, validated.status, validated.address,
         validated.latitude, validated.longitude, validated.source ?? 'IMU',
         validated.barangay, validated.municipality, validated.province, validated.region
