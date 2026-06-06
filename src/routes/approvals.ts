@@ -142,6 +142,7 @@ function mapRowToApproval(row: Record<string, any>) {
     updated_client_information: row.updated_client_information,
     updated_udi: row.updated_udi,
     udi_number: row.udi_number,
+    reference_number: row.reference_number,
     approved_by: row.approved_by,
     approved_at: row.approved_at,
     rejected_by: row.rejected_by,
@@ -608,13 +609,13 @@ approvals.put('/:id', authMiddleware, requirePermission('approvals', 'update'), 
         await dbClient.query(`
           INSERT INTO releases (
             id, client_id, user_id, visit_id, call_id, product_type, loan_type,
-            udi_number, approval_notes, status, approved_by, approved_at
+            udi_number, approval_notes, status, approved_by, approved_at, reference_number
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved', $9, NOW()
+            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, 'approved', $9, NOW(), $10
           )
         `, [approval.client_id, approval.user_id, visitId, callId,
             parsedNotes.product_type, parsedNotes.loan_type,
-            udiNum, 'Approved by admin', user.sub]);
+            udiNum, 'Approved by admin', user.sub, approval.reference_number]);
 
         await dbClient.query(`
           UPDATE clients
