@@ -366,6 +366,11 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
     if (!body.client_ids && body.client_id) {
       body.client_ids = [body.client_id];
     }
+    // Backward-compat: web admin (and any legacy client) may still send the
+    // pre-rename field name `caravan_id`. Map it onto the canonical `user_id`.
+    if (!body.user_id && body.caravan_id) {
+      body.user_id = body.caravan_id;
+    }
 
     const validated = createItinerarySchema.parse(body);
     const { user_id, client_ids, scheduled_date, scheduled_time, status, priority, notes } = validated;
@@ -389,25 +394,10 @@ itineraries.post('/', authMiddleware, requirePermission('itineraries', 'create')
           continue;
         }
 
-        // Refuse to create if a tombstone exists for this logical itinerary
-        // (same user + client + date). This blocks mobile resurrection even
-        // when the mobile re-uploads with a fresh UUID.
-        const tombstoneComposite = await client.query(
-          `SELECT 1 FROM deleted_itineraries
-           WHERE user_id = $1 AND client_id = $2 AND scheduled_date = $3::date
-           LIMIT 1`,
-          [user_id, clientId, scheduled_date]
-        );
-        if (tombstoneComposite.rows.length > 0) {
-          console.log(`[Itineraries POST] Blocking creation: tombstone exists for user=${user_id} client=${clientId} date=${scheduled_date}`);
-          errors.push({
-            client_id: clientId,
-            error: 'Itinerary was deleted and cannot be re-created automatically',
-          });
-          continue;
-        }
-
-        // Also block by exact UUID if mobile sends one that was tombstoned.
+        // Block ONLY exact-UUID resurrection (PowerSync re-uploading a deleted
+        // row). A legitimate create-after-delete for the same logical key
+        // (user, client, date) is now allowed — that earlier composite gate
+        // was too aggressive and silently blocked intentional re-creation.
         const incomingId = body.id && client_ids.length === 1 ? body.id : null;
         if (incomingId) {
           const tombstoneId = await client.query(
