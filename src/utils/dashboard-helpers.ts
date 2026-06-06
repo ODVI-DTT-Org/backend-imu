@@ -32,6 +32,28 @@ export function getDashboardDateRange(period: string, today: Date = new Date()):
   return { from, to, prevFrom, prevTo }
 }
 
+// Month-anchored range used by the redesigned monthly snapshot dashboard.
+// monthStr is `YYYY-MM`; previous range is the entire previous calendar month.
+export function getDashboardDateRangeForMonth(monthStr: string): {
+  from: Date
+  to: Date
+  prevFrom: Date
+  prevTo: Date
+} {
+  const m = /^(\d{4})-(\d{2})$/.exec(monthStr)
+  if (!m) throw new Error(`Invalid month: ${monthStr}, expected YYYY-MM`)
+  const year = parseInt(m[1], 10)
+  const month = parseInt(m[2], 10) // 1-12
+
+  const from = new Date(year, month - 1, 1, 0, 0, 0, 0)
+  const to = new Date(year, month, 0, 23, 59, 59, 999) // day 0 of next month = last day of this month
+
+  const prevFrom = new Date(year, month - 2, 1, 0, 0, 0, 0)
+  const prevTo = new Date(year, month - 1, 0, 23, 59, 59, 999)
+
+  return { from, to, prevFrom, prevTo }
+}
+
 export function calcChangePct(current: number, previous: number): number | null {
   if (previous === 0) return null
   return parseFloat(((current - previous) / previous * 100).toFixed(1))

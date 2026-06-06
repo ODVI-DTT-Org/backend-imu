@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
-import { getDashboardDateRange, calcChangePct } from '../utils/dashboard-helpers.js';
+import { getDashboardDateRange, getDashboardDateRangeForMonth, calcChangePct } from '../utils/dashboard-helpers.js';
 import {
   ValidationError,
   AuthorizationError,
@@ -73,20 +73,26 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
 
 // GET /api/reports/dashboard?period=week|month|quarter|year
 reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), async (c) => {
-  const raw = c.req.query('period') ?? 'month'
-  const period = ['week', 'month', 'quarter', 'year'].includes(raw) ? raw : 'month'
+  // Optional month=YYYY-MM anchors the dashboard to a specific calendar month.
+  // Falls back to the older period=week|month|quarter|year semantics when absent.
+  const monthQuery = c.req.query('month')
+  const rawPeriod = c.req.query('period') ?? 'month'
+  const period = ['week', 'month', 'quarter', 'year'].includes(rawPeriod) ? rawPeriod : 'month'
 
-  const { from, to, prevFrom, prevTo } = getDashboardDateRange(period)
+  const range = monthQuery && /^\d{4}-\d{2}$/.test(monthQuery)
+    ? getDashboardDateRangeForMonth(monthQuery)
+    : getDashboardDateRange(period)
+  const { from, to, prevFrom, prevTo } = range
 
   const fromStr     = from.toISOString().split('T')[0]
   const toStr       = to.toISOString().split('T')[0]
   const prevFromStr = prevFrom.toISOString().split('T')[0]
   const prevToStr   = prevTo.toISOString().split('T')[0]
 
-  const bucketMap: Record<string, string> = {
-    week: 'day', month: 'day', quarter: 'week', year: 'month',
-  }
-  const truncFn = bucketMap[period] === 'day' ? 'day' : bucketMap[period] === 'week' ? 'week' : 'month'
+  // Month view always buckets by day for the in-month trend chart.
+  const truncFn = monthQuery
+    ? 'day'
+    : (period === 'quarter' ? 'week' : period === 'year' ? 'month' : 'day')
 
   const [releasesResult, touchpointsResult, funnelResult, timelineResult, agentsResult] =
     await Promise.all([
@@ -231,7 +237,9 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
 
   return c.json({
     period,
+    month: monthQuery ?? null,
     date_range: { from: fromStr, to: toStr },
+    prev_date_range: { from: prevFromStr, to: prevToStr },
     kpis: {
       releases:        { current: rCurr, previous: rPrev, change_pct: calcChangePct(rCurr, rPrev) },
       visits:          { current: vCurr, previous: vPrev, change_pct: calcChangePct(vCurr, vPrev) },
