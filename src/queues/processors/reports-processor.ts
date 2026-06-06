@@ -238,7 +238,8 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_caravan_releases'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'caravan_releases', format: 'excel', generatedAt: new Date(),
-              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type, status: params?.status },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
           };
         }
         case 'report_tele_releases': {
@@ -252,7 +253,8 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_tele_releases'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'tele_releases', format: 'excel', generatedAt: new Date(),
-              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type, status: params?.status },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
           };
         }
         case 'report_odometer': {
@@ -279,7 +281,8 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_releases_by_loan_type'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'releases_by_loan_type', format: 'excel', generatedAt: new Date(),
-              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
           };
         }
         default:
