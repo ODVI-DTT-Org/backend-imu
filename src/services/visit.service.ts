@@ -2,6 +2,22 @@ import { pool } from '../db/index.js';
 import { z } from 'zod';
 
 /**
+ * Thrown when a new visit's odometer_arrival is less than the most-recent
+ * non-null odometer_arrival for the same user on the same Manila day.
+ */
+export class OdometerBelowPreviousError extends Error {
+  public readonly previous: string;
+  public readonly current: string;
+
+  constructor(previous: string, current: string) {
+    super(`Odometer arrival must be at least ${previous}.`);
+    this.name = 'OdometerBelowPreviousError';
+    this.previous = previous;
+    this.current = current;
+  }
+}
+
+/**
  * Compute server-side odometer fields for a new visit per spec:
  *
  * First visit of the day (no prior same-day visit by this user):
@@ -58,11 +74,17 @@ export async function computeOdometerFields(
     return { departure: null, km: '0' };
   }
 
-  const prevArrival = parseFloat(result.rows[0].odometer_arrival as string);
+  const prevArrivalRaw = result.rows[0].odometer_arrival as string;
+  const prevArrival = parseFloat(prevArrivalRaw);
   const currArrival = parseFloat(currentArrival);
 
   if (!Number.isFinite(prevArrival) || !Number.isFinite(currArrival)) {
     return { departure: null, km: '0' };
+  }
+
+  // Monotonic odometer check: new arrival must not be less than previous.
+  if (currArrival < prevArrival) {
+    throw new OdometerBelowPreviousError(prevArrivalRaw, currentArrival);
   }
 
   // km = current.arrival - previous.arrival (first-principles spec).

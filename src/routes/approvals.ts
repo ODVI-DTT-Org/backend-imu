@@ -10,7 +10,7 @@ import { createNotification } from '../services/notification.service.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
 import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
 import { getCacheService } from '../services/cache/redis-cache.js';
-import { computeOdometerDeparture, computeKilometersTraveled } from '../services/visit.service.js';
+import { computeOdometerDeparture, computeKilometersTraveled, computeOdometerFields, OdometerBelowPreviousError } from '../services/visit.service.js';
 
 // Mirror of clients.ts:invalidateClientsListCache. Kept inline to avoid an export
 // from that file; both routes are the only writers of the v1:clients:* keys.
@@ -1970,14 +1970,11 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         }
 
         // odometer_departure is server-computed; client-supplied odometer_out is ignored.
-        const computedDeparture = await computeOdometerDeparture(
+        const { departure: computedDeparture, km: computedKm } = await computeOdometerFields(
           user.sub,
+          (validated.odometer_in ?? null) as string | null,
           validated.time_in,
           dbClient as any,
-        );
-        const computedKm = computeKilometersTraveled(
-          (validated.odometer_in ?? null) as string | null,
-          computedDeparture,
         );
         // Write the user-facing free text to `remarks` (the active column;
         // visits.notes is marked legacy in the schema). This is what the
@@ -2144,6 +2141,14 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
       }, 201);
     } catch (error: any) {
       await dbClient.query('ROLLBACK');
+      if (error instanceof OdometerBelowPreviousError) {
+        return c.json({
+          error: 'ODOMETER_BELOW_PREVIOUS',
+          message: error.message,
+          previous: error.previous,
+          current: error.current,
+        }, 422);
+      }
       if (error instanceof z.ZodError) {
         return c.json({ message: 'Invalid input', errors: error.errors }, 400);
       }

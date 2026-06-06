@@ -13,7 +13,7 @@ import {
 } from '../errors/index.js';
 import { getClientCacheInvalidation } from '../services/cache/client-cache-invalidation.js';
 import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js';
-import { computeOdometerDeparture, computeKilometersTraveled, computeOdometerFields } from '../services/visit.service.js';
+import { computeOdometerDeparture, computeKilometersTraveled, computeOdometerFields, OdometerBelowPreviousError } from '../services/visit.service.js';
 import { storageService } from '../services/storage.js';
 import { signVisitPhotoFields } from '../utils/photo-signing.js';
 
@@ -880,6 +880,14 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       message: 'Touchpoint submitted for approval'
     }, 201);
   } catch (error) {
+    if (error instanceof OdometerBelowPreviousError) {
+      return c.json({
+        error: 'ODOMETER_BELOW_PREVIOUS',
+        message: error.message,
+        previous: error.previous,
+        current: error.current,
+      }, 422);
+    }
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {

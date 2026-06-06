@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { authMiddleware, requireRole } from '../middleware/auth.js';
-import { visitService, createVisitSchema, updateVisitSchema, type Visit } from '../services/visit.service.js';
+import { visitService, createVisitSchema, updateVisitSchema, type Visit, OdometerBelowPreviousError } from '../services/visit.service.js';
 import { ValidationError } from '../errors/index.js';
 import { storageService } from '../services/storage.js';
 import { signVisitPhotoFields } from '../utils/photo-signing.js';
@@ -217,6 +217,15 @@ visits.post('/', authMiddleware, async (c) => {
   } catch (error: any) {
     console.error('[Visits] Error creating visit:', error);
     console.error('[Visits] Error stack:', error.stack);
+
+    if (error instanceof OdometerBelowPreviousError) {
+      return c.json({
+        error: 'ODOMETER_BELOW_PREVIOUS',
+        message: error.message,
+        previous: error.previous,
+        current: error.current,
+      }, 422);
+    }
 
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
