@@ -71,7 +71,10 @@ const createPSGCJobSchema = z.object({
 });
 
 export const createReportJobSchema = z.object({
-  report_type: z.enum(['agent_performance', 'client_activity', 'touchpoint_summary', 'market_saturation', 'itinerary_analysis']),
+  report_type: z.enum([
+    'agent_performance', 'client_activity', 'touchpoint_summary', 'market_saturation', 'itinerary_analysis',
+    'daily_visits', 'daily_calls', 'caravan_releases', 'tele_releases', 'odometer', 'releases_by_loan_type',
+  ]),
   start_date: z.string().optional(),
   end_date: z.string().optional(),
   user_id: z.string().optional(),
@@ -79,6 +82,10 @@ export const createReportJobSchema = z.object({
   team_ids: z.array(z.string().uuid()).optional(),
   categories: z.array(z.enum(['VIRGIN', 'FAVORABLE', 'OTHERS', 'EXISTING'])).optional(),
   regions: z.array(z.string()).optional(),
+  // Filters for queued XLSX report handlers
+  loan_type: z.string().optional(),
+  product_type: z.string().optional(),
+  status: z.string().optional(),
 });
 
 const createUserLocationAssignmentSchema = z.object({
@@ -172,6 +179,12 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
       touchpoint_summary: ReportJobType.REPORT_TOUCHPOINT_SUMMARY,
       market_saturation: ReportJobType.REPORT_MARKET_SATURATION,
       itinerary_analysis: ReportJobType.REPORT_ITINERARY_ANALYSIS,
+      daily_visits: ReportJobType.REPORT_DAILY_VISITS,
+      daily_calls: ReportJobType.REPORT_DAILY_CALLS,
+      caravan_releases: ReportJobType.REPORT_CARAVAN_RELEASES,
+      tele_releases: ReportJobType.REPORT_TELE_RELEASES,
+      odometer: ReportJobType.REPORT_ODOMETER,
+      releases_by_loan_type: ReportJobType.REPORT_RELEASES_BY_LOAN_TYPE,
     };
     const jobType = reportTypeMap[validated.report_type] ?? ReportJobType.REPORT_AGENT_PERFORMANCE;
 
@@ -194,6 +207,9 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
             },
           }
         : {}),
+      ...(validated.loan_type    ? { loan_type:    validated.loan_type    } : {}),
+      ...(validated.product_type ? { product_type: validated.product_type } : {}),
+      ...(validated.status       ? { status:       validated.status       } : {}),
     });
 
     return c.json({

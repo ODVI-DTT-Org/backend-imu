@@ -54,6 +54,14 @@ export enum ReportJobType {
   EXCEL_QUICK_REPORT = 'excel_quick_report',
   EXCEL_CUSTOM_REPORT = 'excel_custom_report',
   EXCEL_SCHEDULED_REPORT = 'excel_scheduled_report',
+
+  // Queued XLSX exports for sync report endpoints
+  REPORT_DAILY_VISITS = 'report_daily_visits',
+  REPORT_DAILY_CALLS = 'report_daily_calls',
+  REPORT_CARAVAN_RELEASES = 'report_caravan_releases',
+  REPORT_TELE_RELEASES = 'report_tele_releases',
+  REPORT_ODOMETER = 'report_odometer',
+  REPORT_RELEASES_BY_LOAN_TYPE = 'report_releases_by_loan_type',
 }
 
 /**
@@ -155,6 +163,10 @@ export interface ReportJobData extends BaseJobData {
     filters?: Record<string, any>;
     scheduledReportId?: string;
     recipients?: string[];
+    // Filters for queued XLSX report handlers
+    loan_type?: string;
+    product_type?: string;
+    status?: string;
   };
 }
 

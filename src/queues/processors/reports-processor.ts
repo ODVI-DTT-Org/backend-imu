@@ -19,6 +19,12 @@ import { BaseProcessor } from '../base-processor.js';
 import type { ReportJobData, JobResult } from '../jobs/job-types.js';
 import { logger } from '../../utils/logger.js';
 import { generateItineraryAnalysisReport } from './handlers/itinerary-analysis-handler.js';
+import { generateDailyVisitsReport } from './handlers/daily-visits-handler.js';
+import { generateDailyCallsReport } from './handlers/daily-calls-handler.js';
+import { generateCaravanReleasesReport } from './handlers/caravan-releases-handler.js';
+import { generateTeleReleasesReport } from './handlers/tele-releases-handler.js';
+import { generateOdometerReport } from './handlers/odometer-handler.js';
+import { generateReleasesByLoanTypeReport } from './handlers/releases-by-loan-type-handler.js';
 
 /**
  * Builds a SQL expression that resolves a client's address with this priority:
@@ -193,6 +199,87 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
               fileName: itineraryResult.fileName,
               fileSize: itineraryResult.buffer.byteLength,
             },
+          };
+        }
+        case 'report_daily_visits': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateDailyVisitsReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+          });
+          return {
+            success: true, total: 1, succeeded: ['report_daily_visits'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'daily_visits', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+          };
+        }
+        case 'report_daily_calls': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateDailyCallsReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+          });
+          return {
+            success: true, total: 1, succeeded: ['report_daily_calls'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'daily_calls', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+          };
+        }
+        case 'report_caravan_releases': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateCaravanReleasesReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+            productType: params?.product_type, loanType: params?.loan_type, status: params?.status,
+          });
+          return {
+            success: true, total: 1, succeeded: ['report_caravan_releases'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'caravan_releases', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+          };
+        }
+        case 'report_tele_releases': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateTeleReleasesReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+            productType: params?.product_type, loanType: params?.loan_type, status: params?.status,
+          });
+          return {
+            success: true, total: 1, succeeded: ['report_tele_releases'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'tele_releases', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+          };
+        }
+        case 'report_odometer': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateOdometerReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+          });
+          return {
+            success: true, total: 1, succeeded: ['report_odometer'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'odometer', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+          };
+        }
+        case 'report_releases_by_loan_type': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateReleasesByLoanTypeReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+            loanType: params?.loan_type, productType: params?.product_type,
+          });
+          return {
+            success: true, total: 1, succeeded: ['report_releases_by_loan_type'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'releases_by_loan_type', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
           };
         }
         default:

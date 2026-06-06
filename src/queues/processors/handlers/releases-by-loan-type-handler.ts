@@ -1,0 +1,136 @@
+/**
+ * Releases By Loan Type Report Handler
+ *
+ * Two sheets: "Releases" (row-level) and "By Loan Type" (aggregate).
+ * SQL lifted verbatim from GET /api/reports/releases-by-loan-type.
+ */
+
+import { Pool } from 'pg';
+import { S3Client } from '@aws-sdk/client-s3';
+import { generateSimpleXlsxReport } from './simple-report-helper.js';
+
+export interface ReleasesByLoanTypeParams {
+  startDate?: string;
+  endDate?: string;
+  userId?: string;
+  loanType?: string;
+  productType?: string;
+}
+
+export async function generateReleasesByLoanTypeReport(
+  pool: Pool,
+  s3Client: S3Client,
+  s3Bucket: string,
+  params: ReleasesByLoanTypeParams
+): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+  const now = new Date();
+  const endDate =
+    params.endDate ?? now.toISOString().split('T')[0];
+  const startDate =
+    params.startDate ??
+    new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+      .toISOString()
+      .split('T')[0];
+
+  const queryParams: any[] = [];
+  let paramIndex = 1;
+
+  let whereClause = 'WHERE r.visit_id IS NOT NULL';
+  whereClause += ` AND r.created_at >= $${paramIndex++}`;
+  queryParams.push(startDate);
+  whereClause += ` AND r.created_at <= $${paramIndex++}`;
+  queryParams.push(endDate + 'T23:59:59.999Z');
+
+  if (params.userId) {
+    whereClause += ` AND r.user_id = $${paramIndex++}`;
+    queryParams.push(params.userId);
+  }
+
+  if (params.loanType) {
+    whereClause += ` AND r.loan_type = $${paramIndex++}`;
+    queryParams.push(params.loanType);
+  }
+
+  if (params.productType) {
+    whereClause += ` AND r.product_type = $${paramIndex++}`;
+    queryParams.push(params.productType);
+  }
+
+  const itemsSql = `
+    SELECT
+      r.id,
+      r.created_at                                 AS released_at,
+      r.loan_type,
+      r.product_type,
+      r.udi_number,
+      r.status,
+      cl.first_name || ' ' || cl.last_name         AS client_name,
+      u.first_name || ' ' || u.last_name           AS agent_name,
+      (
+        SELECT COUNT(*)
+        FROM touchpoints t
+        WHERE t.client_id = r.client_id
+          AND t.created_at <= r.created_at
+      )                                            AS touchpoints_before_release
+    FROM releases r
+    JOIN clients cl ON cl.id = r.client_id
+    JOIN users u ON u.id = r.user_id
+    ${whereClause}
+    ORDER BY released_at DESC
+  `;
+
+  const result = await pool.query(itemsSql, queryParams);
+
+  // Build by_loan_type aggregate in-memory (same logic as the GET endpoint)
+  const byLoanType: Record<
+    string,
+    { loan_type: string; count: number; avg_touchpoints_before_release: number }
+  > = {};
+  for (const row of result.rows) {
+    const lt = row.loan_type || 'unknown';
+    if (!byLoanType[lt]) {
+      byLoanType[lt] = { loan_type: lt, count: 0, avg_touchpoints_before_release: 0 };
+    }
+    byLoanType[lt].count += 1;
+    byLoanType[lt].avg_touchpoints_before_release +=
+      Number(row.touchpoints_before_release) || 0;
+  }
+  for (const lt of Object.keys(byLoanType)) {
+    const entry = byLoanType[lt];
+    entry.avg_touchpoints_before_release =
+      entry.count > 0
+        ? Math.round((entry.avg_touchpoints_before_release / entry.count) * 100) / 100
+        : 0;
+  }
+
+  return generateSimpleXlsxReport({
+    s3Client,
+    s3Bucket,
+    fileNamePrefix: `releases-by-loan-type-${startDate}-${endDate}`,
+    sheets: [
+      {
+        name: 'Releases',
+        columns: [
+          { header: 'Released At',                 key: 'released_at',                  width: 22 },
+          { header: 'Client Name',                  key: 'client_name',                  width: 28 },
+          { header: 'Agent Name',                   key: 'agent_name',                   width: 28 },
+          { header: 'Loan Type',                    key: 'loan_type',                    width: 16 },
+          { header: 'Product Type',                 key: 'product_type',                 width: 16 },
+          { header: 'UDI Number',                   key: 'udi_number',                   width: 18 },
+          { header: 'Status',                       key: 'status',                       width: 14 },
+          { header: 'Touchpoints Before Release',   key: 'touchpoints_before_release',   width: 28 },
+        ],
+        rows: result.rows,
+      },
+      {
+        name: 'By Loan Type',
+        columns: [
+          { header: 'Loan Type',                          key: 'loan_type',                         width: 20 },
+          { header: 'Count',                               key: 'count',                             width: 12 },
+          { header: 'Avg Touchpoints Before Release',      key: 'avg_touchpoints_before_release',    width: 32 },
+        ],
+        rows: Object.values(byLoanType),
+      },
+    ],
+  });
+}
