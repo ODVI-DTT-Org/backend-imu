@@ -2147,7 +2147,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
         return c.json({ message: 'Invalid input', errors: error.errors }, 400);
       }
       console.error('Loan release approval error:', error);
-      return c.json({ message: 'Internal server error' }, 500);
+      return c.json({ message: 'Internal server error', detail: error?.message ?? String(error) }, 500);
     } finally {
       dbClient.release();
     }
