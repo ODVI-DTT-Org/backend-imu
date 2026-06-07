@@ -35,16 +35,38 @@ streams:
         FROM user_locations
         WHERE user_id = auth.user_id() AND deleted_at IS NULL
 
-  # Client data - ALL clients (business rule: caravan can see all clients)
+  # Client data — area-RBAC scoped (stage 4b)
   # Optimized with selective column syncing to reduce bandwidth
   clients:
     auto_subscribe: true
     queries:
-      # Core client data - all clients for visibility
+      # Core client data — area-RBAC scoped (Stage 4b).
+      # Admin sees all; caravan sees their slice; manager/tele sees their group pool.
       - SELECT c.id, c.first_name, c.last_name, c.middle_name, c.email, c.phone,
           c.client_type, c.product_type, c.market_type, c.pension_type,
-          c.municipality, c.is_starred, c.created_at, c.updated_at
+          c.province, c.municipality, c.is_starred, c.created_at, c.updated_at
         FROM clients c
+        WHERE
+          EXISTS (
+            SELECT 1 FROM users u
+             WHERE u.id = auth.user_id() AND u.role = 'admin'
+          )
+          OR
+          (c.province, c.municipality) IN (
+            SELECT province, municipality
+              FROM group_caravan_municipalities
+             WHERE caravan_user_id = auth.user_id() AND deleted_at IS NULL
+          )
+          OR
+          (c.province, c.municipality) IN (
+            SELECT gm.province, gm.municipality
+              FROM group_municipalities gm
+              JOIN group_role_members grm ON grm.group_id = gm.group_id
+             WHERE grm.user_id = auth.user_id()
+               AND grm.role_in_group IN ('area_head','assistant_area_head','team_leader','tele')
+               AND grm.deleted_at IS NULL
+               AND gm.deleted_at IS NULL
+          )
 
       # Client addresses - only for active clients
       - SELECT a.id, a.client_id, a.type, a.street, a.barangay, a.city,
