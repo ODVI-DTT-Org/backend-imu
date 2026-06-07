@@ -54,14 +54,29 @@ export async function generateOdometerReport(
   const detailSql = `
     SELECT
       v.id,
-      date(v.time_in)                              AS visit_date,
       u.first_name || ' ' || u.last_name           AS agent_name,
+      date(v.time_in)                              AS visit_date,
+      v.time_in,
+      v.time_out,
       cl.first_name || ' ' || cl.last_name         AS client_name,
+      cl.phone                                     AS client_phone,
+      cl.municipality                              AS client_municipality,
+      cl.province                                  AS client_province,
+      v.type                                       AS visit_type,
+      v.reason,
+      v.status,
+      v.address,
+      v.barangay,
+      v.municipality,
+      v.province,
+      v.latitude,
+      v.longitude,
       v.odometer_departure,
       v.odometer_arrival,
       v.kilometers_traveled,
       NULLIF(v.odometer_arrival, '')::numeric
-        - NULLIF(v.odometer_departure, '')::numeric AS estimated_km
+        - NULLIF(v.odometer_departure, '')::numeric AS estimated_km,
+      v.remarks
     FROM visits v
     JOIN users u ON u.id = v.user_id
     JOIN clients cl ON cl.id = v.client_id
@@ -153,11 +168,26 @@ export async function generateOdometerReport(
         columns: [
           { header: 'Agent Name',          key: 'agent_name',          width: 28 },
           { header: 'Visit Date',          key: 'visit_date',          width: 14 },
+          { header: 'Time In',             key: 'time_in',             width: 22 },
+          { header: 'Time Out',            key: 'time_out',            width: 22 },
           { header: 'Client Name',         key: 'client_name',         width: 28 },
+          { header: 'Client Phone',        key: 'client_phone',        width: 16 },
+          { header: 'Client Municipality', key: 'client_municipality', width: 20 },
+          { header: 'Client Province',     key: 'client_province',     width: 20 },
+          { header: 'Visit Type',          key: 'visit_type',          width: 16 },
+          { header: 'Reason',              key: 'reason',              width: 20 },
+          { header: 'Status',              key: 'status',              width: 14 },
+          { header: 'Address',             key: 'address',             width: 40 },
+          { header: 'Barangay',            key: 'barangay',            width: 20 },
+          { header: 'Municipality',        key: 'municipality',        width: 20 },
+          { header: 'Province',            key: 'province',            width: 20 },
+          { header: 'Latitude',            key: 'latitude',            width: 14 },
+          { header: 'Longitude',           key: 'longitude',           width: 14 },
           { header: 'Odometer Departure',  key: 'odometer_departure',  width: 20 },
           { header: 'Odometer Arrival',    key: 'odometer_arrival',    width: 18 },
           { header: 'KM Traveled',         key: 'kilometers_traveled', width: 14 },
           { header: 'Estimated KM',        key: 'estimated_km',        width: 14 },
+          { header: 'Remarks',             key: 'remarks',             width: 30 },
         ],
         rows: detailResult.rows,
       },
