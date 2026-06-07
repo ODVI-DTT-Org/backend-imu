@@ -839,6 +839,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             g.caravan_id
           FROM group_municipalities gm
           JOIN groups g ON g.id = gm.group_id
+          WHERE gm.deleted_at IS NULL
           ORDER BY gm.province, gm.municipality, g.created_at ASC
         ),
         release_user_group AS (
