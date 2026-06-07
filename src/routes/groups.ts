@@ -819,4 +819,60 @@ groups.delete('/:id/locations/:province/:municipality', authMiddleware, requireP
   }
 });
 
+// ─── Stage 3b: area-RBAC management schemas ────────────────────────────────
+const roleMemberAssignSchema = z.object({
+  user_id: z.string().uuid(),
+  role_in_group: z.enum(['area_head', 'assistant_area_head', 'tele']),
+});
+
+const teamLeaderAssignSchema = z.object({
+  user_id: z.string().uuid(),
+});
+
+const municipalityPair = z.object({
+  province: z.string().min(1),
+  municipality: z.string().min(1),
+});
+
+const caravanAssignSchema = z.object({
+  user_id: z.string().uuid(),
+  municipalities: z.array(municipalityPair).optional().default([]),
+});
+
+const caravanMunicipalitiesReplaceSchema = z.object({
+  municipalities: z.array(municipalityPair),
+});
+
+// ─── Stage 3b: scope guard for management endpoints ────────────────────────
+/**
+ * Verify that the actor has the right to manage this group via the new
+ * group_role_members table. Returns the matching membership row(s) or throws.
+ *
+ * If actorRole === 'admin', the user must be a real admin (users.role).
+ * Otherwise, the user must have at least one of the allowed roles in this
+ * group (via group_role_members).
+ */
+async function ensureGroupAccess(
+  actorId: string,
+  actorRole: string,
+  groupId: string,
+  allowedRoles: ReadonlyArray<'area_head' | 'assistant_area_head' | 'team_leader'>,
+): Promise<void> {
+  if (actorRole === 'admin') return;
+  const { rows } = await pool.query<{ role_in_group: string }>(
+    `SELECT role_in_group FROM group_role_members
+      WHERE group_id = $1 AND user_id = $2 AND deleted_at IS NULL`,
+    [groupId, actorId],
+  );
+  const hasAllowed = rows.some(r =>
+    (allowedRoles as readonly string[]).includes(r.role_in_group),
+  );
+  if (!hasAllowed) {
+    throw new AuthenticationError(
+      `actor user_id=${actorId} lacks ${allowedRoles.join('/')} membership in group ${groupId}`,
+    );
+  }
+}
+
 export default groups;
+
