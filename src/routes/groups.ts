@@ -954,6 +954,89 @@ groups.delete(
   },
 );
 
+// POST /api/groups/:id/team-leaders
+// Admin or area_head in this group.
+groups.post(
+  '/:id/team-leaders',
+  authMiddleware,
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id') ?? '';
+    await ensureGroupAccess(user.sub, user.role, groupId, ['area_head']);
+
+    const parsed = teamLeaderAssignSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      throw new ValidationError('Invalid request body').addDetail('zod', parsed.error.flatten());
+    }
+    const { user_id } = parsed.data;
+
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO group_role_members (group_id, user_id, role_in_group, assigned_by)
+         VALUES ($1, $2, 'team_leader', $3)
+         RETURNING id, group_id, user_id, role_in_group, assigned_at`,
+        [groupId, user_id, user.sub],
+      );
+      await writeAssignmentAudit({
+        actorUserId: user.sub,
+        action: 'team_leader.assign',
+        targetUserId: user_id,
+        targetGroupId: groupId,
+      });
+      return c.json({ team_leader: rows[0] }, 201);
+    } catch (err: any) {
+      // uq_group_role_members_one_group_for_tl violation → user is TL elsewhere
+      if (err.code === '23505' && err.constraint?.includes('one_group_for_tl')) {
+        throw new ValidationError(
+          'User is already a team leader in another group; remove first',
+        ).addDetail('user_id', user_id);
+      }
+      throw err;
+    }
+  },
+);
+
+// DELETE /api/groups/:id/team-leaders/:userId
+// Stage 1 trigger blocks if any caravan is still assigned to this group.
+groups.delete(
+  '/:id/team-leaders/:userId',
+  authMiddleware,
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id') ?? '';
+    const userId = c.req.param('userId') ?? '';
+    await ensureGroupAccess(user.sub, user.role, groupId, ['area_head']);
+
+    try {
+      const { rowCount } = await pool.query(
+        `UPDATE group_role_members
+            SET deleted_at = NOW()
+          WHERE group_id = $1 AND user_id = $2
+            AND role_in_group = 'team_leader' AND deleted_at IS NULL`,
+        [groupId, userId],
+      );
+      if (rowCount === 0) {
+        throw new NotFoundError('Team leader not found in this group');
+      }
+      await writeAssignmentAudit({
+        actorUserId: user.sub,
+        action: 'team_leader.remove',
+        targetUserId: userId,
+        targetGroupId: groupId,
+      });
+      return c.json({ removed: true });
+    } catch (err: any) {
+      // The plan didn't specify TL-blocks-on-caravans for Stage 3b (the spec said
+      // 'strict block by default' is a follow-up). Currently the Stage 1 trigger
+      // blocks 'caravan' role removal with active slices, NOT TL removal.
+      // So this path likely won't trigger. If a future trigger blocks TL removal
+      // with dependent caravans, return 409 with a useful payload.
+      throw err;
+    }
+  },
+);
+
 export default groups;
+
 
 
