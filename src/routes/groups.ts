@@ -9,6 +9,7 @@ import {
   NotFoundError,
   AuthenticationError,
 } from '../errors/index.js';
+import { writeAssignmentAudit } from '../utils/assignment-audit.js';
 
 const groups = new Hono();
 
@@ -874,5 +875,85 @@ async function ensureGroupAccess(
   }
 }
 
+// POST /api/groups/:id/role-members
+// Admin-only. Body: { user_id, role_in_group: 'area_head' | 'assistant_area_head' | 'tele' }
+groups.post(
+  '/:id/role-members',
+  authMiddleware,
+  requireRole('admin'),
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id');
+    const parsed = roleMemberAssignSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      throw new ValidationError('Invalid request body').addDetail('zod', parsed.error.flatten());
+    }
+    const { user_id, role_in_group } = parsed.data;
+
+    const { rows } = await pool.query(
+      `INSERT INTO group_role_members (group_id, user_id, role_in_group, assigned_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT DO NOTHING
+       RETURNING id, group_id, user_id, role_in_group, assigned_at`,
+      [groupId, user_id, role_in_group, user.sub],
+    );
+    if (rows.length === 0) {
+      // Already exists — return the existing row instead of erroring
+      const existing = await pool.query(
+        `SELECT id, group_id, user_id, role_in_group, assigned_at
+           FROM group_role_members
+          WHERE group_id = $1 AND user_id = $2
+            AND role_in_group = $3 AND deleted_at IS NULL`,
+        [groupId, user_id, role_in_group],
+      );
+      return c.json({ member: existing.rows[0], created: false }, 200);
+    }
+
+    await writeAssignmentAudit({
+      actorUserId: user.sub,
+      action: 'role_member.assign',
+      targetUserId: user_id,
+      targetGroupId: groupId,
+      payload: { role_in_group },
+    });
+    return c.json({ member: rows[0], created: true }, 201);
+  },
+);
+
+// DELETE /api/groups/:id/role-members/:userId/:role
+groups.delete(
+  '/:id/role-members/:userId/:role',
+  authMiddleware,
+  requireRole('admin'),
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id');
+    const userId = c.req.param('userId');
+    const role = c.req.param('role') ?? '';
+    if (!['area_head', 'assistant_area_head', 'tele'].includes(role)) {
+      throw new ValidationError(`Invalid role ${role}`);
+    }
+    const { rowCount } = await pool.query(
+      `UPDATE group_role_members
+          SET deleted_at = NOW()
+        WHERE group_id = $1 AND user_id = $2
+          AND role_in_group = $3 AND deleted_at IS NULL`,
+      [groupId, userId, role],
+    );
+    if (rowCount === 0) {
+      throw new NotFoundError('Role membership not found');
+    }
+    await writeAssignmentAudit({
+      actorUserId: user.sub,
+      action: 'role_member.remove',
+      targetUserId: userId,
+      targetGroupId: groupId,
+      payload: { role_in_group: role },
+    });
+    return c.json({ removed: true });
+  },
+);
+
 export default groups;
+
 
