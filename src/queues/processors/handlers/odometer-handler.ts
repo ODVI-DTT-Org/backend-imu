@@ -44,6 +44,8 @@ export async function generateOdometerReport(
     queryParams.push(params.userId);
   }
 
+  // Per-visit detail — caravan-first ordering so a single agent's visits stay
+  // grouped together; within an agent, newest first.
   const detailSql = `
     SELECT
       v.id,
@@ -59,14 +61,15 @@ export async function generateOdometerReport(
     JOIN users u ON u.id = v.user_id
     JOIN clients cl ON cl.id = v.client_id
     ${whereClause}
-    ORDER BY v.time_in DESC
+    ORDER BY agent_name ASC, v.time_in DESC
   `;
 
+  // Daily breakdown — caravan-first ordering so each agent's days stay together.
   const dailySql = `
     SELECT
-      date(v.time_in)                              AS visit_date,
       v.user_id,
       u.first_name || ' ' || u.last_name           AS agent_name,
+      date(v.time_in)                              AS visit_date,
       COUNT(*)                                     AS visit_count,
       SUM(
         COALESCE(
@@ -79,13 +82,36 @@ export async function generateOdometerReport(
     FROM visits v
     JOIN users u ON u.id = v.user_id
     ${whereClause}
-    GROUP BY date(v.time_in), v.user_id, u.first_name, u.last_name
-    ORDER BY visit_date DESC, agent_name
+    GROUP BY v.user_id, u.first_name, u.last_name, date(v.time_in)
+    ORDER BY agent_name ASC, visit_date DESC
   `;
 
-  const [detailResult, dailyResult] = await Promise.all([
+  // Per-caravan totals across the whole date range — one row per agent.
+  const caravanTotalsSql = `
+    SELECT
+      v.user_id,
+      u.first_name || ' ' || u.last_name           AS agent_name,
+      COUNT(DISTINCT date(v.time_in))              AS days_active,
+      COUNT(*)                                     AS visit_count,
+      SUM(
+        COALESCE(
+          NULLIF(v.kilometers_traveled, '')::numeric,
+          NULLIF(v.odometer_arrival, '')::numeric
+            - NULLIF(v.odometer_departure, '')::numeric,
+          0
+        )
+      )                                            AS total_km
+    FROM visits v
+    JOIN users u ON u.id = v.user_id
+    ${whereClause}
+    GROUP BY v.user_id, u.first_name, u.last_name
+    ORDER BY total_km DESC NULLS LAST, agent_name ASC
+  `;
+
+  const [detailResult, dailyResult, caravanResult] = await Promise.all([
     pool.query(detailSql, queryParams),
     pool.query(dailySql, queryParams),
+    pool.query(caravanTotalsSql, queryParams),
   ]);
 
   return generateSimpleXlsxReport({
@@ -94,10 +120,20 @@ export async function generateOdometerReport(
     fileNamePrefix: `odometer-${startDate}-${endDate}`,
     sheets: [
       {
+        name: 'Per Caravan Totals',
+        columns: [
+          { header: 'Agent Name',  key: 'agent_name',  width: 28 },
+          { header: 'Days Active', key: 'days_active', width: 14 },
+          { header: 'Visit Count', key: 'visit_count', width: 14 },
+          { header: 'Total KM',    key: 'total_km',    width: 14 },
+        ],
+        rows: caravanResult.rows,
+      },
+      {
         name: 'Daily Totals',
         columns: [
-          { header: 'Visit Date',    key: 'visit_date',   width: 14 },
           { header: 'Agent Name',    key: 'agent_name',   width: 28 },
+          { header: 'Visit Date',    key: 'visit_date',   width: 14 },
           { header: 'Visit Count',   key: 'visit_count',  width: 14 },
           { header: 'Total KM',      key: 'total_km',     width: 14 },
         ],
@@ -106,8 +142,8 @@ export async function generateOdometerReport(
       {
         name: 'Per Visit',
         columns: [
-          { header: 'Visit Date',          key: 'visit_date',          width: 14 },
           { header: 'Agent Name',          key: 'agent_name',          width: 28 },
+          { header: 'Visit Date',          key: 'visit_date',          width: 14 },
           { header: 'Client Name',         key: 'client_name',         width: 28 },
           { header: 'Odometer Departure',  key: 'odometer_departure',  width: 20 },
           { header: 'Odometer Arrival',    key: 'odometer_arrival',    width: 18 },

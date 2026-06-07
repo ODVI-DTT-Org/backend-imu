@@ -220,12 +220,12 @@ export class QueueManager {
         delay: 2000,
       },
       removeOnComplete: {
-        count: 100,           // keep last 100 completed per queue
-        age: 24 * 3600,       // max 1 day
+        count: 1000,          // keep last 1000 completed per queue
+        age: 7 * 24 * 3600,   // max 1 week
       },
       removeOnFail: {
-        count: 200,           // keep last 200 failed for debugging
-        age: 3 * 24 * 3600,   // max 3 days
+        count: 1000,          // keep last 1000 failed for debugging
+        age: 14 * 24 * 3600,  // max 2 weeks
       },
     });
 
