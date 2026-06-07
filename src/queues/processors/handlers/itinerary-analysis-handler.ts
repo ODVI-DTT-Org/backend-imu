@@ -209,19 +209,27 @@ export async function fetchItineraryAnalysisData(
 
 // ─── Main export function ─────────────────────────────────────────────────────
 
+export type ProgressCallback = (pct: number, message: string) => Promise<void>;
+
 export async function generateItineraryAnalysisReport(
   db: Pool,
   s3Client: S3Client,
   s3Bucket: string,
   from: string,
-  to: string
+  to: string,
+  onProgress?: ProgressCallback
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+  await onProgress?.(5, 'Preparing query…');
+  await onProgress?.(20, 'Fetching data…');
   const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(db, from, to);
+  await onProgress?.(60, 'Processing rows…');
 
   const buffer = await buildWorkbook(agents, visitDetails, workingDays);
+  await onProgress?.(80, 'Uploading…');
 
   const fileName    = `itinerary-analysis-${from}-${to}-${Date.now()}.xlsx`;
   const downloadUrl = await uploadToS3(s3Client, s3Bucket, fileName, buffer);
+  await onProgress?.(95, 'Finalizing…');
 
   return { buffer, fileName, downloadUrl };
 }

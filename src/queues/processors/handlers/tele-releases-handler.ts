@@ -18,11 +18,14 @@ export interface TeleReleasesParams {
   status?: string;
 }
 
+export type ProgressCallback = (pct: number, message: string) => Promise<void>;
+
 export async function generateTeleReleasesReport(
   pool: Pool,
   s3Client: S3Client,
   s3Bucket: string,
-  params: TeleReleasesParams
+  params: TeleReleasesParams,
+  onProgress?: ProgressCallback
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
   const now = new Date();
   const endDate =
@@ -62,6 +65,8 @@ export async function generateTeleReleasesReport(
     queryParams.push(params.status);
   }
 
+  await onProgress?.(5, 'Preparing query…');
+
   const sql = `
     SELECT
       r.id,
@@ -83,7 +88,9 @@ export async function generateTeleReleasesReport(
     ORDER BY r.created_at DESC
   `;
 
+  await onProgress?.(20, 'Fetching data…');
   const result = await pool.query(sql, queryParams);
+  await onProgress?.(60, 'Processing rows…');
 
   return generateSimpleXlsxReport({
     s3Client,
@@ -107,5 +114,5 @@ export async function generateTeleReleasesReport(
         rows: result.rows,
       },
     ],
-  });
+  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return r; });
 }

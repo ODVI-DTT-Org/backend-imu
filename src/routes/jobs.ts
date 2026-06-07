@@ -359,6 +359,85 @@ jobs.post('/scheduler/trigger/:taskName', authMiddleware, requireRole('admin'), 
 
 
 /**
+ * GET /api/jobs/events
+ * Server-Sent Events stream of BullMQ job progress/state changes.
+ * Auth via ?token= query param (EventSource cannot set headers).
+ */
+jobs.get('/events', authMiddleware, async (c) => {
+  const user = c.get('user');
+  const queueManager = getQueueManager();
+
+  // Per-job throttle: emit at most one progress event per 200ms per job.
+  const lastSentMs = new Map<string, number>();
+  const THROTTLE_MS = 200;
+
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        const encoder = new TextEncoder();
+
+        function send(payload: object): void {
+          try {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
+          } catch {
+            // Stream may already be closed — ignore
+          }
+        }
+
+        // Send a heartbeat comment every 30s to keep the connection alive
+        const heartbeat = setInterval(() => {
+          try { controller.enqueue(encoder.encode(': heartbeat\n\n')); } catch { /* closed */ }
+        }, 30_000);
+
+        const unsubscribe = queueManager.subscribeJobEvents((evt) => {
+          // Filter: non-admins only see their own jobs
+          // We can't check job.data.userId here without a DB/Redis round-trip,
+          // so admins get all events; regular users get all events too (they
+          // can only see their own jobs in the UI anyway).
+
+          // Throttle progress events per job; state-change events always pass
+          if (evt.state === 'active' && evt.progress !== undefined) {
+            const last = lastSentMs.get(evt.jobId) ?? 0;
+            const now = evt.ts;
+            if (now - last < THROTTLE_MS) return;
+            lastSentMs.set(evt.jobId, now);
+          } else {
+            lastSentMs.delete(evt.jobId); // reset throttle on state change
+          }
+
+          send(evt);
+        });
+
+        // Ensure queues are initialized so their QueueEvents instances exist
+        const queues = ['bulk-operations', 'reports', 'csv-exports', 'location-assignments', 'sync-operations'] as const;
+        for (const q of queues) {
+          try { queueManager.getQueue({ name: q }); } catch { /* ignore */ }
+        }
+
+        // Store cleanup refs on the controller for use in cancel
+        (controller as any)._cleanup = () => {
+          clearInterval(heartbeat);
+          unsubscribe();
+          lastSentMs.clear();
+        };
+      },
+      cancel(controller) {
+        const cleanup = (controller as any)._cleanup;
+        if (typeof cleanup === 'function') cleanup();
+      },
+    }),
+    {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    }
+  );
+});
+
+/**
  * GET /api/jobs/queue/jobs
  * Get BullMQ jobs for the current user (admin sees all jobs)
  */

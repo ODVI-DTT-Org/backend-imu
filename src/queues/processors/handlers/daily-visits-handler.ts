@@ -15,11 +15,14 @@ export interface DailyVisitsParams {
   userId?: string;
 }
 
+export type ProgressCallback = (pct: number, message: string) => Promise<void>;
+
 export async function generateDailyVisitsReport(
   pool: Pool,
   s3Client: S3Client,
   s3Bucket: string,
-  params: DailyVisitsParams
+  params: DailyVisitsParams,
+  onProgress?: ProgressCallback
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
   const now = new Date();
   const endDate =
@@ -44,6 +47,8 @@ export async function generateDailyVisitsReport(
     queryParams.push(params.userId);
   }
 
+  await onProgress?.(5, 'Preparing query…');
+
   const sql = `
     SELECT
       date(v.time_in)                              AS visit_date,
@@ -60,7 +65,9 @@ export async function generateDailyVisitsReport(
     ORDER BY visit_date DESC, agent_name
   `;
 
+  await onProgress?.(20, 'Fetching data…');
   const result = await pool.query(sql, queryParams);
+  await onProgress?.(60, 'Processing rows…');
 
   return generateSimpleXlsxReport({
     s3Client,
@@ -80,5 +87,5 @@ export async function generateDailyVisitsReport(
         rows: result.rows,
       },
     ],
-  });
+  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return r; });
 }

@@ -18,6 +18,17 @@ export interface QueueConfig {
   defaultJobOptions?: JobsOptions;
 }
 
+export type JobEventPayload = {
+  jobId: string;
+  queueName: string;
+  state: string;
+  progress?: number;
+  name?: string;
+  ts: number;
+};
+
+export type JobEventListener = (payload: JobEventPayload) => void;
+
 /**
  * Queue Manager singleton class
  */
@@ -27,6 +38,7 @@ export class QueueManager {
   private workers: Map<QueueName, Worker> = new Map();
   private queueEvents: Map<QueueName, QueueEvents> = new Map();
   private redisUrl: string;
+  private jobEventListeners: Set<JobEventListener> = new Set();
 
   private constructor() {
     // Default configuration (works without env vars)
@@ -176,22 +188,28 @@ export class QueueManager {
 
     queueEvents.on('waiting', ({ jobId }: { jobId: string }) => {
       logger.debug(config.name, `Job ${jobId} is waiting`);
+      this.emitJobEvent({ jobId, queueName: config.name, state: 'waiting', ts: Date.now() });
     });
 
     queueEvents.on('active', ({ jobId }: { jobId: string }) => {
       logger.debug(config.name, `Job ${jobId} is now active`);
+      this.emitJobEvent({ jobId, queueName: config.name, state: 'active', ts: Date.now() });
     });
 
     queueEvents.on('completed', ({ jobId }: { jobId: string }) => {
       logger.debug(config.name, `Job ${jobId} completed`);
+      this.emitJobEvent({ jobId, queueName: config.name, state: 'completed', ts: Date.now() });
     });
 
     queueEvents.on('failed', ({ jobId, failedReason }: { jobId: string; failedReason: string }) => {
       logger.error(config.name, `Job ${jobId} failed: ${failedReason}`);
+      this.emitJobEvent({ jobId, queueName: config.name, state: 'failed', ts: Date.now() });
     });
 
     queueEvents.on('progress', ({ jobId, data }: { jobId: string; data: any }) => {
-      logger.debug(config.name, `Job ${jobId} progress: ${data?.progress || 0}%`);
+      const progress = typeof data === 'number' ? data : (data?.progress ?? 0);
+      logger.debug(config.name, `Job ${jobId} progress: ${progress}%`);
+      this.emitJobEvent({ jobId, queueName: config.name, state: 'active', progress, ts: Date.now() });
     });
 
     this.queueEvents.set(config.name, queueEvents);
@@ -199,6 +217,23 @@ export class QueueManager {
     logger.info('QueueManager', `Queue created: ${config.name}`);
 
     return queue;
+  }
+
+  /**
+   * Relay a job event to all registered SSE listeners
+   */
+  private emitJobEvent(payload: JobEventPayload): void {
+    for (const listener of this.jobEventListeners) {
+      try { listener(payload); } catch { /* ignore listener errors */ }
+    }
+  }
+
+  /**
+   * Subscribe to job events (for SSE connections)
+   */
+  subscribeJobEvents(listener: JobEventListener): () => void {
+    this.jobEventListeners.add(listener);
+    return () => this.jobEventListeners.delete(listener);
   }
 
   /**

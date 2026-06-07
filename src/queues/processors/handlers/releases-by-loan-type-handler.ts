@@ -17,11 +17,14 @@ export interface ReleasesByLoanTypeParams {
   productType?: string;
 }
 
+export type ProgressCallback = (pct: number, message: string) => Promise<void>;
+
 export async function generateReleasesByLoanTypeReport(
   pool: Pool,
   s3Client: S3Client,
   s3Bucket: string,
-  params: ReleasesByLoanTypeParams
+  params: ReleasesByLoanTypeParams,
+  onProgress?: ProgressCallback
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
   const now = new Date();
   const endDate =
@@ -56,6 +59,8 @@ export async function generateReleasesByLoanTypeReport(
     queryParams.push(params.productType);
   }
 
+  await onProgress?.(5, 'Preparing query…');
+
   const itemsSql = `
     SELECT
       r.id,
@@ -79,7 +84,9 @@ export async function generateReleasesByLoanTypeReport(
     ORDER BY released_at DESC
   `;
 
+  await onProgress?.(20, 'Fetching data…');
   const result = await pool.query(itemsSql, queryParams);
+  await onProgress?.(60, 'Processing rows…');
 
   // Build by_loan_type aggregate in-memory (same logic as the GET endpoint)
   const byLoanType: Record<
@@ -132,5 +139,5 @@ export async function generateReleasesByLoanTypeReport(
         rows: Object.values(byLoanType),
       },
     ],
-  });
+  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return r; });
 }

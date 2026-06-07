@@ -15,11 +15,14 @@ export interface OdometerParams {
   userId?: string;
 }
 
+export type ProgressCallback = (pct: number, message: string) => Promise<void>;
+
 export async function generateOdometerReport(
   pool: Pool,
   s3Client: S3Client,
   s3Bucket: string,
-  params: OdometerParams
+  params: OdometerParams,
+  onProgress?: ProgressCallback
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
   const now = new Date();
   const endDate =
@@ -43,6 +46,8 @@ export async function generateOdometerReport(
     whereClause += ` AND v.user_id = $${paramIndex++}`;
     queryParams.push(params.userId);
   }
+
+  await onProgress?.(5, 'Preparing query…');
 
   // Per-visit detail — caravan-first ordering so a single agent's visits stay
   // grouped together; within an agent, newest first.
@@ -108,11 +113,13 @@ export async function generateOdometerReport(
     ORDER BY total_km DESC NULLS LAST, agent_name ASC
   `;
 
+  await onProgress?.(20, 'Fetching data…');
   const [detailResult, dailyResult, caravanResult] = await Promise.all([
     pool.query(detailSql, queryParams),
     pool.query(dailySql, queryParams),
     pool.query(caravanTotalsSql, queryParams),
   ]);
+  await onProgress?.(60, 'Processing rows…');
 
   return generateSimpleXlsxReport({
     s3Client,
@@ -153,5 +160,5 @@ export async function generateOdometerReport(
         rows: detailResult.rows,
       },
     ],
-  });
+  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return r; });
 }

@@ -134,41 +134,40 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
     const { type, userId, params } = job.data;
     const startedAt = new Date();
 
-    // Update progress
-    await this.updateProgress(job, {
-      progress: 10,
-      total: 100,
-      current: 0,
-      message: 'Initializing report generation...',
-    });
+    // Progress callback shared by all handlers
+    const onProgress = async (pct: number, message: string) => {
+      await this.updateProgress(job, { progress: pct, total: 100, current: pct, message });
+    };
+
+    await onProgress(5, 'Initializing report generation…');
 
     try {
       let result: any;
 
       switch (type) {
         case 'report_agent_performance':
-          result = await this.generateAgentPerformanceReport(userId, params);
+          result = await this.generateAgentPerformanceReport(userId, params, onProgress);
           break;
         case 'report_client_activity':
-          result = await this.generateClientActivityReport(userId, params);
+          result = await this.generateClientActivityReport(userId, params, onProgress);
           break;
         case 'report_touchpoint_summary':
-          result = await this.generateTouchpointSummaryReport(userId, params);
+          result = await this.generateTouchpointSummaryReport(userId, params, onProgress);
           break;
         case 'report_attendance_summary':
-          result = await this.generateAttendanceSummaryReport(userId, params);
+          result = await this.generateAttendanceSummaryReport(userId, params, onProgress);
           break;
         case 'report_target_achievement':
-          result = await this.generateTargetAchievementReport(userId, params);
+          result = await this.generateTargetAchievementReport(userId, params, onProgress);
           break;
         case 'report_conversion':
-          result = await this.generateConversionReport(userId, params);
+          result = await this.generateConversionReport(userId, params, onProgress);
           break;
         case 'report_area_coverage':
-          result = await this.generateAreaCoverageReport(userId, params);
+          result = await this.generateAreaCoverageReport(userId, params, onProgress);
           break;
         case 'report_market_saturation':
-          result = await this.generateMarketSaturationReport(userId, params);
+          result = await this.generateMarketSaturationReport(userId, params, onProgress);
           break;
         case 'report_itinerary_analysis': {
           const from = params?.startDate ?? new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
@@ -179,7 +178,8 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             this.s3Client,
             this.s3Bucket,
             from,
-            to
+            to,
+            onProgress
           );
 
           return {
@@ -206,7 +206,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
           const r = await generateDailyVisitsReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
-          });
+          }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_daily_visits'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
@@ -219,7 +219,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
           const r = await generateDailyCallsReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
-          });
+          }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_daily_calls'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
@@ -233,7 +233,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const r = await generateCaravanReleasesReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
             productType: params?.product_type, loanType: params?.loan_type, status: params?.status,
-          });
+          }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_caravan_releases'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
@@ -248,7 +248,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const r = await generateTeleReleasesReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
             productType: params?.product_type, loanType: params?.loan_type, status: params?.status,
-          });
+          }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_tele_releases'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
@@ -262,7 +262,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
           const r = await generateOdometerReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
-          });
+          }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_odometer'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
@@ -276,7 +276,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const r = await generateReleasesByLoanTypeReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
             loanType: params?.loan_type, productType: params?.product_type,
-          });
+          }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_releases_by_loan_type'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
@@ -289,12 +289,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           throw new Error(`Unknown report type: ${type}`);
       }
 
-      await this.updateProgress(job, {
-        progress: 80,
-        total: 100,
-        current: 80,
-        message: 'Uploading CSV...',
-      });
+      await onProgress(80, 'Uploading CSV…');
 
       let downloadUrl: string | undefined;
       try {
@@ -306,12 +301,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         throw uploadError;
       }
 
-      await this.updateProgress(job, {
-        progress: 100,
-        total: 100,
-        current: 100,
-        message: 'Report generation complete',
-      });
+      await onProgress(95, 'Finalizing…');
 
       // Strip the bulky `data` and `csvHeaders` arrays from the result we
       // persist to Redis — they've already been uploaded as the CSV and would
@@ -341,8 +331,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate agent performance report
    */
-  private async generateAgentPerformanceReport(userId: string, params?: any) {
+  private async generateAgentPerformanceReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate, userId: targetUserId } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     // Build query conditions
     const conditions: string[] = [];
@@ -369,6 +360,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -392,6 +384,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'agent_performance',
@@ -404,8 +397,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate client activity report
    */
-  private async generateClientActivityReport(userId: string, params?: any) {
+  private async generateClientActivityReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate, municipality, province } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     const conditions: string[] = [];
     const queryParams: any[] = [];
@@ -437,6 +431,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -460,6 +455,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'client_activity',
@@ -472,8 +468,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate touchpoint summary report
    */
-  private async generateTouchpointSummaryReport(userId: string, params?: any) {
+  private async generateTouchpointSummaryReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     const conditions: string[] = [];
     const queryParams: any[] = [];
@@ -493,6 +490,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -509,6 +507,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'touchpoint_summary',
@@ -521,8 +520,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate attendance summary report
    */
-  private async generateAttendanceSummaryReport(userId: string, params?: any) {
+  private async generateAttendanceSummaryReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate, userId: targetUserId } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     const conditions: string[] = [];
     const queryParams: any[] = [];
@@ -548,6 +548,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -569,6 +570,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'attendance_summary',
@@ -581,8 +583,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate target achievement report
    */
-  private async generateTargetAchievementReport(userId: string, params?: any) {
+  private async generateTargetAchievementReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     const conditions: string[] = [];
     const queryParams: any[] = [];
@@ -602,6 +605,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -622,6 +626,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'target_achievement',
@@ -634,8 +639,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate conversion report
    */
-  private async generateConversionReport(userId: string, params?: any) {
+  private async generateConversionReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate, municipality } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     const conditions: string[] = [];
     const queryParams: any[] = [];
@@ -661,6 +667,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -680,6 +687,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'conversion',
@@ -692,8 +700,9 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   /**
    * Generate area coverage report
    */
-  private async generateAreaCoverageReport(userId: string, params?: any) {
+  private async generateAreaCoverageReport(userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const { startDate, endDate } = params || {};
+    await onProgress?.(5, 'Preparing query…');
 
     const conditions: string[] = [];
     const queryParams: any[] = [];
@@ -713,6 +722,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       SELECT
@@ -729,6 +739,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       queryParams
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'area_coverage',
@@ -759,7 +770,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
    * SQL column aliases are Title-Case so rowsToCsv() emits the headers spelled the way
    * the existing Visits / Releases CSVs spell them.
    */
-  private async generateMarketSaturationReport(_userId: string, params?: any) {
+  private async generateMarketSaturationReport(_userId: string, params?: any, onProgress?: (pct: number, msg: string) => Promise<void>) {
     const filters = (params?.filters ?? {}) as {
       team_ids?: string[];
       categories?: string[];
@@ -770,6 +781,8 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
     const categories = filters.categories && filters.categories.length > 0 ? filters.categories : null;
     const regions = filters.regions && filters.regions.length > 0 ? filters.regions : null;
 
+    await onProgress?.(5, 'Preparing query…');
+    await onProgress?.(20, 'Fetching data…');
     const result = await pool.query(
       `
       WITH
@@ -926,6 +939,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
       `,
       [teamIds, categories, regions]
     );
+    await onProgress?.(60, 'Processing rows…');
 
     return {
       reportType: 'market_saturation',
