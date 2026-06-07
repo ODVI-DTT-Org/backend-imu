@@ -313,6 +313,11 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         message: 'Report generation complete',
       });
 
+      // Strip the bulky `data` and `csvHeaders` arrays from the result we
+      // persist to Redis — they've already been uploaded as the CSV and would
+      // otherwise bloat the BullMQ payload (Market Saturation: 100k rows can
+      // be tens of MB), risking silent truncation that loses the downloadUrl.
+      const { data: _rows, csvHeaders: _hdr, ...resultMeta } = result;
       return {
         success: true,
         total: 1,
@@ -321,7 +326,11 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
         startedAt,
         completedAt: new Date(),
         duration: Date.now() - startedAt.getTime(),
-        result: { ...result, downloadUrl },
+        result: {
+          ...resultMeta,
+          downloadUrl,
+          rowCount: Array.isArray((result as any).data) ? (result as any).data.length : 0,
+        },
       };
     } catch (error: any) {
       logger.error('ReportsProcessor', 'Report generation failed', error);
