@@ -60,7 +60,7 @@ Mobile gains `RoleProvider` + Manage Team screen (read-only display).
 `ClientApiService.fetchAssignedClients()` upserts results into local PowerSync
 as a bridge to Stage 4b.
 
-Feature flag `manage_team_writes_enabled` is OFF by default — slice editor's
+Feature flag `manageTeamWritesEnabled` is `false` by default — slice editor's
 Save button is disabled with a "Coming soon" tooltip until Stage 3 backend
 endpoints ship.
 
@@ -70,7 +70,7 @@ see empty `group_role_members` etc., and the Manage Team tab won't appear.
 
 Feature flag location:
 `frontend-mobile-imu/imu_flutter/lib/features/manage_team/presentation/caravan_slice_editor.dart`
-— const `manage_team_writes_enabled = false` at top of file. Flip to `true`
+— `const bool manageTeamWritesEnabled = false` at top of file. Flip to `true`
 to enable write mutations once Stage 3 backend endpoints are live.
 
 ## Stage 4a-write — Manage Team mutations  (not started)
