@@ -10,6 +10,7 @@ import {
   AuthorizationError,
 } from '../errors/index.js';
 import { getCacheService } from '../services/cache/redis-cache.js';
+import { resolveClientScope, applyClientScope } from '../utils/scope.js';
 
 const itineraries = new Hono();
 
@@ -839,58 +840,25 @@ itineraries.get('/route-suggestions', authMiddleware, requirePermission('itinera
     );
     for (const row of allTodayResult.rows) existingInItinerary.add(row.client_id);
 
-    // 2. Territory filter — same ROLE_LEVELS pattern as /clients/pipeline
-    const ROLE_LEVELS: Record<string, number> = {
-      'admin': 100, 'area_manager': 50, 'assistant_area_manager': 40,
-      'team_leader': 25, 'caravan': 20, 'tele': 15,
-    };
-    const userLevel = ROLE_LEVELS[user.role] || 0;
-    const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
+    // 2. Territory filter — resolved via RBAC scope (replaces inline ROLE_LEVELS)
+    const itinScope = await resolveClientScope(user.sub);
+
+    // denied scope → return empty
+    if (itinScope.kind === 'denied') {
+      const result = { suggestions: [], reason: 'no_territory_assigned', date: dateParam, corridor_meters: corridorMeters, stops_used: stops.length };
+      await cache.set(cacheKey, result, 300);
+      return c.json(result);
+    }
 
     const areaParams: any[] = [];
-    const areaConditions: string[] = [];
     let paramIndex = 1;
 
-    if (shouldFilterByArea) {
-      const areaResult = await pool.query(
-        `SELECT
-           COALESCE(ARRAY_AGG(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL), ARRAY[]::int[]) AS psgc_ids,
-           COALESCE(
-             ARRAY_AGG(DISTINCT LOWER(TRIM(ul.province)) || '|' || LOWER(TRIM(ul.municipality)))
-             FILTER (WHERE p.id IS NULL), ARRAY[]::text[]
-           ) AS fallback_area_keys
-         FROM user_locations ul
-         LEFT JOIN psgc p ON p.province = TRIM(ul.province) AND p.mun_city = TRIM(ul.municipality)
-         WHERE ul.user_id = $1 AND ul.deleted_at IS NULL`,
-        [user.sub]
-      );
-      const row = areaResult.rows[0];
-      const psgcIds = (row?.psgc_ids || []).map((id: any) => Number(id));
-      const fallbackKeys = (row?.fallback_area_keys || []).map((k: any) => String(k));
-
-      if (psgcIds.length === 0 && fallbackKeys.length === 0) {
-        const result = { suggestions: [], reason: 'no_territory_assigned', date: dateParam, corridor_meters: corridorMeters, stops_used: stops.length };
-        await cache.set(cacheKey, result, 300);
-        return c.json(result);
-      }
-
-      if (psgcIds.length > 0) {
-        areaParams.push(psgcIds);
-        areaConditions.push(`c.psgc_id = ANY($${paramIndex}::int[])`);
-        paramIndex++;
-      }
-      if (fallbackKeys.length > 0) {
-        areaParams.push(fallbackKeys);
-        areaConditions.push(
-          `(LOWER(TRIM(COALESCE(c.province, ''))) || '|' || LOWER(TRIM(COALESCE(c.municipality, '')))) = ANY($${paramIndex}::text[])`
-        );
-        paramIndex++;
-      }
-    }
+    const { sqlFragment: itinFragment, nextIndex: itinNextIdx } = applyClientScope(itinScope, areaParams, paramIndex);
+    paramIndex = itinNextIdx;
+    const areaWhere = (itinFragment === 'TRUE' || itinFragment === 'FALSE') ? '' : `AND (${itinFragment})`;
 
     // 3. Candidate query with bounding-box pre-filter
     const bbParams = [...areaParams, minLat, maxLat, minLng, maxLng];
-    const areaWhere = areaConditions.length > 0 ? `AND (${areaConditions.join(' OR ')})` : '';
 
     const candidatesResult = await pool.query(
       `SELECT c.id, c.first_name, c.last_name, c.middle_name, c.full_address,
