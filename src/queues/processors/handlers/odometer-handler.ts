@@ -23,7 +23,7 @@ export async function generateOdometerReport(
   s3Bucket: string,
   params: OdometerParams,
   onProgress?: ProgressCallback
-): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string; rowCount: number }> {
   const now = new Date();
   const endDate =
     params.endDate ?? now.toISOString().split('T')[0];
@@ -121,6 +121,8 @@ export async function generateOdometerReport(
   ]);
   await onProgress?.(60, 'Processing rows…');
 
+  // rowCount = total detail rows (per-visit sheet is the primary data set)
+  const rowCount = detailResult.rows.length;
   return generateSimpleXlsxReport({
     s3Client,
     s3Bucket,
@@ -160,5 +162,5 @@ export async function generateOdometerReport(
         rows: detailResult.rows,
       },
     ],
-  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return r; });
+  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return { ...r, rowCount }; });
 }

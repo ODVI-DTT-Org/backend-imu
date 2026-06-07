@@ -218,7 +218,7 @@ export async function generateItineraryAnalysisReport(
   from: string,
   to: string,
   onProgress?: ProgressCallback
-): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string; rowCount: number }> {
   await onProgress?.(5, 'Preparing query…');
   await onProgress?.(20, 'Fetching data…');
   const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(db, from, to);
@@ -231,7 +231,10 @@ export async function generateItineraryAnalysisReport(
   const downloadUrl = await uploadToS3(s3Client, s3Bucket, fileName, buffer);
   await onProgress?.(95, 'Finalizing…');
 
-  return { buffer, fileName, downloadUrl };
+  // rowCount = visit detail rows (the most data-dense sheet)
+  const rowCount = visitDetails.length;
+
+  return { buffer, fileName, downloadUrl, rowCount };
 }
 
 // ─── Column headers (A–AF, 32 columns) ───────────────────────────────────────

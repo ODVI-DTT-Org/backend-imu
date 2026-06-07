@@ -23,7 +23,7 @@ export async function generateDailyVisitsReport(
   s3Bucket: string,
   params: DailyVisitsParams,
   onProgress?: ProgressCallback
-): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string }> {
+): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string; rowCount: number }> {
   const now = new Date();
   const endDate =
     params.endDate ?? now.toISOString().split('T')[0];
@@ -69,6 +69,7 @@ export async function generateDailyVisitsReport(
   const result = await pool.query(sql, queryParams);
   await onProgress?.(60, 'Processing rows…');
 
+  const rowCount = result.rows.length;
   return generateSimpleXlsxReport({
     s3Client,
     s3Bucket,
@@ -87,5 +88,5 @@ export async function generateDailyVisitsReport(
         rows: result.rows,
       },
     ],
-  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return r; });
+  }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return { ...r, rowCount }; });
 }

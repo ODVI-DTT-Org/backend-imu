@@ -9,6 +9,18 @@
  * - Target achievement reports
  * - Conversion reports
  * - Area coverage reports
+ *
+ * ── Standardized param shape ─────────────────────────────────────────────────
+ * Route (jobs.ts) accepts:  { report_type, start_date, end_date, user_id, … }
+ * addReportJob maps to:     { startDate, endDate, userId, … }
+ * Processor reads:          params?.startDate, params?.endDate, params?.userId
+ * Handlers accept:          { startDate?, endDate?, userId?, … }
+ * All dates are ISO-8601 date strings ("YYYY-MM-DD").
+ *
+ * ── rowCount ─────────────────────────────────────────────────────────────────
+ * Every completed job result includes result.rowCount (number of data rows
+ * written to the XLSX/CSV file).  A rowCount of 0 on a "successful" job means
+ * the query returned no rows — likely wrong params or an empty date range.
  */
 
 import { Job } from 'bullmq';
@@ -198,6 +210,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
               downloadUrl: itineraryResult.downloadUrl,
               fileName: itineraryResult.fileName,
               fileSize: itineraryResult.buffer.byteLength,
+              rowCount: itineraryResult.rowCount,
             },
           };
         }
@@ -211,7 +224,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_daily_visits'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'daily_visits', format: 'excel', generatedAt: new Date(),
-              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
         }
         case 'report_daily_calls': {
@@ -224,7 +237,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_daily_calls'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'daily_calls', format: 'excel', generatedAt: new Date(),
-              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
         }
         case 'report_caravan_releases': {
@@ -239,7 +252,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'caravan_releases', format: 'excel', generatedAt: new Date(),
               parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type, status: params?.status },
-              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
         }
         case 'report_tele_releases': {
@@ -254,7 +267,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'tele_releases', format: 'excel', generatedAt: new Date(),
               parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type, status: params?.status },
-              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
         }
         case 'report_odometer': {
@@ -267,7 +280,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_odometer'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'odometer', format: 'excel', generatedAt: new Date(),
-              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              parameters: { from, to }, downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
         }
         case 'report_releases_by_loan_type': {
@@ -282,7 +295,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'releases_by_loan_type', format: 'excel', generatedAt: new Date(),
               parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type },
-              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
         }
         default:
