@@ -172,11 +172,44 @@ Feature flag location:
 — `const bool manageTeamWritesEnabled = false` at top of file. Flip to `true`
 to enable write mutations once Stage 3 backend endpoints are live.
 
-## Stage 4a-write — Manage Team mutations  (not started)
+## Stage 4a-write — Manage Team mutations  ✅ DONE (2026-06-08)
 
-Depends on Stage 3 backend endpoints landing first. Will wire up the slice
-editor's Save button + offline mutation queue + flip `manage_team_writes_enabled`
-to true.
+Wires the slice editor's Save button to the Stage 3b PATCH endpoint, adds an
+offline mutation queue, and flips `manageTeamWritesEnabled` to `true`.
+
+### New files (frontend-mobile-imu, `area-rbac` branch)
+- `imu_flutter/lib/features/manage_team/data/models/pending_assignment.dart`
+- `imu_flutter/lib/features/manage_team/data/repositories/pending_assignments_repository.dart`
+- `imu_flutter/lib/features/manage_team/data/services/team_api_service.dart`
+- `imu_flutter/lib/features/manage_team/data/services/pending_replay_service.dart`
+
+### Modified files
+- `imu_flutter/lib/services/sync/powersync_service.dart` — added `pending_assignments`
+  table to local PowerSync schema (no server sync rule → local-only queue)
+- `imu_flutter/lib/features/manage_team/data/repositories/team_repository.dart` — added
+  5 write methods: `replaceCaravanMunicipalities`, `addCaravan`, `removeCaravan`,
+  `addTeamLeader`, `removeTeamLeader`
+- `imu_flutter/lib/features/manage_team/presentation/caravan_slice_editor.dart` — flipped
+  `manageTeamWritesEnabled = true`; implemented `_onSave()` wired to TeamRepository;
+  added `_collectCheckedMunicipalities()` using existing `_selected` Set<String>
+- `imu_flutter/lib/features/manage_team/presentation/manage_team_page.dart` — pending
+  count map, pull-to-refresh triggers PendingReplayService, refreshes list after editor save
+- `imu_flutter/lib/features/manage_team/presentation/widgets/caravan_row.dart` — added
+  optional `pendingCount` parameter with amber "Pending sync" chip badge
+
+### Tests
+- `imu_flutter/test/features/manage_team/team_api_service_test.dart` — isNetworkError
+  classification, URL patterns, ApiException shape
+- `imu_flutter/test/features/manage_team/pending_replay_test.dart` — PendingAssignment
+  fromRow, endpoint parsing, payload JSON round-trip, result record shape
+
+### Architecture notes
+- Network failures are silently queued; server-side rejections (4xx) surface to UI via SnackBar
+- User-triggered replay only (pull-to-refresh); no automatic background retry
+- Idempotency keys prevent duplicate writes on aggressive replays
+- No new pub dependencies — uses existing Dio, JwtAuthService, PowerSync
+
+### Next: Stage 4b
 
 ## Stage 4b — Narrow clients sync rule  (not started)
 
