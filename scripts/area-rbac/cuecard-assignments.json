@@ -1,0 +1,150 @@
+{
+  "NORTH AGUILA": [
+    {
+      "name": "MELCHOR M. QUINTO",
+      "role_tag": "AH"
+    },
+    {
+      "name": "ABELARDO S. NUQUI",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "HILARIO J. GARCIA JR.",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "JONNEL MANIO",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "CHRISTOPHER M. DELA CRUZ",
+      "role_tag": "TL"
+    },
+    {
+      "name": "MARIO V. RESURRECION",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "GODWIN S. RUIZ",
+      "role_tag": "TL"
+    },
+    {
+      "name": "MARK FRANCIS M. DEL MORO",
+      "role_tag": "CARAVAN"
+    }
+  ],
+  "UNSTOPPABLE": [
+    {
+      "name": "MARK ANTHONY M. ALVAREZ",
+      "role_tag": "AH"
+    },
+    {
+      "name": "JORIS M. LUCILO",
+      "role_tag": "TL"
+    },
+    {
+      "name": "BOYNEIL J. MALIWAT",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "JOEL H. OPLE",
+      "role_tag": "AAH"
+    },
+    {
+      "name": "DARWIN P. MAGTANGOB",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "RICARDO VERDE",
+      "role_tag": "CARAVAN"
+    }
+  ],
+  "GENERALS": [
+    {
+      "name": "NOLAN N. DEL ROSARIO",
+      "role_tag": "AH"
+    },
+    {
+      "name": "FRANCIS NEIL V. DULLER",
+      "role_tag": "AAH"
+    },
+    {
+      "name": "JOSEPH RAFAEL M. GARCIA",
+      "role_tag": "TL"
+    },
+    {
+      "name": "MARK KEVIN GERMAN",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "HARVEY C. TORREFIEL",
+      "role_tag": "CARAVAN"
+    }
+  ],
+  "EXPLORER REBORN": [
+    {
+      "name": "ALEXANDER A. AVENIDO JR.",
+      "role_tag": "AH"
+    },
+    {
+      "name": "ALBERTO ANACIO",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "JONYBOY L. GERONCA",
+      "role_tag": "TL"
+    },
+    {
+      "name": "NILO G. LOPEZ",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "ROWEL PALAMOS",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "ROLANDO SARMIENTO JR.",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "ROLANDO SARMIENTO JR. (NEW MC)",
+      "role_tag": "CARAVAN"
+    }
+  ],
+  "SULTANS": [
+    {
+      "name": "MARVIN R. BALANUECO",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "GEORGE T. REMOLADO",
+      "role_tag": "TL"
+    },
+    {
+      "name": "ARCHIE M. SUMAGANG",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "NECOLUID G. QUIOKELES",
+      "role_tag": "TL"
+    }
+  ],
+  "WARRIORS": [
+    {
+      "name": "PETER PAUL CELESTE",
+      "role_tag": "AH"
+    },
+    {
+      "name": "AERON T. ANGELES",
+      "role_tag": "TL"
+    },
+    {
+      "name": "JOHN RAY M. SINGSON",
+      "role_tag": "CARAVAN"
+    },
+    {
+      "name": "JEFFREY E. HECHANOVA",
+      "role_tag": "CARAVAN"
+    }
+  ]
+}
