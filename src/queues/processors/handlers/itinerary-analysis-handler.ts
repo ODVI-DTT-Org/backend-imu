@@ -89,9 +89,8 @@ export async function fetchItineraryAnalysisData(
   const [agentResult, visitDetailResult] = await Promise.all([
     // ── Agent summary query ──────────────────────────────────────────────────
     //
-    // NOTE: There is no users↔groups mapping in this DB (group_members is
-    // clients↔groups only). All caravan agents are therefore shown as UNASSIGNED.
-    // If a team linkage table is added later, replace the literal below.
+    // Team linkage comes from group_role_members (role_in_group='caravan').
+    // Caravans without a group assignment fall back to 'UNASSIGNED'.
     //
     db.query<{
       user_id: string; agent_name: string; team_name: string;
@@ -116,7 +115,7 @@ export async function fetchItineraryAnalysisData(
       SELECT
         u.id                                                              AS user_id,
         u.first_name || ' ' || u.last_name                               AS agent_name,
-        'UNASSIGNED'::text                                                AS team_name,
+        COALESCE(g.name, 'UNASSIGNED')                                    AS team_name,
         COUNT(DISTINCT v.id)                                              AS total_visits,
         COUNT(DISTINCT r.id)                                              AS total_releases,
         COUNT(DISTINCT v.id) FILTER (WHERE v.reason IN ('DECEASED','L3_DECEASED'))                                    AS r_deceased,
@@ -140,6 +139,11 @@ export async function fetchItineraryAnalysisData(
            SELECT 1 FROM visit_days vd WHERE vd.user_id = u.id AND vd.day = w.day
          ))                                                               AS absent_weekdays
       FROM users u
+      LEFT JOIN group_role_members grm
+             ON grm.user_id = u.id
+            AND grm.role_in_group = 'caravan'
+            AND grm.deleted_at IS NULL
+      LEFT JOIN groups g ON g.id = grm.group_id
       LEFT JOIN visits v ON v.user_id = u.id
         AND v.time_in::date BETWEEN $1 AND $2
       LEFT JOIN touchpoint_reasons tr ON tr.reason_code = v.reason
@@ -147,13 +151,13 @@ export async function fetchItineraryAnalysisData(
         AND r.created_at::date BETWEEN $1 AND $2
         AND r.status IN ('approved', 'released')
       WHERE u.role = 'caravan'
-      GROUP BY u.id, u.first_name, u.last_name
-      ORDER BY u.last_name, u.first_name
+      GROUP BY u.id, u.first_name, u.last_name, g.name
+      ORDER BY team_name, u.last_name, u.first_name
     `, [from, to]),
 
     // ── Visit detail query ───────────────────────────────────────────────────
     //
-    // NOTE: Same no-team-linkage caveat — team_name is UNASSIGNED for all caravans.
+    // Team linkage via group_role_members (role_in_group='caravan').
     //
     db.query<{
       id: string; created_at: string; agent_name: string; team_name: string;
@@ -164,18 +168,23 @@ export async function fetchItineraryAnalysisData(
         v.id,
         v.time_in::text                              AS created_at,
         u.first_name || ' ' || u.last_name          AS agent_name,
-        'UNASSIGNED'::text                           AS team_name,
+        COALESCE(g.name, 'UNASSIGNED')              AS team_name,
         c.first_name || ' ' || c.last_name          AS client_name,
         tr.label                                     AS visit_reason,
         tr.category                                  AS reason_category,
         v.remarks
       FROM visits v
       JOIN users u ON u.id = v.user_id
+      LEFT JOIN group_role_members grm
+             ON grm.user_id = u.id
+            AND grm.role_in_group = 'caravan'
+            AND grm.deleted_at IS NULL
+      LEFT JOIN groups g ON g.id = grm.group_id
       LEFT JOIN clients c ON c.id = v.client_id
       LEFT JOIN touchpoint_reasons tr ON tr.reason_code = v.reason
       WHERE v.time_in::date BETWEEN $1 AND $2
         AND u.role = 'caravan'
-      ORDER BY agent_name, v.time_in ASC
+      ORDER BY team_name, agent_name, v.time_in ASC
     `, [from, to]),
   ]);
 
