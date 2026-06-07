@@ -51,7 +51,64 @@ all 6 AH and 2 AAH are also in group_members (16 elevated overlap, not 8).
 Assertion bounds widened to 25-45 in migration 125 and the test.
 
 Legacy `group_members` table still untouched. Stage 5 will drop it.
-## Stage 3 — Read switching + RBAC seed  (not started)
+## Stage 3a — Read switching + RBAC seed  ✅ DONE (2026-06-08)
+
+### Migrations
+
+- `128_create_group_role_members_mirror_triggers.sql` — mirror triggers from
+  legacy `group_members` and `groups.{area_manager_id, assistant_area_manager_id}`
+  into `group_role_members`. Keeps the existing Vue admin UI producing valid RBAC
+  data without any UI changes. (commits 33df535, 04ad431)
+- `129_seed_area_rbac_permissions.sql` — additive: inserts 10 new `permissions`
+  rows with `constraint_name IN ('group_municipalities', 'caravan_municipalities')`
+  and 21 new `role_permissions` links. Existing `'own'`/`'area'`/`'all'` rows and
+  their links are LEFT IN PLACE so `requirePermission()` middleware keeps working.
+
+### New helper
+
+- `src/utils/scope.ts` — `resolveClientScope(userId)` + `applyClientScope()`.
+  Reads ONLY the new vocabulary from `role_permissions`. Precedence: new vocab
+  wins over legacy `'all'` (critical: area_manager and asst have both, so new-
+  vocab-first ensures they get `group_municipalities`, not `unrestricted`). If no
+  matching row → `denied` → zero rows (safe fallback).
+
+### Routes switched
+
+- `src/routes/clients.ts` — 3 sites replaced: `/nearby`, `/pipeline`, `/assigned`.
+  Deleted inline `ROLE_LEVELS` maps and `user_locations`-based PSGC filter in all
+  three. Now calls `resolveClientScope` + `applyClientScope` at each site.
+- `src/routes/itineraries.ts` — 1 site replaced: itinerary suggestions endpoint.
+
+### Audit
+
+- `src/queues/processors/reports-processor.ts` — added `WHERE gm.deleted_at IS NULL`
+  to the `group_municipalities` read in the assigned_group CTE. (Task 7)
+
+### Tests
+
+- `test/migrations/group-mirror-triggers.test.ts` — 7 scenarios for mirror trigger
+  behavior (INSERT/DELETE/UPDATE/idempotency).
+- `test/utils/scope.test.ts` — 9 tests: SQL-splicing unit tests + prod-DB integration.
+- `test/routes/clients-rbac.test.ts` — 5 smoke tests: admin unrestricted, caravan
+  scoped, area_manager scoped (NOT unrestricted — key precedence regression guard),
+  isolation check, orphan-row check.
+
+### Key adjustment vs. plan
+
+The plan's Task 4 helper used `'all'-wins` precedence, which would have treated
+`area_manager` (which has both a legacy `'all'` link AND the new
+`'group_municipalities'` link) as unrestricted. Fixed with new-vocabulary-first
+precedence (`caravan_municipalities` → `group_municipalities` → `'all'/NULL`).
+Only `admin` (which was intentionally skipped from new-vocab seeding) reaches
+the `'all'` fallback → unrestricted.
+
+### Stage 3b — next
+
+New group management API endpoints in `routes/groups.ts` (POST members, POST
+caravans, PATCH caravans/municipalities, DELETE caravans). The feature flag
+`manageTeamWritesEnabled` in the Flutter app remains `false` until Stage 3b lands.
+
+## Stage 3b — Group management endpoints  (not started)
 ## Stage 4a — Mobile read foundation  ✅ DONE
 
 Sync rules added for `group_role_members`, `group_municipalities`,
