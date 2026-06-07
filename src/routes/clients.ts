@@ -12,6 +12,7 @@ import {
   getHybridSearchStrategyInfo,
   logSearchStrategy,
 } from '../utils/hybrid-search.js';
+import { resolveClientScope, applyClientScope } from '../utils/scope.js';
 import {
   ValidationError,
   NotFoundError,
@@ -1040,24 +1041,12 @@ clients.get('/nearby', authMiddleware, async (c) => {
   }
 
   const offset = (page - 1) * perPage;
-  const ROLE_LEVELS: Record<string, number> = {
-    'admin': 100, 'area_manager': 50, 'assistant_area_manager': 40,
-    'team_leader': 25, 'caravan': 20, 'tele': 15,
-  };
-  const userLevel = ROLE_LEVELS[user.role] || 0;
-  const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
 
-  // Build territory filter — same pattern as /assigned
-  // If shouldFilterByArea, join with user_locations to restrict to assigned territory
-  const areaJoin = shouldFilterByArea ? `
-    JOIN user_locations ul
-      ON ul.user_id = $6
-     AND ul.deleted_at IS NULL
-     AND (
-       LOWER(TRIM(ul.province))    = LOWER(TRIM(COALESCE(c.province, a.province)))
-       AND LOWER(TRIM(ul.municipality)) = LOWER(TRIM(COALESCE(c.municipality, a.city)))
-     )
-  ` : '';
+  // Resolve RBAC client scope for this user (replaces inline ROLE_LEVELS)
+  const nearbyScope = await resolveClientScope(user.sub);
+  const nearbyParams: any[] = [lat, lng, radius, perPage, offset];
+  const { sqlFragment: nearbyFragment, nextIndex: nearbyNextIdx } = applyClientScope(nearbyScope, nearbyParams, 6);
+  const nearbyScopeClause = nearbyFragment === 'TRUE' ? '' : `AND (${nearbyFragment})`;
 
   // Haversine distance in meters
   const distanceExpr = `
@@ -1068,9 +1057,6 @@ clients.get('/nearby', authMiddleware, async (c) => {
       )
     )
   `;
-
-  const params: any[] = [lat, lng, radius, perPage, offset];
-  if (shouldFilterByArea) params.push(user.sub);
 
   const sql = `
     WITH candidates AS (
@@ -1101,11 +1087,11 @@ clients.get('/nearby', authMiddleware, async (c) => {
         ORDER BY a2.is_primary DESC, a2.created_at ASC
         LIMIT 1
       )
-      ${areaJoin}
       WHERE c.deleted_at IS NULL
         AND (c.loan_released IS NULL OR c.loan_released = false)
         AND COALESCE(c.latitude, a.latitude)  IS NOT NULL
         AND COALESCE(c.longitude, a.longitude) IS NOT NULL
+        ${nearbyScopeClause}
     )
     SELECT *, COUNT(*) OVER() AS total_count
     FROM candidates
@@ -1115,7 +1101,7 @@ clients.get('/nearby', authMiddleware, async (c) => {
   `;
 
   try {
-    const result = await pool.query(sql, params);
+    const result = await pool.query(sql, nearbyParams);
     const total = result.rows.length > 0 ? parseInt(result.rows[0].total_count) : 0;
     const clients = result.rows.map((row: any) => ({
       id: row.id,
@@ -1164,55 +1150,23 @@ clients.get('/pipeline', authMiddleware, async (c) => {
   }
 
   try {
-    // Determine territory filter (same pattern as /assigned)
-    const ROLE_LEVELS: Record<string, number> = {
-      'admin': 100, 'area_manager': 50, 'assistant_area_manager': 40,
-      'team_leader': 25, 'caravan': 20, 'tele': 15,
-    };
-    const userLevel = ROLE_LEVELS[user.role] || 0;
-    const shouldFilterByArea = userLevel < 40 || ['caravan', 'tele'].includes(user.role);
+    // Resolve RBAC client scope for this user (replaces inline ROLE_LEVELS + user_locations filter)
+    const pipelineScope = await resolveClientScope(user.sub);
 
     const params: any[] = [];
     let paramIndex = 1;
-    const areaConditions: string[] = [];
 
-    if (shouldFilterByArea) {
-      const areaResult = await pool.query(
-        `SELECT
-           COALESCE(ARRAY_AGG(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL), ARRAY[]::int[]) AS psgc_ids,
-           COALESCE(
-             ARRAY_AGG(DISTINCT LOWER(TRIM(ul.province)) || '|' || LOWER(TRIM(ul.municipality)))
-             FILTER (WHERE p.id IS NULL), ARRAY[]::text[]
-           ) AS fallback_area_keys
-         FROM user_locations ul
-         LEFT JOIN psgc p ON p.province = TRIM(ul.province) AND p.mun_city = TRIM(ul.municipality)
-         WHERE ul.user_id = $1 AND ul.deleted_at IS NULL`,
-        [user.sub]
-      );
-      const row = areaResult.rows[0];
-      const psgcIds = (row?.psgc_ids || []).map((id: any) => Number(id));
-      const fallbackKeys = (row?.fallback_area_keys || []).map((k: any) => String(k));
+    // Apply scope filter
+    const { sqlFragment: pipelineFragment, nextIndex: pipelineNextIdx } = applyClientScope(pipelineScope, params, paramIndex);
+    paramIndex = pipelineNextIdx;
+    const scopeCondition = pipelineFragment === 'TRUE' ? '' : pipelineFragment;
 
-      if (psgcIds.length === 0 && fallbackKeys.length === 0) {
-        // No assigned area — return empty result
-        return c.json({
-          summary: { hot: { total: 0 }, warm: { total: 0 }, cold: { total: 0 }, disqualified: { total: 0 }, released: { total: 0 } },
-          ...(bucketParam ? { bucket: bucketParam, clients: [], pagination: { page, per_page: perPageRaw, total: 0, total_pages: 0 } } : {}),
-        });
-      }
-
-      if (psgcIds.length > 0) {
-        params.push(psgcIds);
-        areaConditions.push(`c.psgc_id = ANY($${paramIndex}::int[])`);
-        paramIndex++;
-      }
-      if (fallbackKeys.length > 0) {
-        params.push(fallbackKeys);
-        areaConditions.push(
-          `(LOWER(TRIM(COALESCE(c.province, ''))) || '|' || LOWER(TRIM(COALESCE(c.municipality, '')))) = ANY($${paramIndex}::text[])`
-        );
-        paramIndex++;
-      }
+    // denied scope → empty result
+    if (pipelineFragment === 'FALSE') {
+      return c.json({
+        summary: { hot: { total: 0 }, warm: { total: 0 }, cold: { total: 0 }, disqualified: { total: 0 }, released: { total: 0 } },
+        ...(bucketParam ? { bucket: bucketParam, clients: [], pagination: { page, per_page: perPageRaw, total: 0, total_pages: 0 } } : {}),
+      });
     }
 
     // Optional province/municipality filters
@@ -1230,7 +1184,7 @@ clients.get('/pipeline', authMiddleware, async (c) => {
 
     const whereClause = [
       'c.deleted_at IS NULL',
-      ...(areaConditions.length > 0 ? [`(${areaConditions.join(' OR ')})`] : []),
+      ...(scopeCondition ? [scopeCondition] : []),
       ...extraConditions,
     ].join(' AND ');
 
@@ -1439,23 +1393,20 @@ clients.get('/assigned', authMiddleware, async (c) => {
 
     const offset = (page - 1) * perPage;
 
-    // Role level mapping for area-based filtering
-    const ROLE_LEVELS: Record<string, number> = {
-      'admin': 100,
-      'area_manager': 50,
-      'assistant_area_manager': 40,
-      'team_leader': 25,
-      'caravan': 20,
-      'tele': 15,
-    };
+    // Resolve RBAC client scope (replaces inline ROLE_LEVELS + user_locations filter)
+    const assignedScope = await resolveClientScope(user.sub);
+    const shouldFilterByArea = assignedScope.kind !== 'unrestricted';
 
-    // Get user level from role (default to 0 if role not found)
-    const userLevel = ROLE_LEVELS[user.role] || 0;
-
-    // IMPORTANT: This endpoint ALWAYS filters by user's assigned areas
-    // Caravan/Tele: Filter by their assigned provinces/municipalities from user_locations
-    // Admin/Manager: See all clients (no area filter needed)
-    const shouldFilterByArea = (userLevel < 40 || ['caravan', 'tele'].includes(user.role));
+    // denied scope → empty result immediately
+    if (assignedScope.kind === 'denied') {
+      return c.json({
+        items: [],
+        page,
+        perPage,
+        totalItems: 0,
+        totalPages: 0,
+      });
+    }
 
     // Determine which touchpoint status groups to include
     // If touchpointStatus is undefined/empty, show all groups (no filtering)
@@ -1470,70 +1421,12 @@ clients.get('/assigned', authMiddleware, async (c) => {
     // ============================================
     // CACHE LAYER: Get assigned client IDs from cache
     // ============================================
-    // For Caravan/Tele with area filtering, try cache first
-    // This avoids expensive area-based queries on every request
     let cachedClientIds: string[] | null = null;
-    let assignedPsgcFilter: {
-      psgc_ids: number[];
-      fallback_area_keys: string[];
-      last_updated: string;
-    } | null = null;
     const clientsCache = getClientsCacheService();
 
     if (shouldFilterByArea && !search && sharedConditions.length === 0) {
-      // Only use cache when no additional filters are present
-      // (cache stores base assigned client IDs for the user)
       cachedClientIds = await clientsCache.getAssignedClientIds(user.sub);
       console.debug(`[AssignedClients] Cache ${cachedClientIds ? 'HIT' : 'MISS'} for user ${user.sub}`);
-    }
-
-    if (shouldFilterByArea) {
-      assignedPsgcFilter = await clientsCache.getAssignedAreaFilter(user.sub);
-
-      if (assignedPsgcFilter === null) {
-        const assignedAreaResult = await pool.query(
-          `SELECT
-             COALESCE(ARRAY_AGG(DISTINCT p.id) FILTER (WHERE p.id IS NOT NULL), ARRAY[]::int[]) AS psgc_ids,
-             COALESCE(
-               ARRAY_AGG(
-                 DISTINCT LOWER(TRIM(ul.province)) || '|' || LOWER(TRIM(ul.municipality))
-               ) FILTER (WHERE p.id IS NULL),
-               ARRAY[]::text[]
-             ) AS fallback_area_keys
-           FROM user_locations ul
-           LEFT JOIN psgc p
-             ON p.province = TRIM(ul.province)
-            AND p.mun_city = TRIM(ul.municipality)
-           WHERE ul.user_id = $1 AND ul.deleted_at IS NULL`,
-          [user.sub]
-        );
-
-        const row = assignedAreaResult.rows[0];
-        const assignedPsgcIds = (row?.psgc_ids || []).map((id: any) => Number(id));
-        const fallbackAreaKeys = (row?.fallback_area_keys || []).map((key: any) => String(key));
-        assignedPsgcFilter = {
-          psgc_ids: assignedPsgcIds,
-          fallback_area_keys: fallbackAreaKeys,
-          last_updated: new Date().toISOString(),
-        };
-        await clientsCache.setAssignedAreaFilter(
-          user.sub,
-          assignedPsgcFilter.psgc_ids,
-          assignedPsgcFilter.fallback_area_keys
-        );
-      }
-
-      const assignedPsgcIds = assignedPsgcFilter?.psgc_ids || [];
-      const assignedFallbackKeys = assignedPsgcFilter?.fallback_area_keys || [];
-      if (assignedPsgcIds.length === 0 && assignedFallbackKeys.length === 0) {
-        return c.json({
-          items: [],
-          page,
-          perPage,
-          totalItems: 0,
-          totalPages: 0,
-        });
-      }
     }
 
     // Build WHERE clause conditions — soft delete + shared filters, then search appended below
@@ -1643,36 +1536,15 @@ clients.get('/assigned', authMiddleware, async (c) => {
     const baseWhereConditionsJoined = baseWhereConditions.length > 0 ? baseWhereConditions.join(' AND ') : '';
 
     // Build optimized query using denormalized columns
-    // CTE only for user_areas (Caravan/Tele filtering)
-    // Touchpoint data accessed directly from clients table columns
+    // Scope filter applied via applyClientScope (replaces user_locations PSGC approach)
 
-    // Add area filter conditions for Caravan/Tele roles
-    // Note: Main query already has WHERE c.deleted_at IS NULL, so this only adds AND conditions
+    // Add RBAC scope filter condition using the resolved scope
     let areaFilterWhereClause = '';
     if (shouldFilterByArea) {
-      const assignedPsgcIds = assignedPsgcFilter?.psgc_ids || [];
-      const assignedFallbackKeys = assignedPsgcFilter?.fallback_area_keys || [];
-
-      const areaFilterConditions: string[] = [];
-
-      if (assignedPsgcIds.length > 0) {
-        const psgcParamIndex = baseParamIndex;
-        baseParams.push(assignedPsgcIds);
-        areaFilterConditions.push(`c.psgc_id = ANY($${psgcParamIndex}::int[])`);
-        baseParamIndex += 1;
-      }
-
-      if (assignedFallbackKeys.length > 0) {
-        const fallbackParamIndex = baseParamIndex;
-        baseParams.push(assignedFallbackKeys);
-        areaFilterConditions.push(
-          `(LOWER(TRIM(COALESCE(c.province, ''))) || '|' || LOWER(TRIM(COALESCE(c.municipality, '')))) = ANY($${fallbackParamIndex}::text[])`
-        );
-        baseParamIndex += 1;
-      }
-
-      if (areaFilterConditions.length > 0) {
-        areaFilterWhereClause = `AND (${areaFilterConditions.join(' OR ')})`;
+      const { sqlFragment: assignedFragment, nextIndex: assignedNextIdx } = applyClientScope(assignedScope, baseParams, baseParamIndex);
+      baseParamIndex = assignedNextIdx;
+      if (assignedFragment !== 'TRUE' && assignedFragment !== 'FALSE') {
+        areaFilterWhereClause = `AND (${assignedFragment})`;
       }
     }
 
