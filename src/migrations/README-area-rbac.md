@@ -52,5 +52,36 @@ Assertion bounds widened to 25-45 in migration 125 and the test.
 
 Legacy `group_members` table still untouched. Stage 5 will drop it.
 ## Stage 3 — Read switching + RBAC seed  (not started)
-## Stage 4 — Mobile UX + PowerSync sync rules  (not started)
+## Stage 4a — Mobile read foundation  ✅ DONE
+
+Sync rules added for `group_role_members`, `group_municipalities`,
+`group_caravan_municipalities` (additive — no impact on existing tables).
+Mobile gains `RoleProvider` + Manage Team screen (read-only display).
+`ClientApiService.fetchAssignedClients()` upserts results into local PowerSync
+as a bridge to Stage 4b.
+
+Feature flag `manage_team_writes_enabled` is OFF by default — slice editor's
+Save button is disabled with a "Coming soon" tooltip until Stage 3 backend
+endpoints ship.
+
+**Manual deploy step:** The new sync rule blocks must be pushed to PowerSync
+Cloud (via the PowerSync console or CLI). Until that happens, mobile devices
+see empty `group_role_members` etc., and the Manage Team tab won't appear.
+
+Feature flag location:
+`frontend-mobile-imu/imu_flutter/lib/features/manage_team/presentation/caravan_slice_editor.dart`
+— const `manage_team_writes_enabled = false` at top of file. Flip to `true`
+to enable write mutations once Stage 3 backend endpoints are live.
+
+## Stage 4a-write — Manage Team mutations  (not started)
+
+Depends on Stage 3 backend endpoints landing first. Will wire up the slice
+editor's Save button + offline mutation queue + flip `manage_team_writes_enabled`
+to true.
+
+## Stage 4b — Narrow clients sync rule  (not started)
+
+Modifies the existing `clients` sync rule to push only the assigned subset
+per user. Ships after Stage 4a stable in production for ≥1 week.
+
 ## Stage 5 — Cleanup  (not started)
