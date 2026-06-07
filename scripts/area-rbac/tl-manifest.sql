@@ -16,7 +16,7 @@
 CREATE TEMP TABLE tl_manifest AS
 SELECT * FROM (VALUES
   -- (group_name_lookup, person_full_name_substring)
-  ('NORTH AGUILA',    'CHRISTOPHER',  'DELA CRUZ'),
+  ('NORTH AGUILA',    'CHRISTOPHER',  'CRUZ'),  -- cue card 'DELA CRUZ' truncated in DB → user 29756466 in NORTH AGUILA's legacy group_members
   ('NORTH AGUILA',    'GODWIN',       'RUIZ'),
   ('UNSTOPPABLE',     'JORIS',        'LUCILO'),
   ('GENERALS',        'JOSEPH',       'GARCIA'),
