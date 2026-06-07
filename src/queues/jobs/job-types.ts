@@ -62,6 +62,7 @@ export enum ReportJobType {
   REPORT_TELE_RELEASES = 'report_tele_releases',
   REPORT_ODOMETER = 'report_odometer',
   REPORT_RELEASES_BY_LOAN_TYPE = 'report_releases_by_loan_type',
+  REPORT_TOUCHPOINTS_TO_RELEASE = 'report_touchpoints_to_release',
 }
 
 /**

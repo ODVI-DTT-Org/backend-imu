@@ -37,6 +37,7 @@ import { generateCaravanReleasesReport } from './handlers/caravan-releases-handl
 import { generateTeleReleasesReport } from './handlers/tele-releases-handler.js';
 import { generateOdometerReport } from './handlers/odometer-handler.js';
 import { generateReleasesByLoanTypeReport } from './handlers/releases-by-loan-type-handler.js';
+import { generateTouchpointsToReleaseReport } from './handlers/touchpoints-to-release-handler.js';
 
 /**
  * Builds a SQL expression that resolves a client's address with this priority:
@@ -294,6 +295,21 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             success: true, total: 1, succeeded: ['report_releases_by_loan_type'], failed: [],
             startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
             result: { reportType: 'releases_by_loan_type', format: 'excel', generatedAt: new Date(),
+              parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
+          };
+        }
+        case 'report_touchpoints_to_release': {
+          const from = params?.startDate ?? new Date(new Date().getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+          const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
+          const r = await generateTouchpointsToReleaseReport(pool, this.s3Client, this.s3Bucket, {
+            startDate: from, endDate: to, userId: params?.userId,
+            loanType: params?.loan_type, productType: params?.product_type,
+          }, onProgress);
+          return {
+            success: true, total: 1, succeeded: ['report_touchpoints_to_release'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: { reportType: 'touchpoints_to_release', format: 'excel', generatedAt: new Date(),
               parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type },
               downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
           };
