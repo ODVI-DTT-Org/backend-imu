@@ -53,7 +53,7 @@ export async function startWorkers() {
     await csvExportsProcessor.start();
     const csvExportsWorker = csvExportsProcessor.getWorker();
     if (csvExportsWorker) {
-      queueManager.registerWorker('reports', csvExportsWorker);
+      queueManager.registerWorker('csv-exports', csvExportsWorker);
     }
 
     // Register location assignments processor

@@ -6,7 +6,7 @@
 
 import { getQueueManager } from '../queue-manager.js';
 import type { BulkJobData, ReportJobData, SyncJobData, GeocodingJobData, JobResult } from '../jobs/job-types.js';
-import { SyncJobType, GeocodingJobType } from '../jobs/job-types.js';
+import { SyncJobType, GeocodingJobType, ReportJobType } from '../jobs/job-types.js';
 import type { JobsOptions } from 'bullmq';
 import { logger } from '../../utils/logger.js';
 
@@ -39,8 +39,16 @@ export async function addBulkJob(
   return job;
 }
 
+const CSV_EXPORT_TYPES = new Set<string>([
+  ReportJobType.EXPORT_TOUCHPOINTS_CSV,
+  ReportJobType.EXPORT_CLIENTS_CSV,
+  ReportJobType.EXPORT_ATTENDANCE_CSV,
+]);
+
 /**
- * Add a report generation job to the queue
+ * Add a report generation job to the queue.
+ * CSV export types are routed to the dedicated 'csv-exports' queue;
+ * all other report types go to the 'reports' queue.
  */
 export async function addReportJob(
   type: ReportJobData['type'],
@@ -57,8 +65,10 @@ export async function addReportJob(
     params,
   };
 
+  const queueName = CSV_EXPORT_TYPES.has(type) ? 'csv-exports' : 'reports';
+
   const job = await queueManager.addJob(
-    'reports',
+    queueName,
     type,
     data,
     options

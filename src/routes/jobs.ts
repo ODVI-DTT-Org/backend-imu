@@ -366,7 +366,7 @@ jobs.get('/queue/jobs', authMiddleware, async (c) => {
   try {
     const user = c.get('user');
     const queueManager = getQueueManager();
-    const queues = ['bulk-operations', 'reports', 'location-assignments', 'sync-operations'] as const;
+    const queues = ['bulk-operations', 'reports', 'csv-exports', 'location-assignments', 'sync-operations'] as const;
 
     const allJobs: any[] = [];
 
@@ -552,7 +552,7 @@ jobs.delete('/queue', authMiddleware, async (c) => {
     }
 
     const queueManager = getQueueManager();
-    const queues = ['bulk-operations', 'reports', 'location-assignments', 'sync-operations'] as const;
+    const queues = ['bulk-operations', 'reports', 'csv-exports', 'location-assignments', 'sync-operations'] as const;
 
     let removed = 0;
 

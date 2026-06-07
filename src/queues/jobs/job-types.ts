@@ -106,6 +106,7 @@ export type JobType = BulkJobType | ReportJobType | LocationJobType | SyncJobTyp
 export const QUEUE_NAMES = {
   BULK_OPERATIONS: 'bulk-operations',
   REPORTS: 'reports',
+  CSV_EXPORTS: 'csv-exports',
   LOCATION_ASSIGNMENTS: 'location-assignments',
   SYNC_OPERATIONS: 'sync-operations',
   BULK_UPLOAD: 'bulk-upload',

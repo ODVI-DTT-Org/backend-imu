@@ -20,7 +20,7 @@ import { join } from 'path';
  */
 export class CsvExportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
   constructor() {
-    super('reports'); // Use same queue as reports
+    super('csv-exports');
   }
 
   /**
