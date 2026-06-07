@@ -1036,7 +1036,210 @@ groups.delete(
   },
 );
 
+// POST /api/groups/:id/caravans
+// Adds a caravan member + optional initial slice. Allowed: admin / area_head /
+// assistant_area_head / team_leader in this group.
+groups.post(
+  '/:id/caravans',
+  authMiddleware,
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id') ?? '';
+    await ensureGroupAccess(user.sub, user.role, groupId,
+      ['area_head', 'assistant_area_head', 'team_leader']);
+
+    const parsed = caravanAssignSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      throw new ValidationError('Invalid request body').addDetail('zod', parsed.error.flatten());
+    }
+    const { user_id, municipalities } = parsed.data;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Insert the caravan membership (idempotent)
+      await client.query(
+        `INSERT INTO group_role_members (group_id, user_id, role_in_group, assigned_by)
+         VALUES ($1, $2, 'caravan', $3)
+         ON CONFLICT DO NOTHING`,
+        [groupId, user_id, user.sub],
+      );
+
+      // 2. Insert each municipality slice. Stage 1 trigger validates each row.
+      const inserted: { province: string; municipality: string }[] = [];
+      for (const m of municipalities) {
+        const { rows } = await client.query<{ province: string; municipality: string }>(
+          `INSERT INTO group_caravan_municipalities
+             (group_id, caravan_user_id, province, municipality, assigned_by)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT DO NOTHING
+           RETURNING province, municipality`,
+          [groupId, user_id, m.province, m.municipality, user.sub],
+        );
+        if (rows[0]) inserted.push(rows[0]);
+      }
+
+      await client.query('COMMIT');
+
+      await writeAssignmentAudit({
+        actorUserId: user.sub,
+        action: 'caravan.assign',
+        targetUserId: user_id,
+        targetGroupId: groupId,
+        payload: { municipalities: inserted },
+      });
+      return c.json({ caravan: { user_id, group_id: groupId }, slice: inserted }, 201);
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      if (err.code === '23505' && err.constraint?.includes('one_group_for_caravan')) {
+        throw new ValidationError(
+          'User is already a caravan in another group; remove first',
+        ).addDetail('user_id', user_id);
+      }
+      if (err.message?.includes('municipality_not_in_group_pool')) {
+        throw new ValidationError(
+          'One or more municipalities are not in this group\'s pool',
+        ).addDetail('hint', err.hint ?? null);
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+);
+
+// PATCH /api/groups/:id/caravans/:userId/municipalities
+// Full replace. Soft-deletes rows not in the new list, inserts new ones.
+groups.patch(
+  '/:id/caravans/:userId/municipalities',
+  authMiddleware,
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id') ?? '';
+    const userId = c.req.param('userId') ?? '';
+    await ensureGroupAccess(user.sub, user.role, groupId,
+      ['area_head', 'assistant_area_head', 'team_leader']);
+
+    const parsed = caravanMunicipalitiesReplaceSchema.safeParse(await c.req.json());
+    if (!parsed.success) {
+      throw new ValidationError('Invalid request body').addDetail('zod', parsed.error.flatten());
+    }
+    const { municipalities } = parsed.data;
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Select existing active slices
+      const { rows: existing } = await client.query<{ province: string; municipality: string }>(
+        `SELECT province, municipality FROM group_caravan_municipalities
+          WHERE group_id = $1 AND caravan_user_id = $2 AND deleted_at IS NULL`,
+        [groupId, userId],
+      );
+      const existingSet = new Set(existing.map(e => `${e.province}|${e.municipality}`));
+      const newSet = new Set(municipalities.map(m => `${m.province}|${m.municipality}`));
+
+      const toRemove = existing.filter(e => !newSet.has(`${e.province}|${e.municipality}`));
+      const toAdd = municipalities.filter(m => !existingSet.has(`${m.province}|${m.municipality}`));
+
+      for (const r of toRemove) {
+        await client.query(
+          `UPDATE group_caravan_municipalities
+              SET deleted_at = NOW()
+            WHERE group_id = $1 AND caravan_user_id = $2
+              AND province = $3 AND municipality = $4
+              AND deleted_at IS NULL`,
+          [groupId, userId, r.province, r.municipality],
+        );
+      }
+      for (const a of toAdd) {
+        await client.query(
+          `INSERT INTO group_caravan_municipalities
+             (group_id, caravan_user_id, province, municipality, assigned_by)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT DO NOTHING`,
+          [groupId, userId, a.province, a.municipality, user.sub],
+        );
+      }
+
+      await client.query('COMMIT');
+
+      await writeAssignmentAudit({
+        actorUserId: user.sub,
+        action: 'caravan_municipalities.replace',
+        targetUserId: userId,
+        targetGroupId: groupId,
+        payload: { added: toAdd, removed: toRemove },
+      });
+      return c.json({ added: toAdd.length, removed: toRemove.length });
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      if (err.message?.includes('municipality_not_in_group_pool')) {
+        throw new ValidationError(
+          'One or more municipalities are not in this group\'s pool',
+        ).addDetail('hint', err.hint ?? null);
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+);
+
+// DELETE /api/groups/:id/caravans/:userId
+// Soft-deletes the caravan member + their slices in the same transaction
+// (Stage 1 trigger requires slices to be empty before member soft-delete).
+groups.delete(
+  '/:id/caravans/:userId',
+  authMiddleware,
+  async (c) => {
+    const user = c.get('user');
+    const groupId = c.req.param('id') ?? '';
+    const userId = c.req.param('userId') ?? '';
+    await ensureGroupAccess(user.sub, user.role, groupId,
+      ['area_head', 'assistant_area_head', 'team_leader']);
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE group_caravan_municipalities
+            SET deleted_at = NOW()
+          WHERE group_id = $1 AND caravan_user_id = $2 AND deleted_at IS NULL`,
+        [groupId, userId],
+      );
+      const { rowCount } = await client.query(
+        `UPDATE group_role_members
+            SET deleted_at = NOW()
+          WHERE group_id = $1 AND user_id = $2
+            AND role_in_group = 'caravan' AND deleted_at IS NULL`,
+        [groupId, userId],
+      );
+      if (rowCount === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundError('Caravan membership not found');
+      }
+      await client.query('COMMIT');
+
+      await writeAssignmentAudit({
+        actorUserId: user.sub,
+        action: 'caravan.remove',
+        targetUserId: userId,
+        targetGroupId: groupId,
+      });
+      return c.json({ removed: true });
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  },
+);
+
 export default groups;
+
 
 
 
