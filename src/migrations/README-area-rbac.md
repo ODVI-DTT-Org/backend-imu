@@ -211,9 +211,55 @@ offline mutation queue, and flips `manageTeamWritesEnabled` to `true`.
 
 ### Next: Stage 4b
 
-## Stage 4b — Narrow clients sync rule  (not started)
+## Stage 4b — Narrow clients sync rule  ✅ YAML COMMITTED (deploy pending) (2026-06-08)
 
-Modifies the existing `clients` sync rule to push only the assigned subset
-per user. Ships after Stage 4a stable in production for ≥1 week.
+Modifies the `clients` sync rule in `docs/powersync-sync-rules.yaml` (both
+`backend-imu` and `frontend-web-imu`) to push only the assigned subset per user.
+
+### What changed
+
+The "Core client data" SELECT in `clients:` gained a WHERE clause with three arms:
+- `admin`: unrestricted (EXISTS check on `users.role = 'admin'`)
+- `caravan`: only clients whose `(province, municipality)` is in their
+  `group_caravan_municipalities` slice
+- `area_head / assistant_area_head / team_leader / tele`: clients whose
+  `(province, municipality)` is in their `group_municipalities` pool (via
+  `group_role_members` JOIN)
+
+`c.province` added to the SELECT (it was missing from the original rule).
+
+### Verification queries (run 2026-06-08 against prod)
+
+| Metric | Count |
+|--------|-------|
+| Caravan-visible clients (sample caravan user) | 2,496 |
+| Area-head-visible clients (sample area_head user) | 22,092 |
+| Total clients in DB | 311,419 |
+
+Caravan sees ~0.8% of total — well within expected single-digit-percent territory.
+Area-head sees ~7.1% of total.
+
+### Commits
+
+- `backend-imu` area-rbac branch: `b72d9e5` — feat(sync): narrow clients sync rule to area-rbac scope (stage 4b)
+- `frontend-web-imu` area-rbac branch: `057083a` — feat(sync): narrow clients sync rule to area-rbac scope (stage 4b)
+
+### MANUAL DEPLOY STEP REQUIRED
+
+Until someone uploads the updated `docs/powersync-sync-rules.yaml` to the
+PowerSync Cloud console, production sync still delivers all 311k clients to
+every device. The YAML commits are the safe testing window before flip.
+
+Steps:
+1. Copy `backend-imu/docs/powersync-sync-rules.yaml` from the `area-rbac` branch
+2. Upload via PowerSync Cloud console (or CLI) to your PowerSync instance
+3. PowerSync will re-sync all active devices with the narrowed rule
+
+### Adjustment vs. plan
+
+The plan's SQL comments used `--` SQL comment syntax inline in YAML block
+scalars. YAML's parser treats `-- key: value` as a mapping, causing a parse
+error. The SQL inline comments were removed (three `-- admin:`, `-- caravan:`,
+`-- managers + tele:` comment lines stripped). SQL logic is identical.
 
 ## Stage 5 — Cleanup  (not started)
