@@ -108,7 +108,49 @@ New group management API endpoints in `routes/groups.ts` (POST members, POST
 caravans, PATCH caravans/municipalities, DELETE caravans). The feature flag
 `manageTeamWritesEnabled` in the Flutter app remains `false` until Stage 3b lands.
 
-## Stage 3b — Group management endpoints  (not started)
+## Stage 3b — Group management endpoints  ✅ DONE (2026-06-08)
+
+### New utility
+- `src/utils/assignment-audit.ts` — `writeAssignmentAudit()` helper, writes one row
+  to `assignment_audit` on every successful mutation.
+
+### Routes appended to `src/routes/groups.ts` (lines 823+)
+- `POST   /:id/role-members` — admin-only; assigns `area_head` / `assistant_area_head` / `tele`
+- `DELETE /:id/role-members/:userId/:role` — admin-only; soft-delete a role membership
+- `POST   /:id/team-leaders` — admin or area_head; inserts `team_leader` row
+- `DELETE /:id/team-leaders/:userId` — admin or area_head; soft-delete TL
+- `POST   /:id/caravans` — admin / area_head / asst / TL; caravan + initial slice
+- `PATCH  /:id/caravans/:userId/municipalities` — full-replace slice (diff + soft-delete + insert)
+- `DELETE /:id/caravans/:userId` — soft-delete caravan membership + all slices atomically
+
+Existing 12 endpoints (lines 1–822) UNTOUCHED. Paths are distinct from legacy
+`POST /:id/members` to avoid routing collisions.
+
+### Error mapping
+- `err.message?.includes('municipality_not_in_group_pool')` → 400 ValidationError
+- `err.code === '23505' && constraint.includes('one_group_for_tl')` → 400 ValidationError
+- `err.code === '23505' && constraint.includes('one_group_for_caravan')` → 400 ValidationError
+- `rowCount === 0` on DELETE → 404 NotFoundError
+- Non-member actor → 401 AuthenticationError (via `ensureGroupAccess`)
+
+### Adjustments vs. plan
+- `ValidationError(msg, details)` is single-arg in this codebase; used `.addDetail()` chaining.
+- `c.req.param()` returns `string | undefined` in this Hono version; added `?? ''` null coalescing.
+- Tests use direct DB queries rather than HTTP (authMiddleware requires POWERSYNC_PUBLIC_KEY
+  at import time, making in-process Hono setup impractical for CI). Existing test pattern
+  in `clients-rbac.test.ts` uses the same approach.
+
+### Tests
+- `test/routes/groups-caravans.test.ts` — 7 tests: trigger validation, valid insert,
+  cardinality block, PATCH diff logic, DELETE atomicity, access control, orphan check
+- `test/routes/groups-team-leaders.test.ts` — 6 tests: happy path, cardinality, remove,
+  not-found, access check, orphan check
+- `test/routes/groups-role-members.test.ts` — 7 tests: assign, idempotency, delete,
+  invalid role, not-found, admin check, orphan check
+
+All 20 tests pass. Orphan count = 0 after each run.
+
+### Next: Stage 4a-write
 ## Stage 4a — Mobile read foundation  ✅ DONE
 
 Sync rules added for `group_role_members`, `group_municipalities`,
