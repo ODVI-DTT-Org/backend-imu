@@ -69,3 +69,37 @@ streams:
     auto_subscribe: true
     queries:
       - SELECT t.* FROM touchpoints t WHERE t.user_id = auth.user_id()
+
+  # Area RBAC: group role memberships for the current user (stage 4a)
+  group_role_members:
+    auto_subscribe: true
+    queries:
+      - SELECT id, group_id, user_id, role_in_group, assigned_at, deleted_at
+        FROM group_role_members
+        WHERE user_id = auth.user_id() AND deleted_at IS NULL
+
+  # Area RBAC: municipality pool for groups this user belongs to (stage 4a)
+  group_municipalities:
+    auto_subscribe: true
+    queries:
+      - SELECT gm.id, gm.group_id, gm.province, gm.municipality,
+               gm.assigned_at, gm.deleted_at
+        FROM group_municipalities gm
+        WHERE gm.group_id IN (
+          SELECT group_id FROM group_role_members
+          WHERE user_id = auth.user_id() AND deleted_at IS NULL
+        ) AND gm.deleted_at IS NULL
+
+  # Area RBAC: caravan municipality slices visible to this user (stage 4a)
+  group_caravan_municipalities:
+    auto_subscribe: true
+    queries:
+      - SELECT gcm.id, gcm.group_id, gcm.caravan_user_id,
+               gcm.province, gcm.municipality, gcm.assigned_at, gcm.deleted_at
+        FROM group_caravan_municipalities gcm
+        WHERE (gcm.caravan_user_id = auth.user_id() OR gcm.group_id IN (
+                SELECT group_id FROM group_role_members
+                WHERE user_id = auth.user_id()
+                  AND role_in_group IN ('area_head','assistant_area_head','team_leader','tele')
+                  AND deleted_at IS NULL
+              )) AND gcm.deleted_at IS NULL
