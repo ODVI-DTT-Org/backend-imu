@@ -155,4 +155,46 @@ describe('resolveClientScope against prod DB', () => {
     const scope = await resolveClientScope(rows[0].user_id);
     expect(scope.kind).toBe('group_municipalities');
   });
+
+  it('REGRESSION: area_head whose users.role=caravan still gets group_municipalities scope', async () => {
+    // Find a user who is area_head in group_role_members but whose users.role
+    // is 'caravan' (demo workaround). Production has 6 such users.
+    const { rows } = await testPool.query<{ user_id: string }>(`
+      SELECT grm.user_id
+        FROM group_role_members grm
+        JOIN users u ON u.id = grm.user_id
+       WHERE grm.role_in_group = 'area_head'
+         AND grm.deleted_at IS NULL
+         AND u.role = 'caravan'
+       LIMIT 1
+    `);
+    if (rows.length === 0) {
+      // No such user in this DB; skip (CI environment may not have demo data)
+      return;
+    }
+    const scope = await resolveClientScope(rows[0].user_id);
+    expect(scope.kind).toBe('group_municipalities');
+  });
+
+  it('REGRESSION: team_leader whose users.role=caravan gets group_municipalities scope', async () => {
+    const { rows } = await testPool.query<{ user_id: string }>(`
+      SELECT grm.user_id
+        FROM group_role_members grm
+        JOIN users u ON u.id = grm.user_id
+       WHERE grm.role_in_group = 'team_leader'
+         AND grm.deleted_at IS NULL
+         AND u.role = 'caravan'
+       LIMIT 1
+    `);
+    if (rows.length === 0) return;
+    const scope = await resolveClientScope(rows[0].user_id);
+    expect(scope.kind).toBe('group_municipalities');
+  });
+
+  it('user with no group_role_members rows AND not admin → denied', async () => {
+    // Use a synthetic UUID that doesn't exist in users
+    const fakeUserId = '00000000-0000-0000-0000-000000000000';
+    const scope = await resolveClientScope(fakeUserId);
+    expect(scope.kind).toBe('denied');
+  });
 });
