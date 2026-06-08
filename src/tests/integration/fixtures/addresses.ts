@@ -8,7 +8,7 @@ export const mockAddress = {
   client_id: mockClient.id,
   psgc_id: 1,
   label: 'Home',
-  street_address: '123 Main St',
+  full_address: '123 Main St',
   postal_code: '1000',
   latitude: 14.5995,
   longitude: 120.9842,

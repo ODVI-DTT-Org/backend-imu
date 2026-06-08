@@ -1018,11 +1018,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       try {
         const notes = JSON.parse(approval.notes);
 
-        // Mobile may send either `street` or `street_address`; populate both
+        // Mobile may send either `street` or `full_address`; populate both
         // columns for consistency. lat/lng are optional (new add-address sheet
         // does not capture them) — coalesce undefined to null so pg doesn't
         // throw on missing bind params.
-        const streetText = notes.street_address ?? notes.street ?? null;
+        const streetText = notes.full_address ?? notes.street ?? null;
         const psgcId = notes.psgc_id ?? null;
         const lat = notes.latitude ?? null;
         const lng = notes.longitude ?? null;
@@ -1031,7 +1031,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
         await client.query(`
           INSERT INTO addresses (
-            id, client_id, type, street, street_address, psgc_id,
+            id, client_id, type, street, full_address, psgc_id,
             barangay, city, province, postal_code, latitude, longitude, is_primary
           ) VALUES (
             gen_random_uuid(), $1, $2, $3, $3, $4,
@@ -1507,10 +1507,10 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         // For address_add approvals, INSERT into addresses (mirrors single-approve handler)
         if (approval.type === 'address_add') {
           const notes = JSON.parse(approval.notes || '{}');
-          const streetText = notes.street_address ?? notes.street ?? null;
+          const streetText = notes.full_address ?? notes.street ?? null;
           await client.query(`
             INSERT INTO addresses (
-              id, client_id, type, street, street_address, psgc_id,
+              id, client_id, type, street, full_address, psgc_id,
               barangay, city, province, postal_code, latitude, longitude, is_primary
             ) VALUES (
               gen_random_uuid(), $1, $2, $3, $3, $4,
@@ -1535,7 +1535,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         if (approval.type === 'address_edit') {
           const notes = JSON.parse(approval.notes || '{}');
           const { address_id, ...fields } = notes;
-          const allowed = ['type', 'street', 'street_address', 'barangay', 'city', 'province',
+          const allowed = ['type', 'street', 'full_address', 'barangay', 'city', 'province',
                            'postal_code', 'latitude', 'longitude', 'is_primary', 'psgc_id'];
           const updates: string[] = [];
           const vals: any[] = [];

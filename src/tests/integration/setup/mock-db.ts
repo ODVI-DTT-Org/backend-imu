@@ -232,7 +232,7 @@ const mockQuery = vi.fn((queryText: string, params?: any[]) => {
       client_id: params?.[0],  // $1
       psgc_id: params?.[1],    // $2
       label: params?.[2],      // $3
-      street_address: params?.[3],  // $4
+      full_address: params?.[3],  // $4
       postal_code: params?.[4],     // $5
       latitude: params?.[5],        // $6
       longitude: params?.[6],       // $7
@@ -285,16 +285,16 @@ const mockQuery = vi.fn((queryText: string, params?: any[]) => {
     const updated = { ...testData.addresses[addressIndex] };
 
     // Handle different UPDATE patterns
-    if (q.includes('set label =') && q.includes('street_address =')) {
-      // UPDATE addresses SET label = $1, street_address = $2 WHERE id = $3
+    if (q.includes('set label =') && q.includes('full_address =')) {
+      // UPDATE addresses SET label = $1, full_address = $2 WHERE id = $3
       updated.label = params?.[0];
-      updated.street_address = params?.[1];
+      updated.full_address = params?.[1];
     } else if (q.includes('set label =')) {
       // UPDATE addresses SET label = $1 WHERE id = $2
       updated.label = params?.[0];
-    } else if (q.includes('set street_address =')) {
-      // UPDATE addresses SET street_address = $1 WHERE id = $2
-      updated.street_address = params?.[0];
+    } else if (q.includes('set full_address =')) {
+      // UPDATE addresses SET full_address = $1 WHERE id = $2
+      updated.full_address = params?.[0];
     } else if (q.includes('set is_primary = true')) {
       // UPDATE addresses SET is_primary = true WHERE id = $1
       // Unset other primaries for this client

@@ -11,7 +11,7 @@
 --       releases.approved_by -> users.id
 --       releases.call_id -> calls.id
 --   - phone_numbers uses `label` (NOT `type`) for the label column
---   - addresses has extra columns: psgc_id, street_address, deleted_at, updated_at
+--   - addresses has extra columns: psgc_id, full_address, deleted_at, updated_at
 --   - clients has many extra legacy import columns
 --   - users has theme_color and theme_mode columns
 --   - user_psgc_assignments does NOT exist in the live DB
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS addresses (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     deleted_at TIMESTAMPTZ,
     psgc_id INTEGER,
-    street_address TEXT,
+    full_address TEXT,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 

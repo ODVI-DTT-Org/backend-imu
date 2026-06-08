@@ -124,7 +124,7 @@ describe('Addresses DELETE and Authorization Integration Tests', () => {
         client_id: mockClient.id,
         psgc_id: 1,
         label: 'Home',
-        street_address: '123 Test St',
+        full_address: '123 Test St',
         postal_code: '1000',
       };
 
@@ -145,7 +145,7 @@ describe('Addresses DELETE and Authorization Integration Tests', () => {
         client_id: mockOtherClient.id,
         psgc_id: 1,
         label: 'Home',
-        street_address: '123 Test St',
+        full_address: '123 Test St',
         postal_code: '1000',
       };
 
@@ -170,7 +170,7 @@ describe('Addresses DELETE and Authorization Integration Tests', () => {
         client_id: mockOtherClient.id,
         psgc_id: 1,
         label: 'Work',
-        street_address: '456 Admin St',
+        full_address: '456 Admin St',
         postal_code: '2000',
       };
 

@@ -195,7 +195,7 @@ addresses.get('/clients/:id/addresses', authMiddleware, async (c) => {
  * @param id - Client ID
  * @param body - Address data
  * @param body.label - Address label (Home, Work, Relative, Other)
- * @param body.street_address - Street address
+ * @param body.full_address - Full/street address
  * @param body.postal_code - Postal code (optional)
  * @param body.psgc_id - PSGC ID (must exist in PSGC table)
  * @param body.latitude - GPS latitude (optional)
@@ -334,7 +334,7 @@ addresses.get('/clients/:id/addresses/:addressId', authMiddleware, async (c) => 
  * @throws {ValidationError} - If validation fails or no fields to update
  * @throws {NotFoundError} - If address not found
  *
- * Only whitelisted fields can be updated: label, street_address, postal_code, latitude, longitude, is_primary
+ * Only whitelisted fields can be updated: label, full_address, postal_code, latitude, longitude, is_primary
  */
 // PUT /api/clients/:id/addresses/:addressId - Update address
 addresses.put('/clients/:id/addresses/:addressId', authMiddleware, auditMiddleware('client'), async (c) => {

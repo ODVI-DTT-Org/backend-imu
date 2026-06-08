@@ -361,7 +361,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
     // Fetch addresses for all clients in batch with PSGC join
     const clientIds = itinerariesResult.rows.map((row: any) => row.client_id);
     const addressesResult = clientIds.length > 0 ? await pool.query(
-      `SELECT a.client_id, a.id, a.street_address, a.postal_code, a.is_primary,
+      `SELECT a.client_id, a.id, a.full_address, a.postal_code, a.is_primary,
               p.region, p.province, p.mun_city as municipality, p.barangay
        FROM addresses a
        LEFT JOIN psgc p ON a.psgc_id = p.id
@@ -378,7 +378,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
       }
       addressesByClient.get(addr.client_id)!.push({
         id: addr.id,
-        street_address: addr.street_address,
+        full_address: addr.full_address,
         postal_code: addr.postal_code,
         region: addr.region,
         province: addr.province,
@@ -484,7 +484,7 @@ myDay.get('/tasks', authMiddleware, requirePermission('itineraries', 'read'), as
           addresses: addresses,
         },
         assigned_by_name: row.assigned_by_name || null,
-        location: primaryAddress?.street_address || null,
+        location: primaryAddress?.full_address || null,
       };
     });
 

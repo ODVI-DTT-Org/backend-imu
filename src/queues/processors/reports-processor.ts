@@ -49,7 +49,7 @@ import { generateTouchpointsToReleaseReport } from './handlers/touchpoints-to-re
 function clientAddressSql(alias: string): string {
   return `UPPER(COALESCE(
     (SELECT NULLIF(TRIM(BOTH ', ' FROM CONCAT_WS(', ',
-        NULLIF(COALESCE(a.street_address, a.street), ''),
+        NULLIF(COALESCE(a.full_address, a.street), ''),
         NULLIF(a.barangay, ''),
         NULLIF(a.city, ''),
         NULLIF(a.province, '')

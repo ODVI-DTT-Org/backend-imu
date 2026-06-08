@@ -196,7 +196,7 @@ export function buildClientFilters(
         .filter(v => v.length > 0 && v !== 'all');
 
       if (normalizedBarangayValues.length > 0) {
-        // Also search addresses.street / street_address as free-text fallback.
+        // Also search addresses.street / full_address as free-text fallback.
         // This handles bulk-import data where clients.barangay was defaulted to
         // 'Banaban' but the real barangay is embedded in the street text
         // (e.g. street = "BINAGBAG, ANGAT BULACAN"). Each pattern is wrapped in
@@ -211,7 +211,7 @@ export function buildClientFilters(
           `SELECT 1 FROM addresses a` +
           ` WHERE a.client_id = c.id AND a.deleted_at IS NULL` +
           ` AND (LOWER(COALESCE(a.street,'')) LIKE ANY($${idx + 1}::text[])` +
-          ` OR LOWER(COALESCE(a.street_address,'')) LIKE ANY($${idx + 1}::text[])` +
+          ` OR LOWER(COALESCE(a.full_address,'')) LIKE ANY($${idx + 1}::text[])` +
           `)))`,
         );
         params.push(normalizedBarangayValues, likePatterns);
@@ -3665,7 +3665,7 @@ clients.post('/by-ids', authMiddleware, requirePermission('clients', 'read'), as
     pool.query(
       `SELECT id, client_id, type, street, barangay, city, province,
               postal_code, latitude, longitude, is_primary, psgc_id,
-              street_address, created_at, updated_at
+              full_address, created_at, updated_at
        FROM addresses
        WHERE client_id IN (${idPlaceholders})
          AND deleted_at IS NULL`,

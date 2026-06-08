@@ -32,7 +32,7 @@ describe('Addresses POST/PUT Integration Tests', () => {
           client_id: mockClient.id,
           psgc_id: mockPSGC.id,
           label: 'New Home',
-          street_address: '456 New St',
+          full_address: '456 New St',
           postal_code: '2000',
         }),
       });
@@ -45,7 +45,7 @@ describe('Addresses POST/PUT Integration Tests', () => {
         client_id: mockClient.id,
         psgc_id: mockPSGC.id,
         label: 'Home',
-        street_address: '456 New St',
+        full_address: '456 New St',
         postal_code: '2000',
         latitude: 14.5995,
         longitude: 120.9842,
@@ -67,7 +67,7 @@ describe('Addresses POST/PUT Integration Tests', () => {
       expect(json.data).toHaveProperty('id');
       expect(json.data.client_id).toBe(newAddress.client_id);
       expect(json.data.label).toBe(newAddress.label);
-      expect(json.data.street_address).toBe(newAddress.street_address);
+      expect(json.data.full_address).toBe(newAddress.full_address);
       expect(json.data.postal_code).toBe(newAddress.postal_code);
       expect(json.data).toHaveProperty('created_at');
       expect(json.data).toHaveProperty('updated_at');
@@ -78,7 +78,7 @@ describe('Addresses POST/PUT Integration Tests', () => {
         client_id: mockClient.id,
         psgc_id: mockPSGC.id,
         label: 'Home',
-        street_address: '789 Primary St',
+        full_address: '789 Primary St',
         postal_code: '3000',
         is_primary: true,
       };
@@ -137,7 +137,7 @@ describe('Addresses POST/PUT Integration Tests', () => {
       const addressId = '123e4567-e89b-12d3-a456-426614174200';
       const updates = {
         label: 'Work',
-        street_address: '999 Updated St',
+        full_address: '999 Updated St',
       };
 
       const response = await app.request(`/api/clients/${mockClient.id}/addresses/${addressId}`, {
@@ -154,7 +154,7 @@ describe('Addresses POST/PUT Integration Tests', () => {
 
       expect(json.success).toBe(true);
       expect(json.data.label).toBe(updates.label);
-      expect(json.data.street_address).toBe(updates.street_address);
+      expect(json.data.full_address).toBe(updates.full_address);
       expect(json.data).toHaveProperty('updated_at');
     });
 
