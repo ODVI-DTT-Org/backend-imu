@@ -1037,6 +1037,19 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             gen_random_uuid(), $1, $2, $3, $3, $4,
             $5, $6, $7, $8, $9, $10, $11
           )
+          ON CONFLICT (client_id, type) WHERE deleted_at IS NULL
+          DO UPDATE SET
+            street = COALESCE(EXCLUDED.street, addresses.street),
+            full_address = COALESCE(EXCLUDED.full_address, addresses.full_address),
+            psgc_id = COALESCE(EXCLUDED.psgc_id, addresses.psgc_id),
+            barangay = COALESCE(EXCLUDED.barangay, addresses.barangay),
+            city = COALESCE(EXCLUDED.city, addresses.city),
+            province = COALESCE(EXCLUDED.province, addresses.province),
+            postal_code = COALESCE(EXCLUDED.postal_code, addresses.postal_code),
+            latitude = COALESCE(EXCLUDED.latitude, addresses.latitude),
+            longitude = COALESCE(EXCLUDED.longitude, addresses.longitude),
+            is_primary = addresses.is_primary OR EXCLUDED.is_primary,
+            updated_at = NOW()
         `, [
           approval.client_id,
           notes.type,
@@ -1516,6 +1529,19 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
               gen_random_uuid(), $1, $2, $3, $3, $4,
               $5, $6, $7, $8, $9, $10, $11
             )
+            ON CONFLICT (client_id, type) WHERE deleted_at IS NULL
+            DO UPDATE SET
+              street = COALESCE(EXCLUDED.street, addresses.street),
+              full_address = COALESCE(EXCLUDED.full_address, addresses.full_address),
+              psgc_id = COALESCE(EXCLUDED.psgc_id, addresses.psgc_id),
+              barangay = COALESCE(EXCLUDED.barangay, addresses.barangay),
+              city = COALESCE(EXCLUDED.city, addresses.city),
+              province = COALESCE(EXCLUDED.province, addresses.province),
+              postal_code = COALESCE(EXCLUDED.postal_code, addresses.postal_code),
+              latitude = COALESCE(EXCLUDED.latitude, addresses.latitude),
+              longitude = COALESCE(EXCLUDED.longitude, addresses.longitude),
+              is_primary = addresses.is_primary OR EXCLUDED.is_primary,
+              updated_at = NOW()
           `, [
             approval.client_id,
             notes.type,
