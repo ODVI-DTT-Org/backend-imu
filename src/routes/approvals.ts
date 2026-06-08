@@ -1018,15 +1018,38 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       try {
         const notes = JSON.parse(approval.notes);
 
-        // CREATE addresses record (matching existing schema)
+        // Mobile may send either `street` or `street_address`; populate both
+        // columns for consistency. lat/lng are optional (new add-address sheet
+        // does not capture them) — coalesce undefined to null so pg doesn't
+        // throw on missing bind params.
+        const streetText = notes.street_address ?? notes.street ?? null;
+        const psgcId = notes.psgc_id ?? null;
+        const lat = notes.latitude ?? null;
+        const lng = notes.longitude ?? null;
+        const postal = notes.postal_code ?? null;
+        const isPrimary = notes.is_primary ?? false;
+
         await client.query(`
           INSERT INTO addresses (
-            id, client_id, type, street, barangay, city, province, postal_code, latitude, longitude, is_primary
+            id, client_id, type, street, street_address, psgc_id,
+            barangay, city, province, postal_code, latitude, longitude, is_primary
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+            gen_random_uuid(), $1, $2, $3, $3, $4,
+            $5, $6, $7, $8, $9, $10, $11
           )
-        `, [approval.client_id, notes.type, notes.street, notes.barangay, notes.city,
-            notes.province, notes.postal_code, notes.latitude, notes.longitude, notes.is_primary]);
+        `, [
+          approval.client_id,
+          notes.type,
+          streetText,
+          psgcId,
+          notes.barangay ?? null,
+          notes.city ?? null,
+          notes.province ?? null,
+          postal,
+          lat,
+          lng,
+          isPrimary,
+        ]);
       } catch (parseError) {
         console.error('Failed to process address approval:', parseError);
         await client.query('ROLLBACK');
