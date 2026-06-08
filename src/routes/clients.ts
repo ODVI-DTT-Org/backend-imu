@@ -2437,6 +2437,47 @@ clients.patch('/:id/addresses/:addressId/set-primary', authMiddleware, requirePe
   }
 });
 
+// PATCH /api/clients/:id/phones/:phoneId/set-primary - Set phone number as primary
+clients.patch('/:id/phones/:phoneId/set-primary', authMiddleware, requirePermission('clients', 'update'), async (c) => {
+  const dbClient = await pool.connect();
+  try {
+    await dbClient.query('BEGIN');
+
+    const clientId = c.req.param('id');
+    const phoneId = c.req.param('phoneId');
+
+    // Verify phone belongs to client
+    const check = await dbClient.query(
+      'SELECT id FROM phone_numbers WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL',
+      [phoneId, clientId]
+    );
+    if (check.rows.length === 0) {
+      await dbClient.query('ROLLBACK');
+      return c.json({ success: false, message: 'Phone number not found' }, 404);
+    }
+
+    // Unset all primaries for this client, then set this one
+    await dbClient.query(
+      'UPDATE phone_numbers SET is_primary = false, updated_at = NOW() WHERE client_id = $1 AND deleted_at IS NULL',
+      [clientId]
+    );
+    const result = await dbClient.query(
+      'UPDATE phone_numbers SET is_primary = true, updated_at = NOW() WHERE id = $1 RETURNING *',
+      [phoneId]
+    );
+
+    await dbClient.query('COMMIT');
+    await invalidateClientsListCache();
+    return c.json({ success: true, phone: result.rows[0] });
+  } catch (error) {
+    await dbClient.query('ROLLBACK');
+    console.error('Set primary phone error:', error);
+    throw new Error();
+  } finally {
+    dbClient.release();
+  }
+});
+
 // POST /api/clients/:id/phones - Add phone number to client
 clients.post('/:id/phones', authMiddleware, async (c) => {
   const client = await pool.connect();
