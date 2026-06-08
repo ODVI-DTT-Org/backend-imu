@@ -1504,6 +1504,94 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
           } catch (_) { /* skip parse errors */ }
         }
 
+        // For address_add approvals, INSERT into addresses (mirrors single-approve handler)
+        if (approval.type === 'address_add') {
+          const notes = JSON.parse(approval.notes || '{}');
+          const streetText = notes.street_address ?? notes.street ?? null;
+          await client.query(`
+            INSERT INTO addresses (
+              id, client_id, type, street, street_address, psgc_id,
+              barangay, city, province, postal_code, latitude, longitude, is_primary
+            ) VALUES (
+              gen_random_uuid(), $1, $2, $3, $3, $4,
+              $5, $6, $7, $8, $9, $10, $11
+            )
+          `, [
+            approval.client_id,
+            notes.type,
+            streetText,
+            notes.psgc_id ?? null,
+            notes.barangay ?? null,
+            notes.city ?? null,
+            notes.province ?? null,
+            notes.postal_code ?? null,
+            notes.latitude ?? null,
+            notes.longitude ?? null,
+            notes.is_primary ?? false,
+          ]);
+        }
+
+        // For address_edit approvals, UPDATE the existing address row
+        if (approval.type === 'address_edit') {
+          const notes = JSON.parse(approval.notes || '{}');
+          const { address_id, ...fields } = notes;
+          const allowed = ['type', 'street', 'street_address', 'barangay', 'city', 'province',
+                           'postal_code', 'latitude', 'longitude', 'is_primary', 'psgc_id'];
+          const updates: string[] = [];
+          const vals: any[] = [];
+          let p = 1;
+          for (const key of allowed) {
+            if (key in fields) {
+              updates.push(`${key} = $${p++}`);
+              vals.push(fields[key]);
+            }
+          }
+          if (updates.length > 0 && address_id) {
+            vals.push(address_id);
+            await client.query(
+              `UPDATE addresses SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${p}`,
+              vals
+            );
+          }
+        }
+
+        // For phone_add approvals, INSERT into phone_numbers
+        if (approval.type === 'phone_add') {
+          const notes = JSON.parse(approval.notes || '{}');
+          await client.query(`
+            INSERT INTO phone_numbers (id, client_id, number, label, is_primary)
+            VALUES (gen_random_uuid(), $1, $2, $3, $4)
+          `, [
+            approval.client_id,
+            notes.number ?? null,
+            notes.label ?? null,
+            notes.is_primary ?? false,
+          ]);
+        }
+
+        // For phone_edit approvals, UPDATE the existing phone row
+        if (approval.type === 'phone_edit') {
+          const notes = JSON.parse(approval.notes || '{}');
+          const { phone_id, ...fields } = notes;
+          const allowed = ['number', 'label', 'is_primary'];
+          const updates: string[] = [];
+          const vals: any[] = [];
+          let p = 1;
+          for (const key of allowed) {
+            if (key in fields) {
+              updates.push(`${key} = $${p++}`);
+              vals.push(fields[key]);
+            }
+          }
+          if (updates.length > 0 && phone_id) {
+            vals.push(phone_id);
+            await client.query(
+              `UPDATE phone_numbers SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${p}`,
+              vals
+            );
+          }
+        }
+
         await client.query(
           `UPDATE approvals SET status = 'approved', approved_by = $1, approved_at = NOW(),
             client_id = COALESCE($2, client_id), updated_at = NOW() WHERE id = $3`,
