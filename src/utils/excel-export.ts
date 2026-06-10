@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import type { Pool } from 'pg';
+import { formatClientName, formatCaravanFullName, caravanNickname } from './name-format.js';
 
 interface ExcelExportOptions {
   workbookName: string;
@@ -61,7 +62,8 @@ export async function generateExcelBuffer(options: ExcelExportOptions): Promise<
 }
 
 /**
- * Export touchpoints data to Excel format
+ * Export touchpoints data to Excel format.
+ * Columns: ID | Date | Type | Reason | Status | Client | Caravan | Caravan Name | Notes
  */
 export async function exportTouchpointsToExcel(
   pool: Pool,
@@ -70,8 +72,13 @@ export async function exportTouchpointsToExcel(
 ): Promise<Buffer> {
   const result = await pool.query(
     `SELECT t.id, t.date, t.type, t.reason, t.status, t.notes,
-            c.first_name as client_first_name, c.last_name as client_last_name,
-            u.first_name as agent_first_name, u.last_name as agent_last_name
+            c.first_name  AS c_first_name,
+            c.middle_name AS c_middle_name,
+            c.last_name   AS c_last_name,
+            c.ext_name    AS c_ext_name,
+            u.first_name  AS u_first_name,
+            u.middle_name AS u_middle_name,
+            u.last_name   AS u_last_name
      FROM touchpoints t
      JOIN clients c ON c.id = t.client_id AND c.deleted_at IS NULL
      JOIN users u ON u.id = t.user_id
@@ -80,15 +87,16 @@ export async function exportTouchpointsToExcel(
     [startDate, endDate]
   );
 
-  const headers = ['ID', 'Date', 'Type', 'Reason', 'Status', 'Client', 'Agent', 'Notes'];
+  const headers = ['ID', 'Date', 'Type', 'Reason', 'Status', 'Client', 'Caravan', 'Caravan Name', 'Notes'];
   const data = result.rows.map(row => [
     row.id,
     row.date,
     row.type,
     row.reason,
     row.status,
-    `${row.client_first_name} ${row.client_last_name}`,
-    `${row.agent_first_name} ${row.agent_last_name}`,
+    formatClientName({ first_name: row.c_first_name, middle_name: row.c_middle_name, last_name: row.c_last_name, ext_name: row.c_ext_name }),
+    caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
     row.notes || '',
   ]);
 
@@ -101,7 +109,8 @@ export async function exportTouchpointsToExcel(
 }
 
 /**
- * Export clients data to Excel format
+ * Export clients data to Excel format.
+ * Includes a formatted "Client Name" column (SURNAME, FIRSTNAME MIDDLENAME SUFFIX).
  */
 export async function exportClientsToExcel(
   pool: Pool,
@@ -109,9 +118,13 @@ export async function exportClientsToExcel(
   endDate: string
 ): Promise<Buffer> {
   const result = await pool.query(
-    `SELECT c.id, c.first_name, c.last_name, c.email, c.phone, c.client_type,
+    `SELECT c.id,
+            c.first_name,  c.middle_name,  c.last_name,  c.ext_name,
+            c.email, c.phone, c.client_type,
             c.product_type, c.market_type, c.created_at,
-            u.first_name as agent_first_name, u.last_name as agent_last_name
+            u.first_name  AS u_first_name,
+            u.middle_name AS u_middle_name,
+            u.last_name   AS u_last_name
      FROM clients c
      LEFT JOIN users u ON u.id = c.user_id
      WHERE c.created_at >= $1 AND c.created_at <= $2
@@ -119,17 +132,23 @@ export async function exportClientsToExcel(
     [startDate, endDate]
   );
 
-  const headers = ['ID', 'First Name', 'Last Name', 'Email', 'Phone', 'Type', 'Product Type', 'Market Type', 'Agent', 'Created'];
+  const headers = [
+    'ID', 'First Name', 'Last Name', 'Client Name',
+    'Email', 'Phone', 'Type', 'Product Type', 'Market Type',
+    'Caravan', 'Caravan Name', 'Created',
+  ];
   const data = result.rows.map(row => [
     row.id,
     row.first_name,
     row.last_name,
+    formatClientName({ first_name: row.first_name, middle_name: row.middle_name, last_name: row.last_name, ext_name: row.ext_name }),
     row.email || '',
     row.phone || '',
     row.client_type,
     row.product_type || '',
     row.market_type || '',
-    `${row.agent_first_name || ''} ${row.agent_last_name || ''}`.trim() || '',
+    caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
     row.created_at,
   ]);
 
@@ -142,7 +161,8 @@ export async function exportClientsToExcel(
 }
 
 /**
- * Export attendance data to Excel format
+ * Export attendance data to Excel format.
+ * Agent columns renamed: "Agent" → "Caravan" (nickname) + "Caravan Name" (full formatted).
  */
 export async function exportAttendanceToExcel(
   pool: Pool,
@@ -151,7 +171,7 @@ export async function exportAttendanceToExcel(
 ): Promise<Buffer> {
   const result = await pool.query(
     `SELECT a.id, a.date, a.check_in, a.check_out, a.status,
-            u.first_name, u.last_name
+            u.first_name, u.middle_name, u.last_name
      FROM attendance a
      JOIN users u ON u.id = a.user_id
      WHERE a.date >= $1 AND a.date <= $2
@@ -159,11 +179,12 @@ export async function exportAttendanceToExcel(
     [startDate, endDate]
   );
 
-  const headers = ['ID', 'Date', 'Agent', 'Check In', 'Check Out', 'Status'];
+  const headers = ['ID', 'Date', 'Caravan', 'Caravan Name', 'Check In', 'Check Out', 'Status'];
   const data = result.rows.map(row => [
     row.id,
     row.date,
-    `${row.first_name} ${row.last_name}`,
+    caravanNickname({ first_name: row.first_name, last_name: row.last_name }),
+    formatCaravanFullName({ first_name: row.first_name, middle_name: row.middle_name, last_name: row.last_name }),
     row.check_in || '',
     row.check_out || '',
     row.status,

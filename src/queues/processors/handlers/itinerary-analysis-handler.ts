@@ -2,6 +2,8 @@ import ExcelJS from 'exceljs';
 import { Pool } from 'pg';
 import { PutObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { formatClientName, formatCaravanFullName, caravanNickname } from '../../../utils/name-format.js';
+import { clampEndDate } from '../../../utils/dashboard-helpers.js';
 
 // ─── Pure helpers (also tested directly in unit tests) ───────────────────────
 
@@ -43,7 +45,10 @@ const TARGET_WORKING_DAYS   = 25;
 
 interface AgentRow {
   user_id: string;
-  agent_name: string;
+  /** Nickname: first initial + surname, e.g. "MMORSIQUILLO" */
+  agent_nickname: string;
+  /** Full formatted name: "SURNAME, FIRSTNAME MIDDLENAME" */
+  agent_full_name: string;
   team_name: string;
   total_visits: number;
   total_releases: number;
@@ -67,8 +72,12 @@ interface AgentRow {
 interface VisitDetailRow {
   id: string;
   created_at: string;
-  agent_name: string;
+  /** Caravan nickname */
+  agent_nickname: string;
+  /** Caravan full formatted name */
+  agent_full_name: string;
   team_name: string;
+  /** Formatted client name */
   client_name: string;
   visit_reason: string | null;
   reason_category: string | null;
@@ -82,8 +91,11 @@ export async function fetchItineraryAnalysisData(
   from: string,
   to: string
 ): Promise<{ agents: AgentRow[]; visitDetails: VisitDetailRow[]; workingDays: number }> {
+  // Clamp to never extend past today (fixes future-date bug for current-month reports)
+  const clampedTo = clampEndDate(to);
+
   const fromDate = new Date(from);
-  const toDate   = new Date(to);
+  const toDate   = new Date(clampedTo);
   const workingDays = countWorkingDays(fromDate, toDate);
 
   const [agentResult, visitDetailResult] = await Promise.all([
@@ -91,9 +103,12 @@ export async function fetchItineraryAnalysisData(
     //
     // Team linkage comes from group_role_members (role_in_group='caravan').
     // Caravans without a group assignment fall back to 'UNASSIGNED'.
+    // Raw name parts are selected so TypeScript can format them consistently.
     //
     db.query<{
-      user_id: string; agent_name: string; team_name: string;
+      user_id: string;
+      first_name: string; middle_name: string | null; last_name: string;
+      team_name: string;
       total_visits: string; total_releases: string;
       r_deceased: string; r_for_processing: string; r_for_verification: string;
       r_interested: string; r_loan_inquiry: string; r_moved_out: string;
@@ -114,7 +129,9 @@ export async function fetchItineraryAnalysisData(
       )
       SELECT
         u.id                                                              AS user_id,
-        u.first_name || ' ' || u.last_name                               AS agent_name,
+        u.first_name,
+        u.middle_name,
+        u.last_name,
         COALESCE(g.name, 'UNASSIGNED')                                    AS team_name,
         COUNT(DISTINCT v.id)                                              AS total_visits,
         COUNT(DISTINCT r.id)                                              AS total_releases,
@@ -151,25 +168,35 @@ export async function fetchItineraryAnalysisData(
         AND r.created_at::date BETWEEN $1 AND $2
         AND r.status IN ('approved', 'released')
       WHERE u.role = 'caravan'
-      GROUP BY u.id, u.first_name, u.last_name, g.name
+      GROUP BY u.id, u.first_name, u.middle_name, u.last_name, g.name
       ORDER BY team_name, u.last_name, u.first_name
-    `, [from, to]),
+    `, [from, clampedTo]),
 
     // ── Visit detail query ───────────────────────────────────────────────────
     //
     // Team linkage via group_role_members (role_in_group='caravan').
+    // Raw name parts returned for TypeScript formatting.
     //
     db.query<{
-      id: string; created_at: string; agent_name: string; team_name: string;
-      client_name: string; visit_reason: string | null;
+      id: string; created_at: string;
+      u_first_name: string; u_middle_name: string | null; u_last_name: string;
+      team_name: string;
+      c_first_name: string | null; c_middle_name: string | null;
+      c_last_name: string | null; c_ext_name: string | null;
+      visit_reason: string | null;
       reason_category: string | null; remarks: string | null;
     }>(`
       SELECT
         v.id,
         v.time_in::text                              AS created_at,
-        u.first_name || ' ' || u.last_name          AS agent_name,
+        u.first_name                                 AS u_first_name,
+        u.middle_name                                AS u_middle_name,
+        u.last_name                                  AS u_last_name,
         COALESCE(g.name, 'UNASSIGNED')              AS team_name,
-        c.first_name || ' ' || c.last_name          AS client_name,
+        c.first_name                                 AS c_first_name,
+        c.middle_name                                AS c_middle_name,
+        c.last_name                                  AS c_last_name,
+        c.ext_name                                   AS c_ext_name,
         tr.label                                     AS visit_reason,
         tr.category                                  AS reason_category,
         v.remarks
@@ -184,13 +211,14 @@ export async function fetchItineraryAnalysisData(
       LEFT JOIN touchpoint_reasons tr ON tr.reason_code = v.reason
       WHERE v.time_in::date BETWEEN $1 AND $2
         AND u.role = 'caravan'
-      ORDER BY team_name, agent_name, v.time_in ASC
-    `, [from, to]),
+      ORDER BY team_name, u.last_name, u.first_name, v.time_in ASC
+    `, [from, clampedTo]),
   ]);
 
   const agents: AgentRow[] = agentResult.rows.map(r => ({
     user_id:              r.user_id,
-    agent_name:           r.agent_name,
+    agent_nickname:       caravanNickname({ first_name: r.first_name, last_name: r.last_name }),
+    agent_full_name:      formatCaravanFullName({ first_name: r.first_name, middle_name: r.middle_name, last_name: r.last_name }),
     team_name:            r.team_name,
     total_visits:         parseInt(r.total_visits),
     total_releases:       parseInt(r.total_releases),
@@ -211,7 +239,17 @@ export async function fetchItineraryAnalysisData(
     absent_weekdays:      parseInt(r.absent_weekdays),
   }));
 
-  const visitDetails: VisitDetailRow[] = visitDetailResult.rows;
+  const visitDetails: VisitDetailRow[] = visitDetailResult.rows.map(r => ({
+    id:             r.id,
+    created_at:     r.created_at,
+    agent_nickname: caravanNickname({ first_name: r.u_first_name, last_name: r.u_last_name }),
+    agent_full_name: formatCaravanFullName({ first_name: r.u_first_name, middle_name: r.u_middle_name, last_name: r.u_last_name }),
+    team_name:      r.team_name,
+    client_name:    formatClientName({ first_name: r.c_first_name, middle_name: r.c_middle_name, last_name: r.c_last_name, ext_name: r.c_ext_name }),
+    visit_reason:   r.visit_reason,
+    reason_category: r.reason_category,
+    remarks:        r.remarks,
+  }));
 
   return { agents, visitDetails, workingDays };
 }
@@ -230,13 +268,16 @@ export async function generateItineraryAnalysisReport(
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string; rowCount: number }> {
   await onProgress?.(5, 'Preparing query…');
   await onProgress?.(20, 'Fetching data…');
+  // clampEndDate is also applied inside fetchItineraryAnalysisData, but clamp
+  // the fileName's `to` here too so file names are honest.
+  const clampedTo = clampEndDate(to);
   const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(db, from, to);
   await onProgress?.(60, 'Processing rows…');
 
   const buffer = await buildWorkbook(agents, visitDetails, workingDays);
   await onProgress?.(80, 'Uploading…');
 
-  const fileName    = `itinerary-analysis-${from}-${to}-${Date.now()}.xlsx`;
+  const fileName    = `itinerary-analysis-${from}-${clampedTo}-${Date.now()}.xlsx`;
   const downloadUrl = await uploadToS3(s3Client, s3Bucket, fileName, buffer);
   await onProgress?.(95, 'Finalizing…');
 
@@ -246,22 +287,77 @@ export async function generateItineraryAnalysisReport(
   return { buffer, fileName, downloadUrl, rowCount };
 }
 
-// ─── Column headers (A–AF, 32 columns) ───────────────────────────────────────
-// Index:  0        1           2                              3
-// Col:    A        B           C                              D
-// ...
-// Index:  17       18          19          20            21             22               23               24             25             26             27                       28              29                              30               31
-// Col:    R        S           T           U             V              W                X                Y              Z              AA             AB                       AC              AD                              AE               AF
+// ─── Column headers (A–AG, 33 columns) ───────────────────────────────────────
+//
+// Column layout (0-indexed):
+//  0  A  TEAM'S
+//  1  B  Caravan          (nickname, e.g. "MMORSIQUILLO")
+//  2  C  Caravan Name     (NEW: full formatted name, e.g. "MORSIQUILLO, MARK BAUTISTA")
+//  3  D  Total Production UDI Amount
+//  4  E  Total Production No. of acc.
+//  5  F  Deceased
+//  6  G  For Processing
+//  7  H  For Verification
+//  8  I  Interested
+//  9  J  Loan Inquiry
+// 10  K  Moved Out
+// 11  L  Borrowed
+// 12  M  Not Around
+// 13  N  Not Interested
+// 14  O  Overaged
+// 15  P  Poor Health
+// 16  Q  Undecided
+// 17  R  With Existing Loan
+// 18  S  Grand Total
+// 19  T  Borrowed (releases duplicate)
+// 20  U  Target Itinerary
+// 21  V  Total Deficit
+// 22  W  Less Releases
+// 23  X  Adjusted Target
+// 24  Y  Adjusted Deficit
+// 25  Z  Final Target
+// 26  AA Final Deficit
+// 27  AB Achievement %
+// 28  AC Leave/Meeting/Absent
+// 29  AD Quality Visit
+// 30  AE Quality Visit vs Itinerary %
+// 31  AF % Conversion
+// 32  AG Average Quality Visit
 
 const HEADERS = [
-  "TEAM'S", "Caravan's", "Total Production UDI Amount", "Total Production No. of acc.",
-  "Deceased", "For Processing", "For Verification", "Interested",
-  "Loan Inquiry", "Moved Out", "Borrowed", "Not Around", "Not Interested",
-  "Overaged", "Poor Health", "Undecided", "With Existing Loan",
-  "Grand Total", "Borrowed", "Target Itinerary", "Total Deficit", "Less Releases",
-  "Adjusted Target", "Adjusted Deficit", "Final Target", "Final Deficit",
-  "Achievement %", "Leave/Meeting/Absent", "Quality Visit",
-  "Quality Visit vs Itinerary %", "% Conversion", "Average Quality Visit",
+  "TEAM'S",                       // A [0]
+  "Caravan",                      // B [1]  — was "Caravan's"
+  "Caravan Name",                  // C [2]  — NEW column
+  "Total Production UDI Amount",   // D [3]
+  "Total Production No. of acc.",  // E [4]
+  "Deceased",                      // F [5]
+  "For Processing",                // G [6]
+  "For Verification",              // H [7]
+  "Interested",                    // I [8]
+  "Loan Inquiry",                  // J [9]
+  "Moved Out",                     // K [10]
+  "Borrowed",                      // L [11]
+  "Not Around",                    // M [12]
+  "Not Interested",                // N [13]
+  "Overaged",                      // O [14]
+  "Poor Health",                   // P [15]
+  "Undecided",                     // Q [16]
+  "With Existing Loan",            // R [17]
+  "Grand Total",                   // S [18]
+  "Borrowed",                      // T [19]
+  "Target Itinerary",              // U [20]
+  "Total Deficit",                 // V [21]
+  "Less Releases",                 // W [22]
+  "Adjusted Target",               // X [23]
+  "Adjusted Deficit",              // Y [24]
+  "Final Target",                  // Z [25]
+  "Final Deficit",                 // AA [26]
+  "Achievement %",                 // AB [27]
+  "Leave/Meeting/Absent",          // AC [28]
+  "Quality Visit",                 // AD [29]
+  "Quality Visit vs Itinerary %",  // AE [30]
+  "% Conversion",                  // AF [31]
+  "Average Quality Visit",         // AG [32]
 ];
 
 // ─── Row builders ─────────────────────────────────────────────────────────────
@@ -283,38 +379,39 @@ function buildAgentRowValues(agent: AgentRow, _workingDays: number): (string | n
   const AF = parseFloat((AC / TARGET_WORKING_DAYS).toFixed(2));
 
   return [
-    agent.team_name,    // A  [0]
-    agent.agent_name,   // B  [1]
-    0,                  // C  [2]: UDI Amount (placeholder)
-    D,                  // D  [3]: acc count = releases
-    agent.r_deceased,           // E  [4]
-    agent.r_for_processing,     // F  [5]
-    agent.r_for_verification,   // G  [6]
-    agent.r_interested,         // H  [7]
-    agent.r_loan_inquiry,       // I  [8]
-    agent.r_moved_out,          // J  [9]
-    agent.r_borrowed,           // K  [10]
-    agent.r_not_around,         // L  [11]
-    agent.r_not_interested,     // M  [12]
-    agent.r_overaged,           // N  [13]
-    agent.r_poor_health,        // O  [14]
-    agent.r_undecided,          // P  [15]
-    agent.r_with_existing_loan, // Q  [16]
-    R,                  // R  [17]: Grand Total = total_visits
-    D,                  // S  [18]: Borrowed duplicate = D (releases)
-    T,                  // T  [19]: Target Itinerary = 375
-    T - R,              // U  [20]: Total Deficit
-    V,                  // V  [21]: Less Releases
-    W,                  // W  [22]: Adjusted Target
-    X,                  // X  [23]: Adjusted Deficit (effective working days)
-    Y,                  // Y  [24]: Final Target (daily avg)
-    Z,                  // Z  [25]: Final Deficit
-    AA,                 // AA [26]: Achievement %
-    AB,                 // AB [27]: Leave/Meeting/Absent (absent weekdays)
-    AC,                 // AC [28]: Quality Visit
-    AD,                 // AD [29]: Quality Visit vs Itinerary %
-    AE,                 // AE [30]: % Conversion
-    AF,                 // AF [31]: Average Quality Visit
+    agent.team_name,        // A  [0]
+    agent.agent_nickname,   // B  [1]: Caravan (nickname)
+    agent.agent_full_name,  // C  [2]: Caravan Name (NEW)
+    0,                      // D  [3]: UDI Amount (placeholder)
+    D,                      // E  [4]: acc count = releases
+    agent.r_deceased,               // F  [5]
+    agent.r_for_processing,         // G  [6]
+    agent.r_for_verification,       // H  [7]
+    agent.r_interested,             // I  [8]
+    agent.r_loan_inquiry,           // J  [9]
+    agent.r_moved_out,              // K  [10]
+    agent.r_borrowed,               // L  [11]
+    agent.r_not_around,             // M  [12]
+    agent.r_not_interested,         // N  [13]
+    agent.r_overaged,               // O  [14]
+    agent.r_poor_health,            // P  [15]
+    agent.r_undecided,              // Q  [16]
+    agent.r_with_existing_loan,     // R  [17]
+    R,                      // S  [18]: Grand Total = total_visits
+    D,                      // T  [19]: Borrowed duplicate = D (releases)
+    T,                      // U  [20]: Target Itinerary = 375
+    T - R,                  // V  [21]: Total Deficit
+    V,                      // W  [22]: Less Releases
+    W,                      // X  [23]: Adjusted Target
+    X,                      // Y  [24]: Adjusted Deficit (effective working days)
+    Y,                      // Z  [25]: Final Target (daily avg)
+    Z,                      // AA [26]: Final Deficit
+    AA,                     // AB [27]: Achievement %
+    AB,                     // AC [28]: Leave/Meeting/Absent (absent weekdays)
+    AC,                     // AD [29]: Quality Visit
+    AD,                     // AE [30]: Quality Visit vs Itinerary %
+    AE,                     // AF [31]: % Conversion
+    AF,                     // AG [32]: Average Quality Visit
   ];
 }
 
@@ -338,7 +435,7 @@ function buildTeamTotalRow(teamName: string, teamAgents: AgentRow[], _workingDay
   const AF = parseFloat((AC / TARGET_WORKING_DAYS).toFixed(2));
 
   return [
-    teamName, 'TOTAL',
+    teamName, 'TOTAL', '',         // A=team, B=TOTAL, C=empty (Caravan Name)
     0, D,
     sum('r_deceased'), sum('r_for_processing'), sum('r_for_verification'),
     sum('r_interested'), sum('r_loan_inquiry'), sum('r_moved_out'), sum('r_borrowed'),
@@ -378,12 +475,13 @@ function applyHeaderRow(sheet: ExcelJS.Worksheet): void {
 
 function setColumnWidths(sheet: ExcelJS.Worksheet): void {
   sheet.getColumn(1).width = 20;  // A: Team
-  sheet.getColumn(2).width = 25;  // B: Agent
-  sheet.getColumn(3).width = 15;  // C: UDI
-  sheet.getColumn(4).width = 10;  // D: Acc
-  for (let i = 5; i <= 18; i++) sheet.getColumn(i).width = 12;   // E–R
-  for (let i = 19; i <= 26; i++) sheet.getColumn(i).width = 12;  // S–Z
-  for (let i = 27; i <= 32; i++) sheet.getColumn(i).width = 14;  // AA–AF
+  sheet.getColumn(2).width = 18;  // B: Caravan (nickname)
+  sheet.getColumn(3).width = 30;  // C: Caravan Name (NEW — full formatted)
+  sheet.getColumn(4).width = 15;  // D: UDI Amount
+  sheet.getColumn(5).width = 10;  // E: Acc count
+  for (let i = 6; i <= 19; i++) sheet.getColumn(i).width = 12;   // F–S (reason breakdown + Grand Total)
+  for (let i = 20; i <= 27; i++) sheet.getColumn(i).width = 12;  // T–AA (target/deficit math)
+  for (let i = 28; i <= 33; i++) sheet.getColumn(i).width = 14;  // AB–AG (achievement/quality cols)
 }
 
 function addDataRows(
@@ -452,15 +550,17 @@ export async function buildWorkbook(
   }
 
   // Visit Detail sheet
+  // Columns: Date | Caravan (nickname) | Caravan Name (full) | Team | Client | Reason | Category | Remarks
   const detail = wb.addWorksheet('Visit Detail');
   detail.columns = [
-    { header: 'Date',     key: 'created_at',      width: 20 },
-    { header: 'Agent',    key: 'agent_name',       width: 25 },
-    { header: 'Team',     key: 'team_name',        width: 20 },
-    { header: 'Client',   key: 'client_name',      width: 25 },
-    { header: 'Reason',   key: 'visit_reason',     width: 20 },
-    { header: 'Category', key: 'reason_category',  width: 15 },
-    { header: 'Remarks',  key: 'remarks',          width: 40 },
+    { header: 'Date',         key: 'created_at',      width: 20 },
+    { header: 'Caravan',      key: 'agent_nickname',   width: 18 },
+    { header: 'Caravan Name', key: 'agent_full_name',  width: 30 },
+    { header: 'Team',         key: 'team_name',        width: 20 },
+    { header: 'Client',       key: 'client_name',      width: 30 },
+    { header: 'Reason',       key: 'visit_reason',     width: 20 },
+    { header: 'Category',     key: 'reason_category',  width: 15 },
+    { header: 'Remarks',      key: 'remarks',          width: 40 },
   ];
   const detailHeader = detail.getRow(1);
   detailHeader.eachCell(cell => {
@@ -473,7 +573,8 @@ export async function buildWorkbook(
   for (const v of visitDetails) {
     detail.addRow({
       created_at:      v.created_at,
-      agent_name:      v.agent_name,
+      agent_nickname:  v.agent_nickname,
+      agent_full_name: v.agent_full_name,
       team_name:       v.team_name,
       client_name:     v.client_name,
       visit_reason:    v.visit_reason ?? '',
