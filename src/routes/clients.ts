@@ -118,20 +118,20 @@ export function buildClientFilters(
   const params: any[] = [];
   let idx = startIdx;
 
-  function applyMultiFilter(raw: string | string[] | undefined, col: string) {
+  function applyMultiFilter(raw: string | string[] | undefined, col: string, castType: string = 'text') {
     if (!raw) return;
     const values = Array.isArray(raw)
       ? raw.filter(v => v && v !== 'all')
       : raw.split(',').map(v => v.trim()).filter(v => v && v !== 'all');
     if (values.length === 0) return;
-    conditions.push(`${col} = ANY($${idx}::text[])`);
+    conditions.push(`${col} = ANY($${idx}::${castType}[])`);
     params.push(values);
     idx++;
   }
 
-  applyMultiFilter(q.client_type, 'c.client_type');
+  applyMultiFilter(q.client_type, 'c.client_type', 'client_type_enum');
   applyMultiFilter(q.product_type, 'c.product_type');
-  applyMultiFilter(q.market_type, 'c.market_type');
+  applyMultiFilter(q.market_type, 'c.market_type', 'market_type_enum');
   applyMultiFilter(q.pension_type, 'c.pension_type');
   applyMultiFilter(q.loan_type, 'c.loan_type');
 
@@ -2575,7 +2575,7 @@ clients.get('/search/unassigned', authMiddleware, async (c) => {
 
     if (clientType && clientType !== 'all') {
       const values = clientType.split(',').map((v: string) => v.trim()).filter(Boolean);
-      conditions.push(`c.client_type = ANY($${paramIndex}::text[])`);
+      conditions.push(`c.client_type = ANY($${paramIndex}::client_type_enum[])`);
       params.push(values);
       paramIndex++;
     }

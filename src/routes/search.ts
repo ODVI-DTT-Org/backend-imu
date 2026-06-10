@@ -62,13 +62,13 @@ search.post('/full-text', authMiddleware, requirePermission('clients', 'read'), 
 
           // Apply filters
           if (filters.client_type?.length) {
-            conditions.push(`client_type = ANY($${paramIndex})`);
+            conditions.push(`client_type = ANY($${paramIndex}::client_type_enum[])`);
             params.push(filters.client_type);
             paramIndex++;
           }
 
           if (filters.market_type?.length) {
-            conditions.push(`market_type = ANY($${paramIndex})`);
+            conditions.push(`market_type = ANY($${paramIndex}::market_type_enum[])`);
             params.push(filters.market_type);
             paramIndex++;
           }
