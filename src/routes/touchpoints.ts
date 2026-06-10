@@ -5,6 +5,7 @@ import { requirePermission } from '../middleware/permissions.js';
 import { auditMiddleware } from '../middleware/audit.js';
 import { pool } from '../db/index.js';
 import { validateTouchpointLocation } from '../services/gps-validation.js';
+import { applyTouchpointLifecycle } from '../services/lifecycle.service.js';
 import {
   ValidationError,
   NotFoundError,
@@ -839,32 +840,57 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
       }
     }
 
-    const result = await pool.query(
-      `INSERT INTO touchpoints (
-        id, client_id, user_id, touchpoint_number, type, date, rejection_reason, visit_id, call_id
-      ) VALUES (
-        COALESCE($1, uuid_generate_v4()), $2, $3,
-        (SELECT GREATEST(
-           COALESCE((SELECT MAX(t2.touchpoint_number) FROM touchpoints t2 WHERE t2.client_id = $2), 0),
-           COALESCE((SELECT MAX((e->>'touchpoint_number')::int) FROM clients c2, jsonb_array_elements(c2.touchpoint_summary) e WHERE c2.id = $2), 0)
-         ) + 1),  -- Atomic: max of DB rows and legacy JSONB entries
-        $4, COALESCE($5::date, CURRENT_DATE), $6, $7, $8
-      ) ON CONFLICT (id) DO UPDATE SET updated_at = touchpoints.updated_at
-      RETURNING *`,
-      [
-        validated.id ?? null,
-        validated.client_id, validated.user_id, validated.type,
-        validated.date ?? null, validated.rejection_reason, visitId, callId
-      ]
-    );
+    // === Transactional insert + lifecycle transition ===
+    const dbClient = await pool.connect();
+    let result: any;
+    try {
+      await dbClient.query('BEGIN');
 
-    // Mark ALL itineraries for this client as 'completed' when touchpoint is submitted
-    // This ensures the client is removed from itinerary lists across all date tabs
-    await pool.query(
-      `UPDATE itineraries SET status = 'completed', updated_at = NOW()
-       WHERE client_id = $1 AND status = 'pending'`,
-      [validated.client_id]
-    );
+      result = await dbClient.query(
+        `INSERT INTO touchpoints (
+          id, client_id, user_id, touchpoint_number, type, date, rejection_reason, visit_id, call_id
+        ) VALUES (
+          COALESCE($1, uuid_generate_v4()), $2, $3,
+          (SELECT GREATEST(
+             COALESCE((SELECT MAX(t2.touchpoint_number) FROM touchpoints t2 WHERE t2.client_id = $2), 0),
+             COALESCE((SELECT MAX((e->>'touchpoint_number')::int) FROM clients c2, jsonb_array_elements(c2.touchpoint_summary) e WHERE c2.id = $2), 0)
+           ) + 1),  -- Atomic: max of DB rows and legacy JSONB entries
+          $4, COALESCE($5::date, CURRENT_DATE), $6, $7, $8
+        ) ON CONFLICT (id) DO UPDATE SET updated_at = touchpoints.updated_at
+        RETURNING *`,
+        [
+          validated.id ?? null,
+          validated.client_id, validated.user_id, validated.type,
+          validated.date ?? null, validated.rejection_reason, visitId, callId
+        ]
+      );
+
+      // Apply client lifecycle transition (client_type + market_type) in same transaction.
+      // The DB trigger (1104) is a backstop: its NOT EXISTS guard prevents duplicates
+      // if this handler path writes history rows first.
+      await applyTouchpointLifecycle(
+        dbClient,
+        result.rows[0].id,
+        validated.client_id,
+        (validated.user_id ?? user.sub) as string,
+        visitId ?? null,
+        callId ?? null,
+      );
+
+      // Mark ALL itineraries for this client as 'completed' when touchpoint is submitted
+      await dbClient.query(
+        `UPDATE itineraries SET status = 'completed', updated_at = NOW()
+         WHERE client_id = $1 AND status = 'pending'`,
+        [validated.client_id]
+      );
+
+      await dbClient.query('COMMIT');
+    } catch (txError) {
+      await dbClient.query('ROLLBACK');
+      throw txError;
+    } finally {
+      dbClient.release();
+    }
 
     // ============================================
     // TOUCHPOINT SUMMARY: Update client's denormalized touchpoint data
