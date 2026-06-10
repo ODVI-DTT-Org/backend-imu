@@ -225,6 +225,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
           const r = await generateDailyVisitsReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
+            group_ids: params?.group_ids, user_ids: params?.user_ids,
           }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_daily_visits'], failed: [],
@@ -238,6 +239,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const to   = params?.endDate   ?? new Date().toISOString().split('T')[0];
           const r = await generateDailyCallsReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
+            group_ids: params?.group_ids, user_ids: params?.user_ids,
           }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_daily_calls'], failed: [],
@@ -252,6 +254,7 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
           const r = await generateCaravanReleasesReport(pool, this.s3Client, this.s3Bucket, {
             startDate: from, endDate: to, userId: params?.userId,
             productType: params?.product_type, loanType: params?.loan_type, status: params?.status,
+            group_ids: params?.group_ids, user_ids: params?.user_ids,
           }, onProgress);
           return {
             success: true, total: 1, succeeded: ['report_caravan_releases'], failed: [],

@@ -8,6 +8,7 @@
 import { Pool } from 'pg';
 import { S3Client } from '@aws-sdk/client-s3';
 import { generateSimpleXlsxReport } from './simple-report-helper.js';
+import { caravanNickname, formatCaravanFullName, formatClientName } from '../../../utils/name-format.js';
 
 export interface CaravanReleasesParams {
   startDate?: string;
@@ -16,6 +17,10 @@ export interface CaravanReleasesParams {
   productType?: string;
   loanType?: string;
   status?: string;
+  /** Filter to agents belonging to these group IDs (via group_role_members caravan role). */
+  group_ids?: string[];
+  /** Filter to these specific user IDs. */
+  user_ids?: string[];
 }
 
 export type ProgressCallback = (pct: number, message: string) => Promise<void>;
@@ -35,6 +40,10 @@ export async function generateCaravanReleasesReport(
     new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
       .toISOString()
       .split('T')[0];
+
+  // Normalize filters: null means "no filter" (include all)
+  const groupIds = params.group_ids?.length ? params.group_ids : null;
+  const userIds  = params.user_ids?.length  ? params.user_ids  : null;
 
   const queryParams: any[] = [];
   let paramIndex = 1;
@@ -65,18 +74,41 @@ export async function generateCaravanReleasesReport(
     queryParams.push(params.status);
   }
 
+  // Team filter: EXISTS to avoid JOIN multiplication (users may have multiple grm rows)
+  if (groupIds) {
+    whereClause += ` AND EXISTS (
+      SELECT 1 FROM group_role_members grm
+      WHERE grm.user_id = r.user_id
+        AND grm.role_in_group = 'caravan'
+        AND grm.deleted_at IS NULL
+        AND grm.group_id = ANY($${paramIndex++}::uuid[])
+    )`;
+    queryParams.push(groupIds);
+  }
+
+  // Individual user filter
+  if (userIds) {
+    whereClause += ` AND r.user_id = ANY($${paramIndex++}::uuid[])`;
+    queryParams.push(userIds);
+  }
+
   await onProgress?.(5, 'Preparing query…');
 
   const sql = `
     SELECT
       r.created_at,
       r.reference_number,
-      cl.first_name || ' ' || cl.last_name         AS client_name,
+      cl.first_name                                AS c_first_name,
+      cl.middle_name                               AS c_middle_name,
+      cl.last_name                                 AS c_last_name,
+      cl.ext_name                                  AS c_ext_name,
       cl.phone                                     AS client_phone,
       cl.agency_name                               AS client_agency,
       cl.pension_type,
       cl.market_type,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       r.product_type,
       r.loan_type,
       r.udi_number,
@@ -111,7 +143,15 @@ export async function generateCaravanReleasesReport(
   const result = await pool.query(sql, queryParams);
   await onProgress?.(60, 'Processing rows…');
 
-  const rowCount = result.rows.length;
+  // Map raw name parts to formatted display names
+  const rows = result.rows.map(r => ({
+    ...r,
+    client_name:  formatClientName({ first_name: r.c_first_name, middle_name: r.c_middle_name, last_name: r.c_last_name, ext_name: r.c_ext_name }),
+    caravan:      caravanNickname({ first_name: r.u_first_name, last_name: r.u_last_name }),
+    caravan_name: formatCaravanFullName({ first_name: r.u_first_name, middle_name: r.u_middle_name, last_name: r.u_last_name }),
+  }));
+
+  const rowCount = rows.length;
   return generateSimpleXlsxReport({
     s3Client,
     s3Bucket,
@@ -127,7 +167,8 @@ export async function generateCaravanReleasesReport(
           { header: 'Client Agency',        key: 'client_agency',       width: 28 },
           { header: 'Pension Type',         key: 'pension_type',        width: 16 },
           { header: 'Market Type',          key: 'market_type',         width: 16 },
-          { header: 'Agent Name',           key: 'agent_name',          width: 28 },
+          { header: 'Caravan',              key: 'caravan',             width: 18 },
+          { header: 'Caravan Name',         key: 'caravan_name',        width: 30 },
           { header: 'Product Type',         key: 'product_type',        width: 16 },
           { header: 'Loan Type',            key: 'loan_type',           width: 16 },
           { header: 'UDI Number',           key: 'udi_number',          width: 18 },
@@ -151,7 +192,7 @@ export async function generateCaravanReleasesReport(
           { header: 'Odometer Arrival',     key: 'odometer_arrival',    width: 18 },
           { header: 'KM Traveled',          key: 'kilometers_traveled', width: 14 },
         ],
-        rows: result.rows,
+        rows,
       },
     ],
   }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return { ...r, rowCount }; });
