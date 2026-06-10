@@ -1018,11 +1018,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       try {
         const notes = JSON.parse(approval.notes);
 
-        // Mobile may send either `street` or `street_address`; populate both
-        // columns for consistency. lat/lng are optional (new add-address sheet
-        // does not capture them) — coalesce undefined to null so pg doesn't
-        // throw on missing bind params.
-        const streetText = notes.street_address ?? notes.street ?? null;
+        // Mobile may send `full_address`, `street_address`, or `street`;
+        // populate all three columns for consistency. lat/lng are optional
+        // (new add-address sheet does not capture them) — coalesce undefined
+        // to null so pg doesn't throw on missing bind params.
+        const streetText = notes.full_address ?? notes.street_address ?? notes.street ?? null;
         const psgcId = notes.psgc_id ?? null;
         const lat = notes.latitude ?? null;
         const lng = notes.longitude ?? null;
@@ -1031,10 +1031,10 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
         await client.query(`
           INSERT INTO addresses (
-            id, client_id, type, street, street_address, psgc_id,
+            id, client_id, type, street, street_address, full_address, psgc_id,
             barangay, city, province, postal_code, latitude, longitude, is_primary
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $3, $4,
+            gen_random_uuid(), $1, $2, $3, $3, $3, $4,
             $5, $6, $7, $8, $9, $10, $11
           )
         `, [
@@ -1507,13 +1507,13 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         // For address_add approvals, INSERT into addresses (mirrors single-approve handler)
         if (approval.type === 'address_add') {
           const notes = JSON.parse(approval.notes || '{}');
-          const streetText = notes.street_address ?? notes.street ?? null;
+          const streetText = notes.full_address ?? notes.street_address ?? notes.street ?? null;
           await client.query(`
             INSERT INTO addresses (
-              id, client_id, type, street, street_address, psgc_id,
+              id, client_id, type, street, street_address, full_address, psgc_id,
               barangay, city, province, postal_code, latitude, longitude, is_primary
             ) VALUES (
-              gen_random_uuid(), $1, $2, $3, $3, $4,
+              gen_random_uuid(), $1, $2, $3, $3, $3, $4,
               $5, $6, $7, $8, $9, $10, $11
             )
           `, [
@@ -1535,7 +1535,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         if (approval.type === 'address_edit') {
           const notes = JSON.parse(approval.notes || '{}');
           const { address_id, ...fields } = notes;
-          const allowed = ['type', 'street', 'street_address', 'barangay', 'city', 'province',
+          const allowed = ['type', 'street', 'street_address', 'full_address', 'barangay', 'city', 'province',
                            'postal_code', 'latitude', 'longitude', 'is_primary', 'psgc_id'];
           const updates: string[] = [];
           const vals: any[] = [];
@@ -1857,7 +1857,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
         validated.client_id,
         user.sub, // user_id
         7, // touchpoint_number - final touchpoint
-        'Visit', // type - touchpoint #7 is a Visit
+        'Loan Release', // type - loan release touchpoints use their own type
         'Loan released', // reason
         'Completed', // status - loan is released
       ]
@@ -2118,7 +2118,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           INSERT INTO touchpoints (
             id, client_id, user_id, touchpoint_number, type, date, rejection_reason, visit_id, call_id, status, notes
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, 'Visit', CURRENT_DATE, 'Loan Release', $4, NULL, 'Completed', $5
+            gen_random_uuid(), $1, $2, $3, 'Loan Release', CURRENT_DATE, NULL, $4, NULL, 'Completed', $5
           )
         `, [validated.client_id, user.sub, touchpointNumber, activityId, validated.notes ?? null]);
         shouldRefreshTouchpointSummary = true;

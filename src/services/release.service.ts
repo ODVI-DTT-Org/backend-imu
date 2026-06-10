@@ -1,8 +1,11 @@
 import { pool } from '../db/index.js';
 import { z } from 'zod';
+import { applyReleaseLifecycle } from './lifecycle.service.js';
 
 // Validation schemas
-export const createReleaseSchema = z.object({
+
+// Base object shape (no superRefine) — used for .partial() derivation
+const releaseBaseObject = z.object({
   id: z.string().uuid('Invalid release ID format').optional(),
   client_id: z.string().uuid('Invalid client ID format'),
   user_id: z.string().uuid('Invalid user ID format'),
@@ -17,9 +20,31 @@ export const createReleaseSchema = z.object({
   remarks: z.string().max(2000).optional(),
   approval_notes: z.string().max(2000).optional(),
   status: z.enum(['pending', 'approved', 'rejected', 'disbursed']).default('pending'),
+  // Agent fields (nullable for old APK compat)
+  with_agent: z.boolean().nullable().optional(),
+  agent_id: z.string().uuid('Invalid agent ID format').nullable().optional(),
+  no_agent_reason: z.string().max(1000).nullable().optional(),
 });
 
-export const updateReleaseSchema = createReleaseSchema.partial().extend({
+// createReleaseSchema adds the agent XOR validation on top of the base shape
+export const createReleaseSchema = releaseBaseObject.superRefine((data, ctx) => {
+  // XOR validation: if with_agent is provided, enforce mutual exclusivity
+  if (data.with_agent === true && !data.agent_id) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'agent_id is required when with_agent is true', path: ['agent_id'] });
+  }
+  if (data.with_agent === true && data.no_agent_reason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'no_agent_reason must not be provided when with_agent is true', path: ['no_agent_reason'] });
+  }
+  if (data.with_agent === false && !data.no_agent_reason) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'no_agent_reason is required when with_agent is false', path: ['no_agent_reason'] });
+  }
+  if (data.with_agent === false && data.agent_id) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'agent_id must not be provided when with_agent is false', path: ['agent_id'] });
+  }
+});
+
+// updateReleaseSchema is based on the base object (no XOR needed for partial updates)
+export const updateReleaseSchema = releaseBaseObject.partial().extend({
   approved_by: z.string().uuid().optional(),
   approved_at: z.coerce.date().optional(),
 });
@@ -39,6 +64,10 @@ export interface Release {
   approved_at?: Date;    // Approval timestamp
   created_at?: Date;
   updated_at?: Date;
+  // Agent fields (nullable for old APK compat)
+  with_agent?: boolean | null;
+  agent_id?: string | null;
+  no_agent_reason?: string | null;
 }
 
 // Allowlist of updateable fields to prevent SQL injection
@@ -51,6 +80,9 @@ const UPDATEABLE_RELEASE_FIELDS = [
   'status',
   'approved_by',
   'approved_at',
+  'with_agent',
+  'agent_id',
+  'no_agent_reason',
 ];
 
 export const releaseService = {
@@ -104,15 +136,56 @@ export const releaseService = {
     // Validate input data
     const validated = createReleaseSchema.parse(data);
 
-    const result = await pool.query(
-      `INSERT INTO releases (id, client_id, user_id, visit_id, product_type, loan_type, udi_number, approval_notes, remarks, status)
-       VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (id) DO UPDATE SET updated_at = releases.updated_at
-       RETURNING *`,
-      [validated.id ?? null, validated.client_id, validated.user_id, validated.visit_id, validated.product_type,
-       validated.loan_type, validated.udi_number ?? null, validated.approval_notes, validated.remarks ?? null, validated.status]
-    );
-    return result.rows[0];
+    const dbClient = await pool.connect();
+    try {
+      await dbClient.query('BEGIN');
+
+      const result = await dbClient.query(
+        `INSERT INTO releases (
+           id, client_id, user_id, visit_id, product_type, loan_type, udi_number,
+           approval_notes, remarks, status,
+           with_agent, agent_id, no_agent_reason
+         )
+         VALUES (COALESCE($1, uuid_generate_v4()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ON CONFLICT (id) DO UPDATE SET updated_at = releases.updated_at
+         RETURNING *`,
+        [
+          validated.id ?? null,
+          validated.client_id,
+          validated.user_id,
+          validated.visit_id,
+          validated.product_type ?? null,
+          validated.loan_type ?? null,
+          validated.udi_number ?? null,
+          validated.approval_notes ?? null,
+          validated.remarks ?? null,
+          validated.status,
+          validated.with_agent ?? null,
+          validated.agent_id ?? null,
+          validated.no_agent_reason ?? null,
+        ]
+      );
+
+      const release = result.rows[0];
+
+      // Apply client lifecycle transition (market_type) in same transaction.
+      // The DB trigger (1104) is a backstop: its NOT EXISTS guard prevents duplicates
+      // if this handler path writes history rows first.
+      await applyReleaseLifecycle(
+        dbClient,
+        release.id,
+        release.client_id,
+        release.user_id,
+      );
+
+      await dbClient.query('COMMIT');
+      return release;
+    } catch (err) {
+      await dbClient.query('ROLLBACK');
+      throw err;
+    } finally {
+      dbClient.release();
+    }
   },
 
   async update(id: string, data: Partial<Release>): Promise<Release | null> {

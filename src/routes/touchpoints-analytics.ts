@@ -87,7 +87,7 @@ touchpointsAnalytics.get('/', authMiddleware, async (c) => {
 
     // Client type filter
     if (parsedClientTypes) {
-      conditions.push(`c.client_type = ANY($${paramIndex})`);
+      conditions.push(`c.client_type = ANY($${paramIndex}::client_type_enum[])`);
       params.push(parsedClientTypes);
       paramIndex++;
     }
