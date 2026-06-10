@@ -214,7 +214,7 @@ export class CsvExportsProcessor extends BaseProcessor<ReportJobData, JobResult>
     }
 
     if (clientType) {
-      conditions.push(`c.client_type = $${paramIndex}`);
+      conditions.push(`c.client_type = $${paramIndex}::client_type_enum`);
       queryParams.push(clientType);
       paramIndex++;
     }

@@ -28,9 +28,12 @@ const LABEL_MAP: Record<string, string> = {
   'Visit': 'Visit',
   'Call': 'Call',
 
-  // Client types
+  // Client types (client_type_enum)
   'POTENTIAL': 'Potential',
-  'EXISTING': 'Existing',
+  'FAVORABLE': 'Favorable',
+  'UNFAVORABLE': 'Unfavorable',
+  'PROCESSING': 'Processing',
+  'GENERAL': 'General',
 
   // Product types
   'BFP ACTIVE': 'BFP ACTIVE',
@@ -51,10 +54,11 @@ const LABEL_MAP: Record<string, string> = {
   'GSIS': 'GSIS',
   'NONE': 'None',
 
-  // Market types
-  'RESIDENTIAL': 'Residential',
-  'COMMERCIAL': 'Commercial',
-  'INDUSTRIAL': 'Industrial',
+  // Market types (market_type_enum)
+  'VIRGIN': 'Virgin',
+  'TOUCHED': 'Touched',
+  'FULLY-PAID': 'Fully Paid',
+  'EXISTING': 'Existing',
 
   // User roles
   'admin': 'Admin',

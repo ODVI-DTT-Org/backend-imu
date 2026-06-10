@@ -958,8 +958,8 @@ reports.get('/conversion', authMiddleware, requirePermission('reports', 'read'),
     const funnelResult = await pool.query(
       `SELECT
         COUNT(*) as total_clients,
-        COUNT(CASE WHEN c.client_type = 'POTENTIAL' THEN 1 END) as potential_clients,
-        COUNT(CASE WHEN c.client_type = 'EXISTING' THEN 1 END) as existing_clients
+        COUNT(CASE WHEN c.client_type = 'POTENTIAL'::client_type_enum THEN 1 END) as potential_clients,
+        COUNT(CASE WHEN c.client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL') THEN 1 END) as existing_clients
        FROM clients c
        ${whereClause}`,
       params
@@ -969,7 +969,7 @@ reports.get('/conversion', authMiddleware, requirePermission('reports', 'read'),
     const conversionByTouchpoint = await pool.query(
       `SELECT
         t.touchpoint_number,
-        COUNT(DISTINCT CASE WHEN c.client_type = 'EXISTING' THEN c.id END) as conversions,
+        COUNT(DISTINCT CASE WHEN c.client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL') THEN c.id END) as conversions,
         COUNT(DISTINCT c.id) as total_clients
        FROM clients c
        JOIN touchpoints t ON t.client_id = c.id
@@ -983,7 +983,7 @@ reports.get('/conversion', authMiddleware, requirePermission('reports', 'read'),
     const conversionByReason = await pool.query(
       `SELECT
         t.reason,
-        COUNT(DISTINCT CASE WHEN c.client_type = 'EXISTING' THEN c.id END) as conversions
+        COUNT(DISTINCT CASE WHEN c.client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL') THEN c.id END) as conversions
        FROM clients c
        JOIN touchpoints t ON t.client_id = c.id
        ${whereClause}
