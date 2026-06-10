@@ -217,7 +217,7 @@ export function buildClientFilters(
           `SELECT 1 FROM addresses a` +
           ` WHERE a.client_id = c.id AND a.deleted_at IS NULL` +
           ` AND (LOWER(COALESCE(a.street,'')) LIKE ANY($${idx + 1}::text[])` +
-          ` OR LOWER(COALESCE(a.street_address,'')) LIKE ANY($${idx + 1}::text[])` +
+          ` OR LOWER(COALESCE(a.full_address,'')) LIKE ANY($${idx + 1}::text[])` +
           `)))`,
         );
         params.push(normalizedBarangayValues, likePatterns);
@@ -3671,7 +3671,7 @@ clients.post('/by-ids', authMiddleware, requirePermission('clients', 'read'), as
     pool.query(
       `SELECT id, client_id, type, street, barangay, city, province,
               postal_code, latitude, longitude, is_primary, psgc_id,
-              street_address, created_at, updated_at
+              full_address, created_at, updated_at
        FROM addresses
        WHERE client_id IN (${idPlaceholders})
          AND deleted_at IS NULL`,

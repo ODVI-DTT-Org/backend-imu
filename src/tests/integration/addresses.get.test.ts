@@ -51,7 +51,7 @@ describe('Addresses GET Integration Tests', () => {
       expect(address).toHaveProperty('id');
       expect(address).toHaveProperty('client_id');
       expect(address).toHaveProperty('label');
-      expect(address).toHaveProperty('street_address');
+      expect(address).toHaveProperty('full_address');
       expect(address).toHaveProperty('postal_code');
     });
 
