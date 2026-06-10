@@ -84,7 +84,7 @@ describe('Search API', () => {
             last_name: 'Smith',
             email: 'johnny@example.com',
             phone: '0987654321',
-            client_type: 'EXISTING',
+            client_type: 'GENERAL',
             market_type: 'COMMERCIAL',
             region: 'NCR',
             province: 'Metro Manila',

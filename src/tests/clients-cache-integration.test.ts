@@ -58,7 +58,7 @@ describe('Clients Cache Integration Tests', () => {
     // Create test client
     const clientRes = await pool.query(
       `INSERT INTO clients (id, first_name, last_name, client_type, province, municipality)
-       VALUES ($1, 'Cache', 'Test', 'EXISTING', 'Pampanga', 'Angeles City')
+       VALUES ($1, 'Cache', 'Test', 'GENERAL', 'Pampanga', 'Angeles City')
        RETURNING *`,
       ['test-cache-client']
     );

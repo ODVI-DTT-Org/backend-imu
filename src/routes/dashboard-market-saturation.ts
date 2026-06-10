@@ -157,7 +157,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
       WHERE c.deleted_at IS NULL
         AND ($3::text[] IS NULL OR c.municipality = ANY($3))
         AND ($4::text   IS NULL OR c.municipality = $4)
-        AND ($5::text   IS NULL OR c.client_type  = $5)
+        AND ($5::text   IS NULL OR c.client_type  = $5::client_type_enum)
     ),
     client_data AS (
       SELECT
@@ -347,7 +347,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         WHERE c.deleted_at IS NULL
           AND ($3::text[] IS NULL OR c.municipality = ANY($3))
           AND ($4::text   IS NULL OR c.municipality = $4)
-          AND ($5::text   IS NULL OR c.client_type  = $5)
+          AND ($5::text   IS NULL OR c.client_type  = $5::client_type_enum)
       ),
       client_data AS (
         SELECT

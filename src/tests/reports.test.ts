@@ -127,7 +127,7 @@ describe('Reports API', () => {
     it('should export visits as CSV for admin', async () => {
       // Create test data
       const clientResult = await pool.query(
-        "INSERT INTO clients (id, first_name, last_name, client_type, created_at, updated_at) VALUES ('test-002', 'Visit', 'Client', 'EXISTING', NOW(), NOW()) RETURNING id"
+        "INSERT INTO clients (id, first_name, last_name, client_type, created_at, updated_at) VALUES ('test-002', 'Visit', 'Client', 'GENERAL', NOW(), NOW()) RETURNING id"
       );
 
       const userResult = await pool.query(

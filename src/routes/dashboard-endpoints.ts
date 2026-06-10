@@ -34,7 +34,7 @@ export async function getTargetProgress(params: {
     ),
     actuals AS (
       SELECT
-        COUNT(DISTINCT CASE WHEN c.client_type = 'EXISTING' THEN c.id END) as clientsActual,
+        COUNT(DISTINCT CASE WHEN c.client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL') THEN c.id END) as clientsActual,
         COUNT(t.id) as touchpointsActual,
         COUNT(t.id) FILTER (WHERE t.type = 'Visit') as visitsActual
       FROM clients c
@@ -134,7 +134,7 @@ export async function getTeamPerformance(params: {
         u.first_name,
         u.last_name,
         u.role,
-        COUNT(DISTINCT CASE WHEN c.client_type = 'EXISTING' THEN c.id END) as clientsCompleted,
+        COUNT(DISTINCT CASE WHEN c.client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL') THEN c.id END) as clientsCompleted,
         COUNT(t.id) as touchpointsCompleted,
         COALESCE(SUM(targ.target_clients), 0) as clientsTarget,
         COALESCE(SUM(targ.target_touchpoints), 0) as touchpointsTarget,

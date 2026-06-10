@@ -255,8 +255,8 @@ dashboard.get('/performance', authMiddleware, requirePermission('dashboard', 're
     // Get client conversion rate
     const conversionStats = await pool.query(
       `SELECT
-        COUNT(*) FILTER (WHERE client_type = 'POTENTIAL') as potential,
-        COUNT(*) FILTER (WHERE client_type = 'EXISTING') as existing
+        COUNT(*) FILTER (WHERE client_type = 'POTENTIAL'::client_type_enum) as potential,
+        COUNT(*) FILTER (WHERE client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL')) as existing
        FROM clients
        WHERE user_id = $1`,
       [caravanId]
@@ -531,8 +531,8 @@ dashboard.get('/stats', authMiddleware, requirePermission('dashboard', 'read'), 
     // Calculate conversion rate (potential → existing)
     const conversionResult = await pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE client_type = 'POTENTIAL') as potential,
-         COUNT(*) FILTER (WHERE client_type = 'EXISTING') as existing
+         COUNT(*) FILTER (WHERE client_type = 'POTENTIAL'::client_type_enum) as potential,
+         COUNT(*) FILTER (WHERE client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL')) as existing
        FROM clients
        WHERE deleted_at IS NULL`
     );
@@ -649,10 +649,10 @@ dashboard.get('/recent-activities', authMiddleware, requirePermission('dashboard
         SELECT
           c.id,
           CASE
-            WHEN c.client_type = 'POTENTIAL' THEN 'client_created_potential'
+            WHEN c.client_type = 'POTENTIAL'::client_type_enum THEN 'client_created_potential'
             ELSE 'client_created_existing'
           END as type,
-          'New ' || LOWER(c.client_type) || ' client: ' || COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '') as description,
+          'New ' || LOWER(c.client_type::text) || ' client: ' || COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '') as description,
           c.created_at,
           c.user_id,
           u.first_name || ' ' || u.last_name as user_name
@@ -816,11 +816,11 @@ dashboard.get('/analytics', authMiddleware, requirePermission('dashboard', 'read
     const conversionRateResult = await pool.query(
       `
       SELECT
-        COUNT(*) FILTER (WHERE client_type = 'POTENTIAL') as potential,
-        COUNT(*) FILTER (WHERE client_type = 'EXISTING') as existing,
+        COUNT(*) FILTER (WHERE client_type = 'POTENTIAL'::client_type_enum) as potential,
+        COUNT(*) FILTER (WHERE client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL')) as existing,
         CASE
-          WHEN COUNT(*) FILTER (WHERE client_type = 'POTENTIAL') > 0
-          THEN ROUND((COUNT(*) FILTER (WHERE client_type = 'EXISTING')::numeric / COUNT(*) FILTER (WHERE client_type = 'POTENTIAL')::numeric) * 100)
+          WHEN COUNT(*) FILTER (WHERE client_type = 'POTENTIAL'::client_type_enum) > 0
+          THEN ROUND((COUNT(*) FILTER (WHERE client_type IN ('FAVORABLE','UNFAVORABLE','PROCESSING','GENERAL'))::numeric / COUNT(*) FILTER (WHERE client_type = 'POTENTIAL'::client_type_enum)::numeric) * 100)
           ELSE 0
         END as conversion_rate
       FROM clients

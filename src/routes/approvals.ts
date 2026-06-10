@@ -11,6 +11,11 @@ import { updateClientTouchpointSummary } from '../services/touchpoint-summary.js
 import { getNextTouchpointNumber } from '../services/touchpoint-validation.js';
 import { getCacheService } from '../services/cache/redis-cache.js';
 import { computeOdometerDeparture, computeKilometersTraveled, computeOdometerFields, OdometerBelowPreviousError } from '../services/visit.service.js';
+import {
+  assertAffectedRows,
+  buildAddressEditUpdate,
+  errorMessageForApproval,
+} from './approval-processing.js';
 
 // Mirror of clients.ts:invalidateClientsListCache. Kept inline to avoid an export
 // from that file; both routes are the only writers of the v1:clients:* keys.
@@ -149,6 +154,7 @@ function mapRowToApproval(row: Record<string, any>) {
     rejected_by: row.rejected_by,
     rejected_at: row.rejected_at,
     rejection_reason: row.rejection_reason,
+    error_message: row.error_message,
     created: row.created_at,
     updated: row.updated_at,
   };
@@ -809,6 +815,7 @@ approvals.post('/:id/edit', authMiddleware, requirePermission('approvals', 'upda
 // POST /api/approvals/:id/approve - Approve an approval
 approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'update'), async (c) => {
   const client = await pool.connect();
+  let approvalIdForFailure: string | null = null;
   try {
     await client.query('BEGIN');
 
@@ -838,6 +845,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
     }
 
     const approval = existing.rows[0];
+    approvalIdForFailure = approval.id;
 
     // For UDI approvals, handle both loan release and legacy UDI update
     let udiNumber: string | null = null;
@@ -862,13 +870,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
               parsedNotes.product_type, parsedNotes.loan_type,
               udiNumber, 'Approved by admin', user.sub]);
 
-          await client.query(
+          const updateClientResult = await client.query(
             `UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(),
               product_type = COALESCE($2, product_type),
               loan_type = COALESCE($3, loan_type)
             WHERE id = $1`,
             [approval.client_id, parsedNotes.product_type ?? null, parsedNotes.loan_type ?? null]
           );
+          assertAffectedRows(updateClientResult, 'udi loan_release client update', approval.client_id);
 
           if (parsedNotes.visit_id) {
             await client.query(`
@@ -892,27 +901,30 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
               parsedNotes.product_type, parsedNotes.loan_type,
               udiNumber, 'Approved by admin', user.sub]);
 
-          await client.query(
+          const updateClientResult = await client.query(
             `UPDATE clients SET loan_released = TRUE, loan_released_at = NOW(),
               product_type = COALESCE($2, product_type),
               loan_type = COALESCE($3, loan_type)
             WHERE id = $1`,
             [approval.client_id, parsedNotes.product_type ?? null, parsedNotes.loan_type ?? null]
           );
+          assertAffectedRows(updateClientResult, 'udi admin loan_release client update', approval.client_id);
         } else {
           // Legacy UDI-only update: parse from notes text or udi_number column
           udiNumber = approval.udi_number
             || approval.notes?.match(/UDI Number:\s*(\d+)/)?.[1]
             || null;
           if (udiNumber) {
-            await client.query(
+            const udiUpdateResult = await client.query(
               'UPDATE clients SET udi = $1, updated_at = NOW() WHERE id = $2 AND deleted_at IS NULL',
               [udiNumber, approval.client_id]
             );
+            assertAffectedRows(udiUpdateResult, 'udi client update', approval.client_id);
           }
         }
       } catch (error) {
         console.error('Failed to process UDI approval:', error);
+        throw error;
       }
     }
 
@@ -987,13 +999,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
             'Approved by admin', user.sub]);
 
         // UPDATE clients
-        await client.query(`
+        const updateClientResult = await client.query(`
           UPDATE clients
           SET loan_released = TRUE, loan_released_at = NOW(),
             product_type = COALESCE($2, product_type),
             loan_type = COALESCE($3, loan_type)
           WHERE id = $1
         `, [approval.client_id, notes.product_type ?? null, notes.loan_type ?? null]);
+        assertAffectedRows(updateClientResult, 'loan_release_v2 client update', approval.client_id);
 
         // UPDATE itineraries (now completed) - only for Caravan (visit-based)
         if (visitId) {
@@ -1029,7 +1042,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         const postal = notes.postal_code ?? null;
         const isPrimary = notes.is_primary ?? false;
 
-        await client.query(`
+        const insertAddressResult = await client.query(`
           INSERT INTO addresses (
             id, client_id, type, street, street_address, full_address, psgc_id,
             barangay, city, province, postal_code, latitude, longitude, is_primary
@@ -1050,6 +1063,7 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
           lng,
           isPrimary,
         ]);
+        assertAffectedRows(insertAddressResult, 'address_add insert', approval.client_id);
       } catch (parseError) {
         console.error('Failed to process address approval:', parseError);
         await client.query('ROLLBACK');
@@ -1063,13 +1077,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
         const notes = JSON.parse(approval.notes);
 
         // CREATE phone_numbers record (matching existing schema)
-        await client.query(`
+        const insertPhoneResult = await client.query(`
           INSERT INTO phone_numbers (
             id, client_id, number, label, is_primary
           ) VALUES (
             gen_random_uuid(), $1, $2, $3, $4
           )
         `, [approval.client_id, notes.number, notes.label, notes.is_primary]);
+        assertAffectedRows(insertPhoneResult, 'phone_add insert', approval.client_id);
       } catch (parseError) {
         console.error('Failed to process phone approval:', parseError);
         await client.query('ROLLBACK');
@@ -1080,10 +1095,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
     // For client_delete approvals, soft-delete the client
     if (approval.type === 'client_delete') {
       try {
-        await client.query(
-          'UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2 AND deleted_at IS NULL',
+        const deleteClientResult = await client.query(
+          'UPDATE clients SET deleted_at = NOW(), deleted_by = $1 WHERE id = $2 AND deleted_at IS NULL RETURNING id',
           [approval.user_id, approval.client_id]
         );
+        assertAffectedRows(deleteClientResult, 'client_delete update', approval.client_id);
         console.log(`Soft-deleted client ${approval.client_id} from approval`);
       } catch (deleteError) {
         console.error('Failed to soft-delete client from approval:', deleteError);
@@ -1142,13 +1158,15 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
         if (updateFields.length > 0) {
           updateValues.push(approval.client_id);
-          await client.query(
-            `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} AND deleted_at IS NULL`,
+          const clientEditResult = await client.query(
+            `UPDATE clients SET ${updateFields.join(', ')}, updated_at = NOW() WHERE id = $${paramIndex} AND deleted_at IS NULL RETURNING id`,
             updateValues
           );
+          assertAffectedRows(clientEditResult, 'client edit update', approval.client_id);
         }
       } catch (parseError) {
         console.error('Failed to parse client edit changes:', parseError);
+        throw parseError;
       }
     }
 
@@ -1156,20 +1174,28 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
     if (approval.type === 'address_edit') {
       try {
         const notes = JSON.parse(approval.notes);
-        const { address_id, ...fields } = notes;
-        const allowed = ['type', 'street', 'barangay', 'city', 'province', 'postal_code', 'latitude', 'longitude', 'is_primary'];
+        const { addressId, fields } = buildAddressEditUpdate(notes);
+        if (!addressId) {
+          throw new Error('address_edit missing address_id');
+        }
         const updates: string[] = [];
         const vals: any[] = [];
         let idx = 1;
         for (const [k, v] of Object.entries(fields)) {
-          if (allowed.includes(k) && v !== undefined) {
-            updates.push(`${k} = $${idx++}`);
-            vals.push(v);
-          }
+          updates.push(`${k} = $${idx++}`);
+          vals.push(v);
         }
-        if (updates.length > 0) {
-          vals.push(address_id);
-          await client.query(`UPDATE addresses SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${idx} AND deleted_at IS NULL`, vals);
+        if (updates.length > 0 && addressId) {
+          vals.push(addressId, approval.client_id);
+          const addressEditResult = await client.query(
+            `UPDATE addresses SET ${updates.join(', ')}, updated_at = NOW()
+             WHERE id = $${idx} AND client_id = $${idx + 1} AND deleted_at IS NULL
+             RETURNING id`,
+            vals
+          );
+          assertAffectedRows(addressEditResult, 'address_edit', addressId);
+        } else {
+          throw new Error(`address_edit has no fields to update for ${String(addressId)}`);
         }
       } catch (e) {
         console.error('Failed to process address_edit approval:', e);
@@ -1182,7 +1208,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
     if (approval.type === 'address_delete') {
       try {
         const notes = JSON.parse(approval.notes);
-        await client.query('UPDATE addresses SET deleted_at = NOW() WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL', [notes.address_id, approval.client_id]);
+        const addressDeleteResult = await client.query(
+          'UPDATE addresses SET deleted_at = NOW() WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL RETURNING id',
+          [notes.address_id, approval.client_id]
+        );
+        assertAffectedRows(addressDeleteResult, 'address_delete', notes.address_id);
       } catch (e) {
         console.error('Failed to process address_delete approval:', e);
         await client.query('ROLLBACK');
@@ -1206,8 +1236,14 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
           }
         }
         if (updates.length > 0) {
-          vals.push(phone_id);
-          await client.query(`UPDATE phone_numbers SET ${updates.join(', ')} WHERE id = $${idx} AND deleted_at IS NULL`, vals);
+          vals.push(phone_id, approval.client_id);
+          const phoneEditResult = await client.query(
+            `UPDATE phone_numbers SET ${updates.join(', ')}, updated_at = NOW()
+             WHERE id = $${idx} AND client_id = $${idx + 1} AND deleted_at IS NULL
+             RETURNING id`,
+            vals
+          );
+          assertAffectedRows(phoneEditResult, 'phone_edit', phone_id);
         }
       } catch (e) {
         console.error('Failed to process phone_edit approval:', e);
@@ -1220,7 +1256,11 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
     if (approval.type === 'phone_delete') {
       try {
         const notes = JSON.parse(approval.notes);
-        await client.query('UPDATE phone_numbers SET deleted_at = NOW() WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL', [notes.phone_id, approval.client_id]);
+        const phoneDeleteResult = await client.query(
+          'UPDATE phone_numbers SET deleted_at = NOW() WHERE id = $1 AND client_id = $2 AND deleted_at IS NULL RETURNING id',
+          [notes.phone_id, approval.client_id]
+        );
+        assertAffectedRows(phoneDeleteResult, 'phone_delete', notes.phone_id);
       } catch (e) {
         console.error('Failed to process phone_delete approval:', e);
         await client.query('ROLLBACK');
@@ -1284,7 +1324,19 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       approval: mapRowToApproval(result.rows[0]),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
+    if (approvalIdForFailure) {
+      await pool.query(
+        `UPDATE approvals
+         SET status = 'failed',
+             error_message = $1,
+             updated_at = NOW()
+         WHERE id = $2 AND status = 'pending'`,
+        [errorMessageForApproval(error), approvalIdForFailure],
+      ).catch((failureUpdateError) => {
+        console.error('Failed to mark approval as failed:', failureUpdateError);
+      });
+    }
     if (error instanceof z.ZodError) {
       const validationError = new ValidationError('Invalid input');
       error.errors.forEach((err: any) => {
@@ -1421,13 +1473,21 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
       remarks: 'remarks', agency_id: 'agency_id', caravan_id: 'caravan_id', is_starred: 'is_starred',
     };
 
-    for (const id of ids) {
+    for (let i = 0; i < ids.length; i++) {
+      const id = ids[i];
+      const savepoint = `bulk_approval_${i}`;
+      await client.query(`SAVEPOINT ${savepoint}`);
       try {
         const existing = await client.query('SELECT * FROM approvals WHERE id = $1', [id]);
-        if (existing.rows.length === 0) { succeeded.push(id); continue; }
+        if (existing.rows.length === 0) {
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          succeeded.push(id);
+          continue;
+        }
 
         const approval = existing.rows[0];
         if (approval.status !== 'pending') {
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
           failed.push({ id, error: 'Approval is not in pending status' });
           continue;
         }
@@ -1439,6 +1499,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
           const clientData = JSON.parse(approval.notes);
 
           if (!clientData.first_name || !clientData.last_name) {
+            await client.query(`RELEASE SAVEPOINT ${savepoint}`);
             failed.push({ id, error: 'Missing first_name or last_name in approval notes' });
             continue;
           }
@@ -1476,6 +1537,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
             [clientData.first_name, clientData.last_name]
           );
           if (verify.rows.length === 0) {
+            await client.query(`RELEASE SAVEPOINT ${savepoint}`);
             failed.push({ id, error: 'Client creation verification failed — no client found after insert' });
             continue;
           }
@@ -1508,7 +1570,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         if (approval.type === 'address_add') {
           const notes = JSON.parse(approval.notes || '{}');
           const streetText = notes.full_address ?? notes.street_address ?? notes.street ?? null;
-          await client.query(`
+          const insertAddressResult = await client.query(`
             INSERT INTO addresses (
               id, client_id, type, street, street_address, full_address, psgc_id,
               barangay, city, province, postal_code, latitude, longitude, is_primary
@@ -1529,36 +1591,41 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
             notes.longitude ?? null,
             notes.is_primary ?? false,
           ]);
+          assertAffectedRows(insertAddressResult, 'address_add insert', approval.client_id);
         }
 
         // For address_edit approvals, UPDATE the existing address row
         if (approval.type === 'address_edit') {
           const notes = JSON.parse(approval.notes || '{}');
-          const { address_id, ...fields } = notes;
-          const allowed = ['type', 'street', 'street_address', 'full_address', 'barangay', 'city', 'province',
-                           'postal_code', 'latitude', 'longitude', 'is_primary', 'psgc_id'];
+          const { addressId, fields } = buildAddressEditUpdate(notes);
+          if (!addressId) {
+            throw new Error('address_edit missing address_id');
+          }
           const updates: string[] = [];
           const vals: any[] = [];
           let p = 1;
-          for (const key of allowed) {
-            if (key in fields) {
-              updates.push(`${key} = $${p++}`);
-              vals.push(fields[key]);
-            }
+          for (const [key, value] of Object.entries(fields)) {
+            updates.push(`${key} = $${p++}`);
+            vals.push(value);
           }
-          if (updates.length > 0 && address_id) {
-            vals.push(address_id);
-            await client.query(
-              `UPDATE addresses SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${p}`,
+          if (updates.length > 0 && addressId) {
+            vals.push(addressId, approval.client_id);
+            const addressEditResult = await client.query(
+              `UPDATE addresses SET ${updates.join(', ')}, updated_at = NOW()
+               WHERE id = $${p} AND client_id = $${p + 1} AND deleted_at IS NULL
+               RETURNING id`,
               vals
             );
+            assertAffectedRows(addressEditResult, 'address_edit', addressId);
+          } else {
+            throw new Error(`address_edit has no fields to update for ${String(addressId)}`);
           }
         }
 
         // For phone_add approvals, INSERT into phone_numbers
         if (approval.type === 'phone_add') {
           const notes = JSON.parse(approval.notes || '{}');
-          await client.query(`
+          const insertPhoneResult = await client.query(`
             INSERT INTO phone_numbers (id, client_id, number, label, is_primary)
             VALUES (gen_random_uuid(), $1, $2, $3, $4)
           `, [
@@ -1567,6 +1634,7 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
             notes.label ?? null,
             notes.is_primary ?? false,
           ]);
+          assertAffectedRows(insertPhoneResult, 'phone_add insert', approval.client_id);
         }
 
         // For phone_edit approvals, UPDATE the existing phone row
@@ -1584,21 +1652,42 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
             }
           }
           if (updates.length > 0 && phone_id) {
-            vals.push(phone_id);
-            await client.query(
-              `UPDATE phone_numbers SET ${updates.join(', ')}, updated_at = NOW() WHERE id = $${p}`,
+            vals.push(phone_id, approval.client_id);
+            const phoneEditResult = await client.query(
+              `UPDATE phone_numbers SET ${updates.join(', ')}, updated_at = NOW()
+               WHERE id = $${p} AND client_id = $${p + 1} AND deleted_at IS NULL
+               RETURNING id`,
               vals
             );
+            assertAffectedRows(phoneEditResult, 'phone_edit', phone_id);
           }
         }
 
-        await client.query(
+        const approveResult = await client.query(
           `UPDATE approvals SET status = 'approved', approved_by = $1, approved_at = NOW(),
             client_id = COALESCE($2, client_id), updated_at = NOW() WHERE id = $3`,
           [user.sub, newClientId, id]
         );
+        assertAffectedRows(approveResult, 'approval status update', id);
+        await client.query(`RELEASE SAVEPOINT ${savepoint}`);
         succeeded.push(id);
       } catch (err: any) {
+        await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`).catch((rollbackError) => {
+          console.error('Failed to roll back bulk approval savepoint:', rollbackError);
+        });
+        await client.query(`RELEASE SAVEPOINT ${savepoint}`).catch((releaseError) => {
+          console.error('Failed to release bulk approval savepoint:', releaseError);
+        });
+        await client.query(
+          `UPDATE approvals
+           SET status = 'failed',
+               error_message = $1,
+               updated_at = NOW()
+           WHERE id = $2 AND status = 'pending'`,
+          [errorMessageForApproval(err), id],
+        ).catch((failureUpdateError) => {
+          console.error('Failed to mark bulk approval as failed:', failureUpdateError);
+        });
         failed.push({ id, error: err.message || 'Unknown error' });
       }
     }
