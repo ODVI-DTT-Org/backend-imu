@@ -33,7 +33,7 @@ export function buildAddressEditUpdate(notes: Record<string, unknown>): AddressE
   }
 
   const longStreetAddress =
-    rawFields.street_address ?? rawFields.full_address ?? rawFields.street;
+    rawFields.full_address ?? rawFields.street_address ?? rawFields.street;
   if (longStreetAddress !== undefined) {
     fields.street_address = longStreetAddress;
   }
