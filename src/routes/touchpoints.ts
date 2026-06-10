@@ -117,6 +117,8 @@ function mapRowToTouchpoint(row: Record<string, any>) {
     odometer_arrival: row.odometer_arrival ?? null,
     odometer_departure: row.odometer_departure ?? null,
     kilometers_traveled: row.kilometers_traveled ?? null,
+    release_id: row.release_id ?? null,
+    release_status: row.release_status ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
     expand: row.expand,
@@ -269,12 +271,14 @@ touchpoints.get('/', authMiddleware, requirePermission('touchpoints', 'read'), a
               v.province as visit_province,
               v.odometer_arrival as odometer_arrival,
               v.odometer_departure as odometer_departure,
-              v.kilometers_traveled as kilometers_traveled
+              v.kilometers_traveled as kilometers_traveled,
+              r.id AS release_id, r.status AS release_status
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
        LEFT JOIN visits v ON v.id = t.visit_id
        LEFT JOIN calls ca ON ca.id = t.call_id
+       LEFT JOIN releases r ON r.visit_id = t.visit_id AND t.type = 'Loan Release'
        ${whereClause}
        ORDER BY t.created_at DESC
        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}`,
@@ -479,13 +483,15 @@ touchpoints.get('/:id', authMiddleware, requirePermission('touchpoints', 'read')
               addr.street as client_addr_street,
               addr.barangay as client_addr_barangay,
               addr.city as client_addr_municipality,
-              addr.province as client_addr_province
+              addr.province as client_addr_province,
+              r.id AS release_id, r.status AS release_status
        FROM touchpoints t
        LEFT JOIN clients c ON c.id = t.client_id
        LEFT JOIN users u ON u.id = t.user_id
        LEFT JOIN visits v ON v.id = t.visit_id
        LEFT JOIN calls ca ON ca.id = t.call_id
        LEFT JOIN addresses addr ON addr.client_id = c.id AND addr.is_primary = true
+       LEFT JOIN releases r ON r.visit_id = t.visit_id AND t.type = 'Loan Release'
        WHERE t.id = $1`,
       [id]
     );
