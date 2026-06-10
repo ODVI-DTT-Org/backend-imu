@@ -1857,7 +1857,7 @@ approvals.post('/loan-release', authMiddleware, requirePermission('approvals', '
         validated.client_id,
         user.sub, // user_id
         7, // touchpoint_number - final touchpoint
-        'Visit', // type - touchpoint #7 is a Visit
+        'Loan Release', // type - loan release touchpoints use their own type
         'Loan released', // reason
         'Completed', // status - loan is released
       ]
@@ -2118,7 +2118,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
           INSERT INTO touchpoints (
             id, client_id, user_id, touchpoint_number, type, date, rejection_reason, visit_id, call_id, status, notes
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, 'Visit', CURRENT_DATE, 'Loan Release', $4, NULL, 'Completed', $5
+            gen_random_uuid(), $1, $2, $3, 'Loan Release', CURRENT_DATE, NULL, $4, NULL, 'Completed', $5
           )
         `, [validated.client_id, user.sub, touchpointNumber, activityId, validated.notes ?? null]);
         shouldRefreshTouchpointSummary = true;

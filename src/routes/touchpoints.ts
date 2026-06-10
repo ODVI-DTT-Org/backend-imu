@@ -604,7 +604,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
     }
 
     // === Duplicate touchpoint guard: one per (client, user, Manila day) ===
-    // Excludes loan-release shadow touchpoints (rejection_reason='Loan Release')
+    // Excludes loan-release touchpoints (type='Loan Release')
     // — those are inserted by the /approvals/loan-release-v2 flow and are
     // allowed to co-exist with a regular touchpoint on the same client/day.
     const dupCheck = await pool.query(
@@ -613,7 +613,7 @@ touchpoints.post('/', authMiddleware, requirePermission('touchpoints', 'create')
          AND user_id = $2
          AND (created_at AT TIME ZONE 'Asia/Manila')::date = (now() AT TIME ZONE 'Asia/Manila')::date
          AND is_legacy = false
-         AND (rejection_reason IS DISTINCT FROM 'Loan Release')
+         AND type IS DISTINCT FROM 'Loan Release'
        LIMIT 1`,
       [validated.client_id, validated.user_id ?? user.sub]
     );
