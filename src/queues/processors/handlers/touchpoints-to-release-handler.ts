@@ -12,6 +12,7 @@
 import { Pool } from 'pg';
 import { S3Client } from '@aws-sdk/client-s3';
 import { generateSimpleXlsxReport } from './simple-report-helper.js';
+import { caravanNickname, formatCaravanFullName, formatClientName } from '../../../utils/name-format.js';
 
 export interface TouchpointsToReleaseParams {
   startDate?: string;
@@ -70,14 +71,19 @@ export async function generateTouchpointsToReleaseReport(
       r.id,
       r.created_at                                 AS released_at,
       r.reference_number,
-      cl.first_name || ' ' || cl.last_name         AS client_name,
+      cl.first_name                                AS cl_first_name,
+      cl.middle_name                               AS cl_middle_name,
+      cl.last_name                                 AS cl_last_name,
+      cl.ext_name                                  AS cl_ext_name,
       cl.phone                                     AS client_phone,
       cl.agency_name                               AS client_agency,
       cl.pension_type,
       cl.market_type,
       cl.municipality                              AS client_municipality,
       cl.province                                  AS client_province,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       r.loan_type,
       r.product_type,
       r.udi_number,
@@ -111,7 +117,7 @@ export async function generateTouchpointsToReleaseReport(
   const result = await pool.query(itemsSql, queryParams);
   await onProgress?.(60, 'Processing rows…');
 
-  // Add computed days_to_release column
+  // Add computed days_to_release column and formatted name columns
   const rows = result.rows.map((row) => {
     const releasedAt: Date | null = row.released_at ? new Date(row.released_at) : null;
     const firstTouchpointAt: Date | null = row.first_touchpoint_at ? new Date(row.first_touchpoint_at) : null;
@@ -121,7 +127,13 @@ export async function generateTouchpointsToReleaseReport(
       daysToRelease = Math.floor((releasedAt.getTime() - firstTouchpointAt.getTime()) / msPerDay);
       if (daysToRelease < 0) daysToRelease = 0;
     }
-    return { ...row, days_to_release: daysToRelease };
+    return {
+      ...row,
+      days_to_release: daysToRelease,
+      client_name: formatClientName({ first_name: row.cl_first_name, middle_name: row.cl_middle_name, last_name: row.cl_last_name, ext_name: row.cl_ext_name }),
+      caravan: caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+      caravan_name: formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
+    };
   });
 
   // Build distribution — 0,1,2,3,4,5,6,7+ buckets
@@ -206,7 +218,8 @@ export async function generateTouchpointsToReleaseReport(
           { header: 'Market Type',                key: 'market_type',                width: 16 },
           { header: 'Client Municipality',        key: 'client_municipality',        width: 20 },
           { header: 'Client Province',            key: 'client_province',            width: 20 },
-          { header: 'Agent Name',                 key: 'agent_name',                 width: 28 },
+          { header: 'Caravan',                    key: 'caravan',                    width: 16 },
+          { header: 'Caravan Name',               key: 'caravan_name',               width: 28 },
           { header: 'Loan Type',                  key: 'loan_type',                  width: 16 },
           { header: 'Product Type',               key: 'product_type',               width: 16 },
           { header: 'UDI Number',                 key: 'udi_number',                 width: 18 },

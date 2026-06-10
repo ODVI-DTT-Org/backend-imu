@@ -8,6 +8,7 @@
 import { Pool } from 'pg';
 import { S3Client } from '@aws-sdk/client-s3';
 import { generateSimpleXlsxReport } from './simple-report-helper.js';
+import { caravanNickname, formatCaravanFullName, formatClientName } from '../../../utils/name-format.js';
 
 export interface ReleasesByLoanTypeParams {
   startDate?: string;
@@ -66,14 +67,19 @@ export async function generateReleasesByLoanTypeReport(
       r.id,
       r.created_at                                 AS released_at,
       r.reference_number,
-      cl.first_name || ' ' || cl.last_name         AS client_name,
+      cl.first_name                                AS cl_first_name,
+      cl.middle_name                               AS cl_middle_name,
+      cl.last_name                                 AS cl_last_name,
+      cl.ext_name                                  AS cl_ext_name,
       cl.phone                                     AS client_phone,
       cl.agency_name                               AS client_agency,
       cl.pension_type,
       cl.market_type,
       cl.municipality                              AS client_municipality,
       cl.province                                  AS client_province,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       r.loan_type,
       r.product_type,
       r.udi_number,
@@ -98,12 +104,19 @@ export async function generateReleasesByLoanTypeReport(
   const result = await pool.query(itemsSql, queryParams);
   await onProgress?.(60, 'Processing rows…');
 
+  const mappedRows = result.rows.map((row) => ({
+    ...row,
+    client_name: formatClientName({ first_name: row.cl_first_name, middle_name: row.cl_middle_name, last_name: row.cl_last_name, ext_name: row.cl_ext_name }),
+    caravan: caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    caravan_name: formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
+  }));
+
   // Build by_loan_type aggregate in-memory (same logic as the GET endpoint)
   const byLoanType: Record<
     string,
     { loan_type: string; count: number; avg_touchpoints_before_release: number }
   > = {};
-  for (const row of result.rows) {
+  for (const row of mappedRows) {
     const lt = row.loan_type || 'unknown';
     if (!byLoanType[lt]) {
       byLoanType[lt] = { loan_type: lt, count: 0, avg_touchpoints_before_release: 0 };
@@ -121,7 +134,7 @@ export async function generateReleasesByLoanTypeReport(
   }
 
   // rowCount = individual release rows (the primary sheet)
-  const rowCount = result.rows.length;
+  const rowCount = mappedRows.length;
   return generateSimpleXlsxReport({
     s3Client,
     s3Bucket,
@@ -139,7 +152,8 @@ export async function generateReleasesByLoanTypeReport(
           { header: 'Market Type',                key: 'market_type',                width: 16 },
           { header: 'Client Municipality',        key: 'client_municipality',        width: 20 },
           { header: 'Client Province',            key: 'client_province',            width: 20 },
-          { header: 'Agent Name',                 key: 'agent_name',                 width: 28 },
+          { header: 'Caravan',                    key: 'caravan',                    width: 16 },
+          { header: 'Caravan Name',               key: 'caravan_name',               width: 28 },
           { header: 'Loan Type',                  key: 'loan_type',                  width: 16 },
           { header: 'Product Type',               key: 'product_type',               width: 16 },
           { header: 'UDI Number',                 key: 'udi_number',                 width: 18 },
@@ -149,7 +163,7 @@ export async function generateReleasesByLoanTypeReport(
           { header: 'Remarks',                    key: 'remarks',                    width: 30 },
           { header: 'Touchpoints Before Release', key: 'touchpoints_before_release', width: 28 },
         ],
-        rows: result.rows,
+        rows: mappedRows,
       },
       {
         name: 'By Loan Type',

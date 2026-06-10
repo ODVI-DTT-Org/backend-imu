@@ -8,6 +8,7 @@
 import { Pool } from 'pg';
 import { S3Client } from '@aws-sdk/client-s3';
 import { generateSimpleXlsxReport } from './simple-report-helper.js';
+import { caravanNickname, formatCaravanFullName, formatClientName } from '../../../utils/name-format.js';
 
 export interface TeleReleasesParams {
   startDate?: string;
@@ -71,8 +72,13 @@ export async function generateTeleReleasesReport(
     SELECT
       r.id,
       r.created_at,
-      cl.first_name || ' ' || cl.last_name         AS client_name,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      cl.first_name                                AS cl_first_name,
+      cl.middle_name                               AS cl_middle_name,
+      cl.last_name                                 AS cl_last_name,
+      cl.ext_name                                  AS cl_ext_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       r.product_type,
       r.loan_type,
       r.udi_number,
@@ -92,7 +98,14 @@ export async function generateTeleReleasesReport(
   const result = await pool.query(sql, queryParams);
   await onProgress?.(60, 'Processing rows…');
 
-  const rowCount = result.rows.length;
+  const mappedRows = result.rows.map((row) => ({
+    ...row,
+    client_name: formatClientName({ first_name: row.cl_first_name, middle_name: row.cl_middle_name, last_name: row.cl_last_name, ext_name: row.cl_ext_name }),
+    caravan: caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    caravan_name: formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
+  }));
+
+  const rowCount = mappedRows.length;
   return generateSimpleXlsxReport({
     s3Client,
     s3Bucket,
@@ -103,7 +116,8 @@ export async function generateTeleReleasesReport(
         columns: [
           { header: 'Created At',    key: 'created_at',   width: 22 },
           { header: 'Client Name',   key: 'client_name',  width: 28 },
-          { header: 'Agent Name',    key: 'agent_name',   width: 28 },
+          { header: 'Caravan',       key: 'caravan',      width: 16 },
+          { header: 'Caravan Name',  key: 'caravan_name', width: 28 },
           { header: 'Product Type',  key: 'product_type', width: 16 },
           { header: 'Loan Type',     key: 'loan_type',    width: 16 },
           { header: 'UDI Number',    key: 'udi_number',   width: 18 },
@@ -112,7 +126,7 @@ export async function generateTeleReleasesReport(
           { header: 'Dial Time',     key: 'dial_time',    width: 22 },
           { header: 'Duration',      key: 'duration',     width: 12 },
         ],
-        rows: result.rows,
+        rows: mappedRows,
       },
     ],
   }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return { ...r, rowCount }; });

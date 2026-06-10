@@ -8,6 +8,7 @@
 import { Pool } from 'pg';
 import { S3Client } from '@aws-sdk/client-s3';
 import { generateSimpleXlsxReport } from './simple-report-helper.js';
+import { caravanNickname, formatCaravanFullName, formatClientName } from '../../../utils/name-format.js';
 
 export interface OdometerParams {
   startDate?: string;
@@ -54,11 +55,16 @@ export async function generateOdometerReport(
   const detailSql = `
     SELECT
       v.id,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       date(v.time_in)                              AS visit_date,
       v.time_in,
       v.time_out,
-      cl.first_name || ' ' || cl.last_name         AS client_name,
+      cl.first_name                                AS cl_first_name,
+      cl.middle_name                               AS cl_middle_name,
+      cl.last_name                                 AS cl_last_name,
+      cl.ext_name                                  AS cl_ext_name,
       cl.phone                                     AS client_phone,
       cl.municipality                              AS client_municipality,
       cl.province                                  AS client_province,
@@ -81,14 +87,16 @@ export async function generateOdometerReport(
     JOIN users u ON u.id = v.user_id
     JOIN clients cl ON cl.id = v.client_id
     ${whereClause}
-    ORDER BY agent_name ASC, v.time_in DESC
+    ORDER BY u.last_name ASC, u.first_name ASC, v.time_in DESC
   `;
 
   // Daily breakdown — caravan-first ordering so each agent's days stay together.
   const dailySql = `
     SELECT
       v.user_id,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       date(v.time_in)                              AS visit_date,
       COUNT(*)                                     AS visit_count,
       SUM(
@@ -102,15 +110,17 @@ export async function generateOdometerReport(
     FROM visits v
     JOIN users u ON u.id = v.user_id
     ${whereClause}
-    GROUP BY v.user_id, u.first_name, u.last_name, date(v.time_in)
-    ORDER BY agent_name ASC, visit_date DESC
+    GROUP BY v.user_id, u.first_name, u.middle_name, u.last_name, date(v.time_in)
+    ORDER BY u.last_name ASC, u.first_name ASC, visit_date DESC
   `;
 
   // Per-caravan totals across the whole date range — one row per agent.
   const caravanTotalsSql = `
     SELECT
       v.user_id,
-      u.first_name || ' ' || u.last_name           AS agent_name,
+      u.first_name                                 AS u_first_name,
+      u.middle_name                                AS u_middle_name,
+      u.last_name                                  AS u_last_name,
       COUNT(DISTINCT date(v.time_in))              AS days_active,
       COUNT(*)                                     AS visit_count,
       SUM(
@@ -124,8 +134,8 @@ export async function generateOdometerReport(
     FROM visits v
     JOIN users u ON u.id = v.user_id
     ${whereClause}
-    GROUP BY v.user_id, u.first_name, u.last_name
-    ORDER BY total_km DESC NULLS LAST, agent_name ASC
+    GROUP BY v.user_id, u.first_name, u.middle_name, u.last_name
+    ORDER BY total_km DESC NULLS LAST, u.last_name ASC, u.first_name ASC
   `;
 
   await onProgress?.(20, 'Fetching data…');
@@ -138,6 +148,26 @@ export async function generateOdometerReport(
 
   // rowCount = total detail rows (per-visit sheet is the primary data set)
   const rowCount = detailResult.rows.length;
+
+  const caravanTotalRows = caravanResult.rows.map((row) => ({
+    ...row,
+    caravan: caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    caravan_name: formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
+  }));
+
+  const dailyRows = dailyResult.rows.map((row) => ({
+    ...row,
+    caravan: caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    caravan_name: formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
+  }));
+
+  const detailRows = detailResult.rows.map((row) => ({
+    ...row,
+    caravan: caravanNickname({ first_name: row.u_first_name, last_name: row.u_last_name }),
+    caravan_name: formatCaravanFullName({ first_name: row.u_first_name, middle_name: row.u_middle_name, last_name: row.u_last_name }),
+    client_name: formatClientName({ first_name: row.cl_first_name, middle_name: row.cl_middle_name, last_name: row.cl_last_name, ext_name: row.cl_ext_name }),
+  }));
+
   return generateSimpleXlsxReport({
     s3Client,
     s3Bucket,
@@ -146,27 +176,30 @@ export async function generateOdometerReport(
       {
         name: 'Per Caravan Totals',
         columns: [
-          { header: 'Agent Name',  key: 'agent_name',  width: 28 },
-          { header: 'Days Active', key: 'days_active', width: 14 },
-          { header: 'Visit Count', key: 'visit_count', width: 14 },
-          { header: 'Total KM',    key: 'total_km',    width: 14 },
+          { header: 'Caravan',     key: 'caravan',      width: 16 },
+          { header: 'Caravan Name', key: 'caravan_name', width: 28 },
+          { header: 'Days Active', key: 'days_active',  width: 14 },
+          { header: 'Visit Count', key: 'visit_count',  width: 14 },
+          { header: 'Total KM',    key: 'total_km',     width: 14 },
         ],
-        rows: caravanResult.rows,
+        rows: caravanTotalRows,
       },
       {
         name: 'Daily Totals',
         columns: [
-          { header: 'Agent Name',    key: 'agent_name',   width: 28 },
-          { header: 'Visit Date',    key: 'visit_date',   width: 14 },
-          { header: 'Visit Count',   key: 'visit_count',  width: 14 },
-          { header: 'Total KM',      key: 'total_km',     width: 14 },
+          { header: 'Caravan',      key: 'caravan',      width: 16 },
+          { header: 'Caravan Name', key: 'caravan_name', width: 28 },
+          { header: 'Visit Date',   key: 'visit_date',   width: 14 },
+          { header: 'Visit Count',  key: 'visit_count',  width: 14 },
+          { header: 'Total KM',     key: 'total_km',     width: 14 },
         ],
-        rows: dailyResult.rows,
+        rows: dailyRows,
       },
       {
         name: 'Per Visit',
         columns: [
-          { header: 'Agent Name',          key: 'agent_name',          width: 28 },
+          { header: 'Caravan',             key: 'caravan',             width: 16 },
+          { header: 'Caravan Name',        key: 'caravan_name',        width: 28 },
           { header: 'Visit Date',          key: 'visit_date',          width: 14 },
           { header: 'Time In',             key: 'time_in',             width: 22 },
           { header: 'Time Out',            key: 'time_out',            width: 22 },
@@ -189,7 +222,7 @@ export async function generateOdometerReport(
           { header: 'Estimated KM',        key: 'estimated_km',        width: 14 },
           { header: 'Remarks',             key: 'remarks',             width: 30 },
         ],
-        rows: detailResult.rows,
+        rows: detailRows,
       },
     ],
   }).then(async (r) => { await onProgress?.(80, 'Uploading…'); return { ...r, rowCount }; });
