@@ -192,7 +192,12 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             this.s3Bucket,
             from,
             to,
-            onProgress
+            onProgress,
+            {
+              group_ids:       params?.group_ids,
+              user_ids:        params?.user_ids,
+              reason_category: params?.reason_category,
+            }
           );
 
           return {

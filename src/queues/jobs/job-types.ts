@@ -169,6 +169,10 @@ export interface ReportJobData extends BaseJobData {
     loan_type?: string;
     product_type?: string;
     status?: string;
+    // Filters for itinerary analysis
+    group_ids?: string[];
+    user_ids?: string[];
+    reason_category?: string;
   };
 }
 

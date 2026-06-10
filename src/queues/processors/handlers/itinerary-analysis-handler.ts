@@ -41,6 +41,14 @@ export function calcAvgQualityVisit(qualityVisits: number, workingDays: number):
 const TARGET_VISITS_PER_DAY = 15;
 const TARGET_WORKING_DAYS   = 25;
 
+// ─── Filter types ─────────────────────────────────────────────────────────────
+
+export interface ItineraryFilters {
+  group_ids?: string[];
+  user_ids?: string[];
+  reason_category?: string;
+}
+
 // ─── Row types ────────────────────────────────────────────────────────────────
 
 interface AgentRow {
@@ -89,7 +97,8 @@ interface VisitDetailRow {
 export async function fetchItineraryAnalysisData(
   db: Pool,
   from: string,
-  to: string
+  to: string,
+  filters?: ItineraryFilters
 ): Promise<{ agents: AgentRow[]; visitDetails: VisitDetailRow[]; workingDays: number }> {
   // Clamp to never extend past today (fixes future-date bug for current-month reports)
   const clampedTo = clampEndDate(to);
@@ -98,12 +107,23 @@ export async function fetchItineraryAnalysisData(
   const toDate   = new Date(clampedTo);
   const workingDays = countWorkingDays(fromDate, toDate);
 
+  // Normalize filters: null means "no filter" (include all)
+  const groupIds   = filters?.group_ids?.length   ? filters.group_ids   : null;
+  const userIds    = filters?.user_ids?.length     ? filters.user_ids    : null;
+  const reasonCat  = filters?.reason_category      ? filters.reason_category : null;
+
   const [agentResult, visitDetailResult] = await Promise.all([
     // ── Agent summary query ──────────────────────────────────────────────────
     //
     // Team linkage comes from group_role_members (role_in_group='caravan').
     // Caravans without a group assignment fall back to 'UNASSIGNED'.
     // Raw name parts are selected so TypeScript can format them consistently.
+    //
+    // Filter params:
+    //   $1 = from date, $2 = to date (clamped)
+    //   $3 = group_ids  (uuid[]  | NULL = all)
+    //   $4 = user_ids   (uuid[]  | NULL = all)
+    //   $5 = reason_cat (text    | NULL = all categories)
     //
     db.query<{
       user_id: string;
@@ -168,14 +188,23 @@ export async function fetchItineraryAnalysisData(
         AND r.created_at::date BETWEEN $1 AND $2
         AND r.status IN ('approved', 'released')
       WHERE u.role = 'caravan'
+        AND ($3::uuid[] IS NULL OR g.id = ANY($3))
+        AND ($4::uuid[] IS NULL OR u.id = ANY($4))
+        AND ($5::text IS NULL OR tr.category = $5)
       GROUP BY u.id, u.first_name, u.middle_name, u.last_name, g.name
       ORDER BY team_name, u.last_name, u.first_name
-    `, [from, clampedTo]),
+    `, [from, clampedTo, groupIds, userIds, reasonCat]),
 
     // ── Visit detail query ───────────────────────────────────────────────────
     //
     // Team linkage via group_role_members (role_in_group='caravan').
     // Raw name parts returned for TypeScript formatting.
+    //
+    // Filter params:
+    //   $1 = from date, $2 = to date (clamped)
+    //   $3 = group_ids  (uuid[]  | NULL = all)
+    //   $4 = user_ids   (uuid[]  | NULL = all)
+    //   $5 = reason_cat (text    | NULL = all categories)
     //
     db.query<{
       id: string; created_at: string;
@@ -211,8 +240,11 @@ export async function fetchItineraryAnalysisData(
       LEFT JOIN touchpoint_reasons tr ON tr.reason_code = v.reason
       WHERE v.time_in::date BETWEEN $1 AND $2
         AND u.role = 'caravan'
+        AND ($3::uuid[] IS NULL OR g.id = ANY($3))
+        AND ($4::uuid[] IS NULL OR u.id = ANY($4))
+        AND ($5::text IS NULL OR tr.category = $5)
       ORDER BY team_name, u.last_name, u.first_name, v.time_in ASC
-    `, [from, clampedTo]),
+    `, [from, clampedTo, groupIds, userIds, reasonCat]),
   ]);
 
   const agents: AgentRow[] = agentResult.rows.map(r => ({
@@ -264,14 +296,15 @@ export async function generateItineraryAnalysisReport(
   s3Bucket: string,
   from: string,
   to: string,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  filters?: ItineraryFilters
 ): Promise<{ buffer: Buffer; fileName: string; downloadUrl: string; rowCount: number }> {
   await onProgress?.(5, 'Preparing query…');
   await onProgress?.(20, 'Fetching data…');
   // clampEndDate is also applied inside fetchItineraryAnalysisData, but clamp
   // the fileName's `to` here too so file names are honest.
   const clampedTo = clampEndDate(to);
-  const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(db, from, to);
+  const { agents, visitDetails, workingDays } = await fetchItineraryAnalysisData(db, from, to, filters);
   await onProgress?.(60, 'Processing rows…');
 
   const buffer = await buildWorkbook(agents, visitDetails, workingDays);
@@ -458,6 +491,12 @@ const TEAM_FILL: ExcelJS.Fill = {
 const TOTAL_FILL: ExcelJS.Fill = {
   type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1D5DB' },
 };
+const SECTION_HEADER_FILL: ExcelJS.Fill = {
+  type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1D4ED8' },
+};
+const SUB_HEADER_FILL: ExcelJS.Fill = {
+  type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3B82F6' },
+};
 
 function applyHeaderRow(sheet: ExcelJS.Worksheet): void {
   const row = sheet.getRow(1);
@@ -519,6 +558,224 @@ function addDataRows(
   }
 }
 
+// ─── Insights sheet builder ───────────────────────────────────────────────────
+//
+// Visit Detail columns (1-indexed):
+//   A(1)=Date, B(2)=Caravan(nickname), C(3)=Caravan Name,
+//   D(4)=Team, E(5)=Client, F(6)=Reason(label), G(7)=Category, H(8)=Remarks
+//
+// Formulas reference '$D:$D' for Team, '$B:$B' for Caravan nickname,
+// '$G:$G' for Category, '$F:$F' for Reason label.
+
+// Favorable reason labels as they appear in touchpoint_reasons.label
+const FAVORABLE_REASON_LABELS = [
+  'Interested',
+  'Loan Inquiry',
+  'Telemarketing',
+  'Undecided',
+] as const;
+
+function buildInsightsSheet(
+  wb: ExcelJS.Workbook,
+  agents: AgentRow[],
+): void {
+  const sheet = wb.addWorksheet('Insights');
+
+  // Collect unique teams in insertion order
+  const teamMap = new Map<string, AgentRow[]>();
+  for (const agent of agents) {
+    if (!teamMap.has(agent.team_name)) teamMap.set(agent.team_name, []);
+    teamMap.get(agent.team_name)!.push(agent);
+  }
+  const teamNames = [...teamMap.keys()];
+
+  // ── Section 1: Category matrix ────────────────────────────────────────────
+  //
+  // Row 1: blank (section title)
+  // Row 2: column headers (Team | Favorable | Processing | Unfavorable | General | Total Visits | Quality Visits)
+  // Rows 3..N+2: one row per team
+  // Row N+3: GRAND TOTAL
+
+  const MATRIX_HEADERS = ['Team', 'Favorable', 'Processing', 'Unfavorable', 'General', 'Total Visits', 'Quality Visits'];
+  const CATEGORIES: Array<string | null> = ['Favorable', 'Processing', 'Unfavorable', 'General', null, null];
+
+  // Section title row
+  {
+    const titleRow = sheet.addRow(['CATEGORY BREAKDOWN BY TEAM']);
+    titleRow.getCell(1).font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    titleRow.getCell(1).fill = SECTION_HEADER_FILL;
+    titleRow.getCell(1).alignment = { horizontal: 'left' };
+    // Merge A1:G1
+    sheet.mergeCells(titleRow.number, 1, titleRow.number, MATRIX_HEADERS.length);
+    titleRow.commit();
+  }
+
+  // Header row
+  const matrixHeaderRowNum = sheet.rowCount + 1;
+  {
+    const hRow = sheet.addRow(MATRIX_HEADERS);
+    hRow.eachCell((cell, colNum) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = HEADER_FILL;
+      cell.alignment = { horizontal: 'center', wrapText: true };
+      if (colNum === 1) cell.alignment = { horizontal: 'left' };
+    });
+    hRow.height = 30;
+    hRow.commit();
+  }
+
+  // Data rows (one per team) — start at matrixHeaderRowNum + 1
+  const firstTeamDataRow = sheet.rowCount + 1;
+  for (const teamName of teamNames) {
+    const rowNum = sheet.rowCount + 1;
+    const row = sheet.addRow([teamName]);
+    // B: Favorable  = COUNTIFS('Visit Detail'!$D:$D,A{rowNum},'Visit Detail'!$G:$G,"Favorable")
+    // C: Processing = COUNTIFS('Visit Detail'!$D:$D,A{rowNum},'Visit Detail'!$G:$G,"Processing")
+    // D: Unfavorable
+    // E: General
+    // F: Total Visits = COUNTIFS('Visit Detail'!$D:$D,A{rowNum})
+    // G: Quality Visits = B{rowNum}+C{rowNum}
+    row.getCell(2).value = { formula: `COUNTIFS('Visit Detail'!$D:$D,A${rowNum},'Visit Detail'!$G:$G,"Favorable")` };
+    row.getCell(3).value = { formula: `COUNTIFS('Visit Detail'!$D:$D,A${rowNum},'Visit Detail'!$G:$G,"Processing")` };
+    row.getCell(4).value = { formula: `COUNTIFS('Visit Detail'!$D:$D,A${rowNum},'Visit Detail'!$G:$G,"Unfavorable")` };
+    row.getCell(5).value = { formula: `COUNTIFS('Visit Detail'!$D:$D,A${rowNum},'Visit Detail'!$G:$G,"General")` };
+    row.getCell(6).value = { formula: `COUNTIF('Visit Detail'!$D:$D,A${rowNum})` };
+    row.getCell(7).value = { formula: `B${rowNum}+C${rowNum}` };
+    row.getCell(1).alignment = { horizontal: 'left' };
+    for (let c = 2; c <= 7; c++) row.getCell(c).alignment = { horizontal: 'center' };
+    row.commit();
+  }
+
+  // Grand Total row
+  const grandTotalRowNum = sheet.rowCount + 1;
+  {
+    const firstDataRow = firstTeamDataRow;
+    const lastDataRow = grandTotalRowNum - 1;
+    const tRow = sheet.addRow(['GRAND TOTAL']);
+    if (teamNames.length > 0) {
+      tRow.getCell(2).value = { formula: `SUM(B${firstDataRow}:B${lastDataRow})` };
+      tRow.getCell(3).value = { formula: `SUM(C${firstDataRow}:C${lastDataRow})` };
+      tRow.getCell(4).value = { formula: `SUM(D${firstDataRow}:D${lastDataRow})` };
+      tRow.getCell(5).value = { formula: `SUM(E${firstDataRow}:E${lastDataRow})` };
+      tRow.getCell(6).value = { formula: `SUM(F${firstDataRow}:F${lastDataRow})` };
+      tRow.getCell(7).value = { formula: `SUM(G${firstDataRow}:G${lastDataRow})` };
+    } else {
+      for (let c = 2; c <= 7; c++) tRow.getCell(c).value = 0;
+    }
+    tRow.eachCell(cell => { cell.fill = TOTAL_FILL; cell.font = { bold: true }; });
+    tRow.getCell(1).alignment = { horizontal: 'left' };
+    for (let c = 2; c <= 7; c++) tRow.getCell(c).alignment = { horizontal: 'center' };
+    tRow.commit();
+  }
+
+  // ── Section 2: Favorable Reasons Breakdown ────────────────────────────────
+  //
+  // Layout:
+  //   separator blank row
+  //   Section title row
+  //   Column headers: Team | Caravan | Interested | Loan Inquiry | Telemarketing | Undecided | Total Favorable
+  //   Per-team block:
+  //     Team total row (team, "TOTAL", formula per reason)
+  //     Per-caravan rows (team, nickname, formula per reason)
+
+  // blank separator
+  sheet.addRow([]).commit();
+
+  // Section title row
+  {
+    const titleRow = sheet.addRow(['FAVORABLE REASONS BREAKDOWN']);
+    const totalCols = 2 + FAVORABLE_REASON_LABELS.length + 1; // Team+Caravan + reasons + Total
+    titleRow.getCell(1).font = { bold: true, size: 12, color: { argb: 'FFFFFFFF' } };
+    titleRow.getCell(1).fill = SECTION_HEADER_FILL;
+    titleRow.getCell(1).alignment = { horizontal: 'left' };
+    sheet.mergeCells(titleRow.number, 1, titleRow.number, totalCols);
+    titleRow.commit();
+  }
+
+  // Column headers
+  const favHeaderCols = ['Team', 'Caravan', ...FAVORABLE_REASON_LABELS, 'Total Favorable'];
+  {
+    const hRow = sheet.addRow(favHeaderCols);
+    hRow.eachCell((cell, colNum) => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = SUB_HEADER_FILL;
+      cell.alignment = colNum <= 2 ? { horizontal: 'left' } : { horizontal: 'center', wrapText: true };
+    });
+    hRow.height = 30;
+    hRow.commit();
+  }
+
+  // Per-team: team-total row first, then per-caravan rows
+  for (const [teamName, teamAgents] of teamMap) {
+    // Team total row
+    const teamTotalRowNum = sheet.rowCount + 1;
+    const tRow = sheet.addRow([teamName, 'TOTAL']);
+    // Cols 3..3+n-1 = reason COUNTIFS scoped to team only (col D for team)
+    FAVORABLE_REASON_LABELS.forEach((label, idx) => {
+      const colNum = 3 + idx;
+      tRow.getCell(colNum).value = {
+        formula: `COUNTIFS('Visit Detail'!$D:$D,"${teamName}",'Visit Detail'!$F:$F,"${label}")`,
+      };
+    });
+    // Total Favorable = sum of reason cols
+    const totalColNum = 3 + FAVORABLE_REASON_LABELS.length;
+    const firstReasonCol = 3;
+    const lastReasonCol = totalColNum - 1;
+    // Convert col numbers to letters: 3=C, 4=D, ...
+    const colLetter = (n: number) => {
+      let s = '';
+      while (n > 0) { const r = (n - 1) % 26; s = String.fromCharCode(65 + r) + s; n = Math.floor((n - 1) / 26); }
+      return s;
+    };
+    tRow.getCell(totalColNum).value = {
+      formula: `SUM(${colLetter(firstReasonCol)}${teamTotalRowNum}:${colLetter(lastReasonCol)}${teamTotalRowNum})`,
+    };
+    tRow.eachCell(cell => { cell.fill = TEAM_FILL; cell.font = { bold: true }; });
+    tRow.getCell(1).alignment = { horizontal: 'left' };
+    tRow.getCell(2).alignment = { horizontal: 'left' };
+    for (let c = 3; c <= totalColNum; c++) tRow.getCell(c).alignment = { horizontal: 'center' };
+    tRow.commit();
+
+    // Per-caravan rows
+    for (const agent of teamAgents) {
+      const caravanRowNum = sheet.rowCount + 1;
+      const aRow = sheet.addRow([agent.team_name, agent.agent_nickname]);
+      FAVORABLE_REASON_LABELS.forEach((label, idx) => {
+        const colNum = 3 + idx;
+        // Match both team (col D) and caravan nickname (col B) to avoid nickname collisions
+        aRow.getCell(colNum).value = {
+          formula: `COUNTIFS('Visit Detail'!$D:$D,"${agent.team_name}",'Visit Detail'!$B:$B,"${agent.agent_nickname}",'Visit Detail'!$F:$F,"${label}")`,
+        };
+      });
+      aRow.getCell(totalColNum).value = {
+        formula: `SUM(${colLetter(firstReasonCol)}${caravanRowNum}:${colLetter(lastReasonCol)}${caravanRowNum})`,
+      };
+      aRow.getCell(1).alignment = { horizontal: 'left' };
+      aRow.getCell(2).alignment = { horizontal: 'left' };
+      for (let c = 3; c <= totalColNum; c++) aRow.getCell(c).alignment = { horizontal: 'center' };
+      aRow.commit();
+    }
+  }
+
+  // ── Column widths ─────────────────────────────────────────────────────────
+  sheet.getColumn(1).width = 22;  // Team
+  sheet.getColumn(2).width = 20;  // Caravan nickname
+  sheet.getColumn(3).width = 14;  // Favorable / Interested
+  sheet.getColumn(4).width = 14;  // Processing / Loan Inquiry
+  sheet.getColumn(5).width = 14;  // Unfavorable / Telemarketing
+  sheet.getColumn(6).width = 14;  // General / Undecided
+  sheet.getColumn(7).width = 14;  // Total Visits / Total Favorable
+
+  // Freeze the first two rows (section title + column header)
+  sheet.views = [{ state: 'frozen', xSplit: 0, ySplit: matrixHeaderRowNum }];
+
+  // AutoFilter on Category matrix header row
+  sheet.autoFilter = {
+    from: { row: matrixHeaderRowNum, column: 1 },
+    to:   { row: matrixHeaderRowNum, column: MATRIX_HEADERS.length },
+  };
+}
+
 // ─── Workbook builder ─────────────────────────────────────────────────────────
 
 export async function buildWorkbook(
@@ -530,13 +787,21 @@ export async function buildWorkbook(
   wb.creator = 'IMU System';
   wb.created = new Date();
 
-  // Summary sheet
+  // ── Sheet 1: Insights (FIRST) ─────────────────────────────────────────────
+  buildInsightsSheet(wb, agents);
+
+  // ── Sheet 2: Summary ──────────────────────────────────────────────────────
   const summary = wb.addWorksheet('Summary');
   setColumnWidths(summary);
   applyHeaderRow(summary);
   addDataRows(summary, agents, workingDays, true);
+  // AutoFilter on header row, full column span (A–AG = 33 cols)
+  summary.autoFilter = {
+    from: { row: 1, column: 1 },
+    to:   { row: 1, column: HEADERS.length },
+  };
 
-  // One sheet per team
+  // ── Per-team sheets ───────────────────────────────────────────────────────
   const teamMap = new Map<string, AgentRow[]>();
   for (const agent of agents) {
     if (!teamMap.has(agent.team_name)) teamMap.set(agent.team_name, []);
@@ -547,9 +812,14 @@ export async function buildWorkbook(
     setColumnWidths(sheet);
     applyHeaderRow(sheet);
     addDataRows(sheet, teamAgents, workingDays, false);
+    // AutoFilter on header row
+    sheet.autoFilter = {
+      from: { row: 1, column: 1 },
+      to:   { row: 1, column: HEADERS.length },
+    };
   }
 
-  // Visit Detail sheet
+  // ── Visit Detail sheet ────────────────────────────────────────────────────
   // Columns: Date | Caravan (nickname) | Caravan Name (full) | Team | Client | Reason | Category | Remarks
   const detail = wb.addWorksheet('Visit Detail');
   detail.columns = [
@@ -582,6 +852,12 @@ export async function buildWorkbook(
       remarks:         v.remarks ?? '',
     }).commit();
   }
+
+  // AutoFilter on Visit Detail header row (A–H = 8 cols)
+  detail.autoFilter = {
+    from: { row: 1, column: 1 },
+    to:   { row: 1, column: 8 },
+  };
 
   return wb.xlsx.writeBuffer() as unknown as Promise<Buffer>;
 }

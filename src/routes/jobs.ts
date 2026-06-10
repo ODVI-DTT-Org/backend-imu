@@ -86,6 +86,10 @@ export const createReportJobSchema = z.object({
   loan_type: z.string().optional(),
   product_type: z.string().optional(),
   status: z.string().optional(),
+  // Filters for itinerary analysis
+  group_ids: z.array(z.string().uuid()).optional(),
+  user_ids: z.array(z.string().uuid()).optional(),
+  reason_category: z.enum(['Favorable', 'Processing', 'Unfavorable', 'General']).optional(),
 });
 
 const createUserLocationAssignmentSchema = z.object({
@@ -211,6 +215,9 @@ jobs.post('/reports/generate', requirePermission('reports', 'read'), async (c) =
       ...(validated.loan_type    ? { loan_type:    validated.loan_type    } : {}),
       ...(validated.product_type ? { product_type: validated.product_type } : {}),
       ...(validated.status       ? { status:       validated.status       } : {}),
+      ...(validated.group_ids?.length         ? { group_ids:       validated.group_ids       } : {}),
+      ...(validated.user_ids?.length          ? { user_ids:        validated.user_ids        } : {}),
+      ...(validated.reason_category           ? { reason_category: validated.reason_category } : {}),
     });
 
     return c.json({
