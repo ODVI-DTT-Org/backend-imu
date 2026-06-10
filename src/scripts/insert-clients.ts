@@ -28,7 +28,7 @@ const middleInitials = [
 const productTypes = ['BFP ACTIVE', 'BFP PENSION', 'PNP PENSION', 'NAPOLCOM', 'BFP STP'];
 const marketTypes = ['Public', 'Private', 'Government'];
 const pensionTypes = ['SSS', 'GSIS', 'PVAO'];
-const clientTypes = ['POTENTIAL', 'EXISTING'];
+const clientTypes = ['POTENTIAL', 'FAVORABLE', 'UNFAVORABLE', 'PROCESSING', 'GENERAL'];
 const employmentStatuses = ['Active', 'Retired', 'Separated', 'On Leave'];
 const departments = ['Police Office', 'Fire Department', 'Bureau of Jail Management', 'NBI'];
 

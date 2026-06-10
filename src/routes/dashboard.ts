@@ -652,7 +652,7 @@ dashboard.get('/recent-activities', authMiddleware, requirePermission('dashboard
             WHEN c.client_type = 'POTENTIAL'::client_type_enum THEN 'client_created_potential'
             ELSE 'client_created_existing'
           END as type,
-          'New ' || LOWER(c.client_type) || ' client: ' || COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '') as description,
+          'New ' || LOWER(c.client_type::text) || ' client: ' || COALESCE(c.first_name, '') || ' ' || COALESCE(c.last_name, '') as description,
           c.created_at,
           c.user_id,
           u.first_name || ' ' || u.last_name as user_name
