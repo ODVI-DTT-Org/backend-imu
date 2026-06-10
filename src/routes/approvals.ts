@@ -1031,11 +1031,10 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
       try {
         const notes = JSON.parse(approval.notes);
 
-        // Mobile may send `full_address`, `street_address`, or `street`;
-        // populate all three columns for consistency. lat/lng are optional
-        // (new add-address sheet does not capture them) — coalesce undefined
-        // to null so pg doesn't throw on missing bind params.
-        const streetText = notes.full_address ?? notes.street_address ?? notes.street ?? null;
+        // Mobile sends `street` (raw) and `full_address` (computed). Keep both.
+        // lat/lng are optional — coalesce undefined to null.
+        const streetText = notes.street ?? null;
+        const fullAddress = notes.full_address ?? notes.street_address ?? streetText;
         const psgcId = notes.psgc_id ?? null;
         const lat = notes.latitude ?? null;
         const lng = notes.longitude ?? null;
@@ -1044,16 +1043,17 @@ approvals.post('/:id/approve', authMiddleware, requirePermission('approvals', 'u
 
         const insertAddressResult = await client.query(`
           INSERT INTO addresses (
-            id, client_id, type, street, street_address, full_address, psgc_id,
+            id, client_id, type, street, full_address, psgc_id,
             barangay, city, province, postal_code, latitude, longitude, is_primary
           ) VALUES (
-            gen_random_uuid(), $1, $2, $3, $3, $3, $4,
-            $5, $6, $7, $8, $9, $10, $11
+            gen_random_uuid(), $1, $2, $3, $4, $5,
+            $6, $7, $8, $9, $10, $11, $12
           )
         `, [
           approval.client_id,
           notes.type,
           streetText,
+          fullAddress,
           psgcId,
           notes.barangay ?? null,
           notes.city ?? null,
@@ -1569,19 +1569,21 @@ approvals.post('/bulk-approve', authMiddleware, requirePermission('approvals', '
         // For address_add approvals, INSERT into addresses (mirrors single-approve handler)
         if (approval.type === 'address_add') {
           const notes = JSON.parse(approval.notes || '{}');
-          const streetText = notes.full_address ?? notes.street_address ?? notes.street ?? null;
+          const streetText = notes.street ?? null;
+          const fullAddress = notes.full_address ?? notes.street_address ?? streetText;
           const insertAddressResult = await client.query(`
             INSERT INTO addresses (
-              id, client_id, type, street, street_address, full_address, psgc_id,
+              id, client_id, type, street, full_address, psgc_id,
               barangay, city, province, postal_code, latitude, longitude, is_primary
             ) VALUES (
-              gen_random_uuid(), $1, $2, $3, $3, $3, $4,
-              $5, $6, $7, $8, $9, $10, $11
+              gen_random_uuid(), $1, $2, $3, $4, $5,
+              $6, $7, $8, $9, $10, $11, $12
             )
           `, [
             approval.client_id,
             notes.type,
             streetText,
+            fullAddress,
             notes.psgc_id ?? null,
             notes.barangay ?? null,
             notes.city ?? null,

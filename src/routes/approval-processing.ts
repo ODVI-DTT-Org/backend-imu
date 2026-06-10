@@ -11,7 +11,7 @@ export type AddressEditUpdate = {
 const ADDRESS_EDIT_ALLOWED_FIELDS = [
   'type',
   'street',
-  'street_address',
+  'full_address',
   'barangay',
   'city',
   'province',
@@ -33,9 +33,9 @@ export function buildAddressEditUpdate(notes: Record<string, unknown>): AddressE
   }
 
   const longStreetAddress =
-    rawFields.street_address ?? rawFields.full_address ?? rawFields.street;
+    rawFields.full_address ?? rawFields.street_address ?? rawFields.street;
   if (longStreetAddress !== undefined) {
-    fields.street_address = longStreetAddress;
+    fields.full_address = longStreetAddress;
   }
 
   return { addressId, fields };
