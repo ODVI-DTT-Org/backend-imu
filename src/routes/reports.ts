@@ -72,7 +72,13 @@ function getDateRange(period: string): { startDate: Date; endDate: Date } {
   return { startDate, endDate };
 }
 
-// GET /api/reports/dashboard?period=week|month|quarter|year
+// GET /api/reports/dashboard
+//   period=week|month|quarter|year   (date range preset; ignored when start_date+end_date present)
+//   month=YYYY-MM                     (calendar-month anchor; ignored when start_date+end_date present)
+//   start_date=YYYY-MM-DD             (explicit range start; requires end_date)
+//   end_date=YYYY-MM-DD               (explicit range end;   requires start_date; clamped to today)
+//   group_ids=uuid,uuid               (CSV UUIDs — scope all aggregates to those teams)
+//   user_ids=uuid,uuid                (CSV UUIDs — scope to specific caravans)
 reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), async (c) => {
   // Optional month=YYYY-MM anchors the dashboard to a specific calendar month.
   // Falls back to the older period=week|month|quarter|year semantics when absent.
@@ -80,50 +86,123 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
   const rawPeriod = c.req.query('period') ?? 'month'
   const period = ['week', 'month', 'quarter', 'year'].includes(rawPeriod) ? rawPeriod : 'month'
 
-  const range = monthQuery && /^\d{4}-\d{2}$/.test(monthQuery)
-    ? getDashboardDateRangeForMonth(monthQuery)
-    : getDashboardDateRange(period)
-  const { from, to, prevFrom, prevTo } = range
+  // Explicit date range overrides month/period when both are provided.
+  const rawStartDate = c.req.query('start_date')
+  const rawEndDate   = c.req.query('end_date')
 
-  const fromStr     = from.toISOString().split('T')[0]
-  const toStr       = to.toISOString().split('T')[0]
-  const prevFromStr = prevFrom.toISOString().split('T')[0]
-  const prevToStr   = prevTo.toISOString().split('T')[0]
+  // Optional team/caravan filters (CSV UUIDs)
+  const groupIds = parseUuidList(c.req.query('group_ids'), 'group_ids') ?? null
+  const userIds  = parseUuidList(c.req.query('user_ids'),  'user_ids')  ?? null
+
+  let fromStr: string
+  let toStr: string
+  let prevFromStr: string
+  let prevToStr: string
+
+  if (rawStartDate && rawEndDate) {
+    // Explicit date range: clamp end to today, derive prev range by same duration
+    fromStr = rawStartDate
+    toStr   = clampEndDate(rawEndDate)
+    const durationMs = new Date(toStr).getTime() - new Date(fromStr).getTime()
+    const prevTo = new Date(new Date(fromStr).getTime() - 1)
+    const prevFrom = new Date(prevTo.getTime() - durationMs)
+    prevToStr   = prevTo.toISOString().split('T')[0]
+    prevFromStr = prevFrom.toISOString().split('T')[0]
+  } else {
+    const range = monthQuery && /^\d{4}-\d{2}$/.test(monthQuery)
+      ? getDashboardDateRangeForMonth(monthQuery)
+      : getDashboardDateRange(period)
+    const { from, to, prevFrom, prevTo } = range
+    fromStr     = from.toISOString().split('T')[0]
+    toStr       = to.toISOString().split('T')[0]
+    prevFromStr = prevFrom.toISOString().split('T')[0]
+    prevToStr   = prevTo.toISOString().split('T')[0]
+  }
 
   // Month view always buckets by day for the in-month trend chart.
   const truncFn = monthQuery
     ? 'day'
     : (period === 'quarter' ? 'week' : period === 'year' ? 'month' : 'day')
 
+  // --- scoped user filter helper ---
+  // Returns a fragment + params for scoping touchpoints/visits/releases to the
+  // requested teams/caravans via group_role_members (role_in_group='caravan').
+  // The fragment is a SQL IN-subquery or user_id = ANY($n) expression.
+  // When both groupIds and userIds are null the fragment is always TRUE.
+  function buildUserFilter(tableAlias: string, baseIndex: number): {
+    clause: string
+    params: (string[] | null)[]
+  } {
+    if (!groupIds && !userIds) {
+      return { clause: 'TRUE', params: [] }
+    }
+    // Collect in-range user_ids via group membership OR direct user_id list
+    // $baseIndex   = groupIds (uuid[] | NULL)
+    // $baseIndex+1 = userIds  (uuid[] | NULL)
+    const clause = `${tableAlias}.user_id IN (
+        SELECT grm.user_id FROM group_role_members grm
+        WHERE grm.role_in_group = 'caravan'
+          AND grm.deleted_at IS NULL
+          AND ($${baseIndex}::uuid[] IS NULL OR grm.group_id = ANY($${baseIndex}))
+        UNION
+        SELECT unnest($${baseIndex + 1}::uuid[]) WHERE $${baseIndex + 1}::uuid[] IS NOT NULL
+      )`
+    return { clause, params: [groupIds, userIds] }
+  }
+
+  const { clause: userFilterTp, params: filterParamsTp } = buildUserFilter('tp', 5)
+  const { clause: userFilterRel, params: filterParamsRel } = buildUserFilter('rel', 5)
+  const { clause: userFilterV, params: filterParamsV } = buildUserFilter('v', 5)
+
   const [releasesResult, touchpointsResult, funnelResult, timelineResult, agentsResult] =
     await Promise.all([
-      pool.query<{
-        releases_current: string
-        releases_prev: string
-      }>(`
-        SELECT
-          COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
-            AND status IN ('approved','released'))  AS releases_current,
-          COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
-            AND status IN ('approved','released'))  AS releases_prev
-        FROM releases
-      `, [fromStr, toStr, prevFromStr, prevToStr]),
+      // Releases KPI — scoped to group/user filter when present
+      groupIds || userIds
+        ? pool.query<{ releases_current: string; releases_prev: string }>(`
+            SELECT
+              COUNT(*) FILTER (WHERE rel.created_at::date BETWEEN $1 AND $2
+                AND rel.status IN ('approved','released'))  AS releases_current,
+              COUNT(*) FILTER (WHERE rel.created_at::date BETWEEN $3 AND $4
+                AND rel.status IN ('approved','released'))  AS releases_prev
+            FROM releases rel
+            WHERE ${userFilterRel}
+          `, [fromStr, toStr, prevFromStr, prevToStr, ...filterParamsRel])
+        : pool.query<{ releases_current: string; releases_prev: string }>(`
+            SELECT
+              COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
+                AND status IN ('approved','released'))  AS releases_current,
+              COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
+                AND status IN ('approved','released'))  AS releases_prev
+            FROM releases
+          `, [fromStr, toStr, prevFromStr, prevToStr]),
 
-      pool.query<{
-        visits_current: string; visits_prev: string
-        calls_current: string;  calls_prev: string
-      }>(`
-        SELECT
-          COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
-            AND type = 'Visit')  AS visits_current,
-          COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
-            AND type = 'Visit')  AS visits_prev,
-          COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
-            AND type = 'Call')   AS calls_current,
-          COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
-            AND type = 'Call')   AS calls_prev
-        FROM touchpoints
-      `, [fromStr, toStr, prevFromStr, prevToStr]),
+      // Touchpoints KPI — scoped to group/user filter when present
+      groupIds || userIds
+        ? pool.query<{ visits_current: string; visits_prev: string; calls_current: string; calls_prev: string }>(`
+            SELECT
+              COUNT(*) FILTER (WHERE tp.created_at::date BETWEEN $1 AND $2
+                AND tp.type = 'Visit')  AS visits_current,
+              COUNT(*) FILTER (WHERE tp.created_at::date BETWEEN $3 AND $4
+                AND tp.type = 'Visit')  AS visits_prev,
+              COUNT(*) FILTER (WHERE tp.created_at::date BETWEEN $1 AND $2
+                AND tp.type = 'Call')   AS calls_current,
+              COUNT(*) FILTER (WHERE tp.created_at::date BETWEEN $3 AND $4
+                AND tp.type = 'Call')   AS calls_prev
+            FROM touchpoints tp
+            WHERE ${userFilterTp}
+          `, [fromStr, toStr, prevFromStr, prevToStr, ...filterParamsTp])
+        : pool.query<{ visits_current: string; visits_prev: string; calls_current: string; calls_prev: string }>(`
+            SELECT
+              COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
+                AND type = 'Visit')  AS visits_current,
+              COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
+                AND type = 'Visit')  AS visits_prev,
+              COUNT(*) FILTER (WHERE created_at::date BETWEEN $1 AND $2
+                AND type = 'Call')   AS calls_current,
+              COUNT(*) FILTER (WHERE created_at::date BETWEEN $3 AND $4
+                AND type = 'Call')   AS calls_prev
+            FROM touchpoints
+          `, [fromStr, toStr, prevFromStr, prevToStr]),
 
       pool.query<{ category: string; count: string }>(`
         WITH latest_release AS (
@@ -198,6 +277,21 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
   const cCurr = parseInt(touchpointsResult.rows[0]?.calls_current ?? '0')
   const cPrev = parseInt(touchpointsResult.rows[0]?.calls_prev ?? '0')
 
+  // Conversion KPI — scoped when filter active
+  const convFilter = groupIds || userIds
+    ? ` AND user_id IN (
+          SELECT grm.user_id FROM group_role_members grm
+          WHERE grm.role_in_group = 'caravan' AND grm.deleted_at IS NULL
+            AND ($3::uuid[] IS NULL OR grm.group_id = ANY($3))
+          UNION
+          SELECT unnest($4::uuid[]) WHERE $4::uuid[] IS NOT NULL
+        )`
+    : ''
+  const convParams = (fromStr: string, toStr: string) =>
+    groupIds || userIds
+      ? [fromStr, toStr, groupIds, userIds]
+      : [fromStr, toStr]
+
   const [conversionResult, activeClientsResult] = await Promise.all([
     pool.query<{ count: string }>(`
       SELECT COUNT(*) AS count FROM (
@@ -205,9 +299,10 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
         FROM releases
         WHERE created_at::date BETWEEN $1 AND $2
           AND status IN ('approved','released')
+          ${convFilter}
         ORDER BY client_id, created_at ASC
       ) first_releases
-    `, [fromStr, toStr]),
+    `, convParams(fromStr, toStr)),
     pool.query<{ count: string }>(`
       SELECT COUNT(*) AS count FROM clients WHERE deleted_at IS NULL
     `),
@@ -220,9 +315,10 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
         FROM releases
         WHERE created_at::date BETWEEN $1 AND $2
           AND status IN ('approved','released')
+          ${convFilter}
         ORDER BY client_id, created_at ASC
       ) first_releases
-    `, [prevFromStr, prevToStr]),
+    `, convParams(prevFromStr, prevToStr)),
   ])
 
   const convCurr = parseInt(conversionResult.rows[0]?.count ?? '0')
@@ -236,11 +332,237 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
     categoryMap[row.category] = parseInt(row.count)
   }
 
+  // ── visited_by_category block ─────────────────────────────────────────────
+  //
+  // Counts DISTINCT clients visited within the date range, broken down by
+  // their category (VIRGIN / FAVORABLE / EXISTING / OTHERS) at the time of
+  // the query, following the same logic as the existing funnel CTE above.
+  //
+  // VIRGIN   = no visit on record before the range start
+  // FAVORABLE = latest overall visit within the last 6 months (matches funnel)
+  // EXISTING  = has an approved/released loan
+  // OTHERS   = has a prior visit but not within the 6-month window
+  //
+  // Scoped to group_ids / user_ids when provided.
+  //
+  // Breakdown dimension:
+  //   - No group filter → per-team (group_role_members group)
+  //   - Single group_ids  → per-caravan within that group
+  //   - Multiple group_ids → per-team (same as no filter)
+  const visitFilterClause = groupIds || userIds
+    ? `AND v.user_id IN (
+          SELECT grm.user_id FROM group_role_members grm
+          WHERE grm.role_in_group = 'caravan' AND grm.deleted_at IS NULL
+            AND ($3::uuid[] IS NULL OR grm.group_id = ANY($3))
+          UNION
+          SELECT unnest($4::uuid[]) WHERE $4::uuid[] IS NOT NULL
+        )`
+    : ''
+  const visitedByCatParams: (string | string[] | null)[] = groupIds || userIds
+    ? [fromStr, toStr, groupIds, userIds]
+    : [fromStr, toStr]
+
+  const visitedByCatResult = await pool.query<{
+    category: string
+    count: string
+  }>(`
+    WITH visited_in_range AS (
+      SELECT DISTINCT v.client_id
+      FROM visits v
+      WHERE v.time_in::date BETWEEN $1 AND $2
+        ${visitFilterClause}
+    ),
+    latest_release AS (
+      SELECT DISTINCT ON (client_id) client_id, status
+      FROM releases
+      ORDER BY client_id, created_at DESC
+    ),
+    latest_visit_overall AS (
+      SELECT DISTINCT ON (client_id) client_id, created_at
+      FROM visits
+      ORDER BY client_id, created_at DESC
+    ),
+    categorized AS (
+      SELECT
+        vr.client_id,
+        CASE
+          WHEN lr.status IN ('approved','released') THEN 'EXISTING'
+          WHEN lvo.client_id IS NOT NULL
+            AND (NOW() - lvo.created_at) <= INTERVAL '6 months' THEN 'FAVORABLE'
+          WHEN lvo.client_id IS NOT NULL THEN 'OTHERS'
+          ELSE 'VIRGIN'
+        END AS category
+      FROM visited_in_range vr
+      LEFT JOIN latest_release lr ON lr.client_id = vr.client_id
+      LEFT JOIN latest_visit_overall lvo ON lvo.client_id = vr.client_id
+    )
+    SELECT category, COUNT(*) AS count
+    FROM categorized
+    GROUP BY category
+    ORDER BY CASE category
+      WHEN 'VIRGIN' THEN 1 WHEN 'FAVORABLE' THEN 2
+      WHEN 'OTHERS' THEN 3 WHEN 'EXISTING'  THEN 4
+    END
+  `, visitedByCatParams)
+
+  const visitedCatMap: Record<string, number> = { VIRGIN: 0, FAVORABLE: 0, OTHERS: 0, EXISTING: 0 }
+  for (const row of visitedByCatResult.rows) {
+    visitedCatMap[row.category] = parseInt(row.count)
+  }
+
+  // ── Per-team or per-caravan breakdown ────────────────────────────────────
+  // Single group selected → per-caravan. Everything else → per-team.
+  const isSingleGroup = groupIds && groupIds.length === 1
+
+  let breakdownRows: Array<{ label: string; VIRGIN: number; FAVORABLE: number; EXISTING: number; OTHERS: number }> = []
+
+  if (isSingleGroup) {
+    // Per-caravan breakdown within the selected group
+    const bdParams: (string | string[] | null)[] = [fromStr, toStr, groupIds, userIds]
+    const bdResult = await pool.query<{
+      user_id: string; agent_name: string
+      category: string; count: string
+    }>(`
+      WITH visited_in_range AS (
+        SELECT DISTINCT v.client_id, v.user_id
+        FROM visits v
+        WHERE v.time_in::date BETWEEN $1 AND $2
+          AND v.user_id IN (
+            SELECT grm.user_id FROM group_role_members grm
+            WHERE grm.group_id = ANY($3) AND grm.role_in_group = 'caravan' AND grm.deleted_at IS NULL
+            UNION
+            SELECT unnest($4::uuid[]) WHERE $4::uuid[] IS NOT NULL
+          )
+      ),
+      latest_release AS (
+        SELECT DISTINCT ON (client_id) client_id, status
+        FROM releases
+        ORDER BY client_id, created_at DESC
+      ),
+      latest_visit_overall AS (
+        SELECT DISTINCT ON (client_id) client_id, created_at
+        FROM visits
+        ORDER BY client_id, created_at DESC
+      ),
+      categorized AS (
+        SELECT
+          vr.user_id,
+          vr.client_id,
+          CASE
+            WHEN lr.status IN ('approved','released') THEN 'EXISTING'
+            WHEN lvo.client_id IS NOT NULL
+              AND (NOW() - lvo.created_at) <= INTERVAL '6 months' THEN 'FAVORABLE'
+            WHEN lvo.client_id IS NOT NULL THEN 'OTHERS'
+            ELSE 'VIRGIN'
+          END AS category
+        FROM visited_in_range vr
+        LEFT JOIN latest_release lr ON lr.client_id = vr.client_id
+        LEFT JOIN latest_visit_overall lvo ON lvo.client_id = vr.client_id
+      )
+      SELECT
+        u.id AS user_id,
+        u.first_name || ' ' || u.last_name AS agent_name,
+        c.category,
+        COUNT(DISTINCT c.client_id) AS count
+      FROM categorized c
+      JOIN users u ON u.id = c.user_id
+      GROUP BY u.id, u.first_name, u.last_name, c.category
+      ORDER BY u.last_name, u.first_name, c.category
+    `, bdParams)
+
+    // Pivot into per-agent rows
+    const agentMap = new Map<string, { label: string; VIRGIN: number; FAVORABLE: number; EXISTING: number; OTHERS: number }>()
+    for (const row of bdResult.rows) {
+      if (!agentMap.has(row.user_id)) {
+        agentMap.set(row.user_id, { label: row.agent_name, VIRGIN: 0, FAVORABLE: 0, EXISTING: 0, OTHERS: 0 })
+      }
+      const entry = agentMap.get(row.user_id)!
+      entry[row.category as 'VIRGIN' | 'FAVORABLE' | 'EXISTING' | 'OTHERS'] = parseInt(row.count)
+    }
+    breakdownRows = [...agentMap.values()]
+  } else {
+    // Per-team breakdown
+    const bdParams: (string | string[] | null)[] = groupIds || userIds
+      ? [fromStr, toStr, groupIds, userIds]
+      : [fromStr, toStr]
+    const filterClause = groupIds || userIds
+      ? `AND v.user_id IN (
+            SELECT grm.user_id FROM group_role_members grm
+            WHERE grm.role_in_group = 'caravan' AND grm.deleted_at IS NULL
+              AND ($3::uuid[] IS NULL OR grm.group_id = ANY($3))
+            UNION
+            SELECT unnest($4::uuid[]) WHERE $4::uuid[] IS NOT NULL
+          )`
+      : ''
+    const bdResult = await pool.query<{
+      team_name: string; category: string; count: string
+    }>(`
+      WITH visited_in_range AS (
+        SELECT DISTINCT v.client_id, v.user_id
+        FROM visits v
+        WHERE v.time_in::date BETWEEN $1 AND $2
+          ${filterClause}
+      ),
+      latest_release AS (
+        SELECT DISTINCT ON (client_id) client_id, status
+        FROM releases
+        ORDER BY client_id, created_at DESC
+      ),
+      latest_visit_overall AS (
+        SELECT DISTINCT ON (client_id) client_id, created_at
+        FROM visits
+        ORDER BY client_id, created_at DESC
+      ),
+      categorized AS (
+        SELECT
+          vr.user_id,
+          vr.client_id,
+          CASE
+            WHEN lr.status IN ('approved','released') THEN 'EXISTING'
+            WHEN lvo.client_id IS NOT NULL
+              AND (NOW() - lvo.created_at) <= INTERVAL '6 months' THEN 'FAVORABLE'
+            WHEN lvo.client_id IS NOT NULL THEN 'OTHERS'
+            ELSE 'VIRGIN'
+          END AS category
+        FROM visited_in_range vr
+        LEFT JOIN latest_release lr ON lr.client_id = vr.client_id
+        LEFT JOIN latest_visit_overall lvo ON lvo.client_id = vr.client_id
+      )
+      SELECT
+        COALESCE(g.name, 'UNASSIGNED') AS team_name,
+        c.category,
+        COUNT(DISTINCT c.client_id) AS count
+      FROM categorized c
+      LEFT JOIN group_role_members grm
+             ON grm.user_id = c.user_id
+            AND grm.role_in_group = 'caravan'
+            AND grm.deleted_at IS NULL
+      LEFT JOIN groups g ON g.id = grm.group_id
+      GROUP BY COALESCE(g.name, 'UNASSIGNED'), c.category
+      ORDER BY team_name, c.category
+    `, bdParams)
+
+    // Pivot into per-team rows
+    const teamMap = new Map<string, { label: string; VIRGIN: number; FAVORABLE: number; EXISTING: number; OTHERS: number }>()
+    for (const row of bdResult.rows) {
+      if (!teamMap.has(row.team_name)) {
+        teamMap.set(row.team_name, { label: row.team_name, VIRGIN: 0, FAVORABLE: 0, EXISTING: 0, OTHERS: 0 })
+      }
+      const entry = teamMap.get(row.team_name)!
+      entry[row.category as 'VIRGIN' | 'FAVORABLE' | 'EXISTING' | 'OTHERS'] = parseInt(row.count)
+    }
+    breakdownRows = [...teamMap.values()]
+  }
+
   return c.json({
     period,
     month: monthQuery ?? null,
     date_range: { from: fromStr, to: toStr },
     prev_date_range: { from: prevFromStr, to: prevToStr },
+    filters: {
+      group_ids: groupIds ?? null,
+      user_ids:  userIds  ?? null,
+    },
     kpis: {
       releases:        { current: rCurr, previous: rPrev, change_pct: calcChangePct(rCurr, rPrev) },
       visits:          { current: vCurr, previous: vPrev, change_pct: calcChangePct(vCurr, vPrev) },
@@ -258,6 +580,16 @@ reports.get('/dashboard', authMiddleware, requirePermission('reports', 'read'), 
       releases: parseInt(r.releases),
       visits: parseInt(r.visits),
     })),
+    visited_by_category: {
+      total: {
+        VIRGIN:   visitedCatMap.VIRGIN,
+        FAVORABLE: visitedCatMap.FAVORABLE,
+        EXISTING:  visitedCatMap.EXISTING,
+        OTHERS:    visitedCatMap.OTHERS,
+      },
+      breakdown_by: isSingleGroup ? 'caravan' : 'team',
+      breakdown: breakdownRows,
+    },
   })
 })
 
