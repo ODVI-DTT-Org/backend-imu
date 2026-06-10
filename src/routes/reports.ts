@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { requirePermission } from '../middleware/permissions.js';
 import { pool } from '../db/index.js';
-import { getDashboardDateRange, getDashboardDateRangeForMonth, calcChangePct } from '../utils/dashboard-helpers.js';
+import { getDashboardDateRange, getDashboardDateRangeForMonth, calcChangePct, clampEndDate } from '../utils/dashboard-helpers.js';
 import {
   ValidationError,
   AuthorizationError,
@@ -14,6 +14,7 @@ import {
   exportTouchpointsToExcel,
   exportClientsToExcel,
   exportAttendanceToExcel,
+  type ExcelFilterOptions,
 } from '../utils/excel-export.js';
 import {
   exportToCsv,
@@ -266,6 +267,7 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
     const user = c.get('user');
     const period = c.req.query('period') || 'month';
     const caravanId = c.req.query('user_id');
+    const groupId = c.req.query('group_id');
     const municipality = c.req.query('municipality');
     const province = c.req.query('province');
     const { startDate, endDate } = getDateRange(period);
@@ -278,9 +280,19 @@ reports.get('/agent-performance', authMiddleware, requirePermission('reports', '
     if (user.role === 'caravan') {
       whereClause += ` AND t.user_id = $${paramIndex}`;
       params.push(user.sub);
+      paramIndex++;
     } else if (caravanId) {
       whereClause += ` AND t.user_id = $${paramIndex}`;
       params.push(caravanId);
+      paramIndex++;
+    } else if (groupId) {
+      whereClause += ` AND t.user_id IN (
+        SELECT grm.user_id FROM group_role_members grm
+        WHERE grm.group_id = $${paramIndex}
+          AND grm.role_in_group = 'caravan'
+          AND grm.deleted_at IS NULL
+      )`;
+      params.push(groupId);
       paramIndex++;
     }
 
@@ -1250,36 +1262,98 @@ reports.get('/export/csv', authMiddleware, requirePermission('reports', 'export'
   }
 });
 
+// Validate a comma-separated UUID list; returns array or throws ValidationError.
+function parseUuidList(raw: string | undefined, paramName: string): string[] | undefined {
+  if (!raw || raw.trim() === '') return undefined;
+  const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const ids = raw.split(',').map(s => s.trim()).filter(Boolean);
+  for (const id of ids) {
+    if (!uuidRe.test(id)) {
+      throw new ValidationError(`Invalid UUID in ${paramName}: ${id}`);
+    }
+  }
+  return ids.length > 0 ? ids : undefined;
+}
+
+const VALID_REASON_CATEGORIES = ['Favorable', 'Processing', 'Unfavorable', 'General'] as const;
+type ReasonCategory = typeof VALID_REASON_CATEGORIES[number];
+
 // GET /api/reports/export/excel - Export report data as Excel
+//
+// Query params:
+//   type           touchpoints | clients | attendance
+//   period         week | month | quarter | year  (default: month; ignored if start_date+end_date present)
+//   start_date     YYYY-MM-DD  (overrides period when both dates present; end_date clamped to today)
+//   end_date       YYYY-MM-DD
+//   group_ids      comma-separated UUIDs (touchpoints, attendance)
+//   user_ids       comma-separated UUIDs (touchpoints, attendance)
+//   reason_category  Favorable|Processing|Unfavorable|General (touchpoints only)
+//   client_type    string (clients only)
+//   province       string (clients only)
+//   municipality   string (clients only)
 reports.get('/export/excel', authMiddleware, requirePermission('reports', 'export'), async (c) => {
   try {
     const user = c.get('user');
     const reportType = c.req.query('type') || 'touchpoints';
     const period = c.req.query('period') || 'month';
-    const { startDate, endDate } = getDateRange(period);
 
     // Only admin/staff can export
     if (user.role === 'caravan') {
       throw new AuthorizationError('Unauthorized');
     }
 
+    // Resolve date range: explicit start/end overrides period
+    const rawStart = c.req.query('start_date');
+    const rawEnd = c.req.query('end_date');
+
+    let startStr: string;
+    let endStr: string;
+
+    if (rawStart && rawEnd) {
+      startStr = rawStart;
+      endStr = clampEndDate(rawEnd);
+    } else {
+      const { startDate, endDate } = getDateRange(period);
+      startStr = startDate.toISOString().split('T')[0];
+      endStr = endDate.toISOString().split('T')[0];
+    }
+
+    // Parse optional filter params
+    const groupIds = parseUuidList(c.req.query('group_ids'), 'group_ids');
+    const userIds  = parseUuidList(c.req.query('user_ids'),  'user_ids');
+
+    const rawCategory = c.req.query('reason_category');
+    let reasonCategory: string | undefined;
+    if (rawCategory) {
+      if (!(VALID_REASON_CATEGORIES as ReadonlyArray<string>).includes(rawCategory)) {
+        throw new ValidationError(`Invalid reason_category. Must be one of: ${VALID_REASON_CATEGORIES.join(', ')}`);
+      }
+      reasonCategory = rawCategory;
+    }
+
+    const clientType   = c.req.query('client_type')   || undefined;
+    const province     = c.req.query('province')       || undefined;
+    const municipality = c.req.query('municipality')   || undefined;
+
+    const filters: ExcelFilterOptions = { groupIds, userIds, reasonCategory, clientType, province, municipality };
+
     let excelBuffer: Buffer;
     let filename = '';
 
     switch (reportType) {
       case 'touchpoints':
-        excelBuffer = await exportTouchpointsToExcel(pool, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
-        filename = `touchpoints_${period}.xlsx`;
+        excelBuffer = await exportTouchpointsToExcel(pool, startStr, endStr, filters);
+        filename = `touchpoints_${rawStart ? startStr : period}.xlsx`;
         break;
 
       case 'clients':
-        excelBuffer = await exportClientsToExcel(pool, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
-        filename = `clients_${period}.xlsx`;
+        excelBuffer = await exportClientsToExcel(pool, startStr, endStr, filters);
+        filename = `clients_${rawStart ? startStr : period}.xlsx`;
         break;
 
       case 'attendance':
-        excelBuffer = await exportAttendanceToExcel(pool, startDate.toISOString().split('T')[0], endDate.toISOString().split('T')[0]);
-        filename = `attendance_${period}.xlsx`;
+        excelBuffer = await exportAttendanceToExcel(pool, startStr, endStr, filters);
+        filename = `attendance_${rawStart ? startStr : period}.xlsx`;
         break;
 
       default:
@@ -1292,7 +1366,7 @@ reports.get('/export/excel', authMiddleware, requirePermission('reports', 'expor
     });
   } catch (error) {
     console.error('Export Excel error:', error);
-    throw new Error('Failed to export Excel');
+    throw error;
   }
 });
 
@@ -1310,6 +1384,7 @@ reports.get('/daily-visits', authMiddleware, requirePermission('reports', 'read'
     const startDate = c.req.query('start_date') || defaultStart;
     const endDate = c.req.query('end_date') || defaultEnd;
     const filterUserId = c.req.query('user_id');
+    const filterGroupId = c.req.query('group_id');
 
     const params: any[] = [];
     let paramIndex = 1;
@@ -1322,13 +1397,21 @@ reports.get('/daily-visits', authMiddleware, requirePermission('reports', 'read'
     whereClause += ` AND v.time_in <= $${paramIndex++}`;
     params.push(endDate + 'T23:59:59.999Z');
 
-    // Caravan agents see only their own; admin/staff can filter by user_id
+    // Caravan agents see only their own; admin/staff can filter by user_id or group_id
     if (user.role === 'caravan') {
       whereClause += ` AND v.user_id = $${paramIndex++}`;
       params.push(user.sub);
     } else if (filterUserId) {
       whereClause += ` AND v.user_id = $${paramIndex++}`;
       params.push(filterUserId);
+    } else if (filterGroupId) {
+      whereClause += ` AND v.user_id IN (
+        SELECT grm.user_id FROM group_role_members grm
+        WHERE grm.group_id = $${paramIndex++}
+          AND grm.role_in_group = 'caravan'
+          AND grm.deleted_at IS NULL
+      )`;
+      params.push(filterGroupId);
     }
 
     if (detail) {
@@ -1396,6 +1479,7 @@ reports.get('/daily-calls', authMiddleware, requirePermission('reports', 'read')
     const startDate = c.req.query('start_date') || defaultStart;
     const endDate = c.req.query('end_date') || defaultEnd;
     const filterUserId = c.req.query('user_id');
+    const filterGroupId = c.req.query('group_id');
 
     const params: any[] = [];
     let paramIndex = 1;
@@ -1408,13 +1492,21 @@ reports.get('/daily-calls', authMiddleware, requirePermission('reports', 'read')
     whereClause += ` AND c.dial_time <= $${paramIndex++}`;
     params.push(endDate + 'T23:59:59.999Z');
 
-    // Caravan agents see only their own; admin/staff can filter by user_id
+    // Caravan agents see only their own; admin/staff can filter by user_id or group_id
     if (user.role === 'caravan') {
       whereClause += ` AND c.user_id = $${paramIndex++}`;
       params.push(user.sub);
     } else if (filterUserId) {
       whereClause += ` AND c.user_id = $${paramIndex++}`;
       params.push(filterUserId);
+    } else if (filterGroupId) {
+      whereClause += ` AND c.user_id IN (
+        SELECT grm.user_id FROM group_role_members grm
+        WHERE grm.group_id = $${paramIndex++}
+          AND grm.role_in_group = 'caravan'
+          AND grm.deleted_at IS NULL
+      )`;
+      params.push(filterGroupId);
     }
 
     if (detail) {
@@ -1481,6 +1573,7 @@ reports.get('/caravan-releases', authMiddleware, requirePermission('reports', 'r
     const startDate = c.req.query('start_date') || defaultStart;
     const endDate = c.req.query('end_date') || defaultEnd;
     const filterUserId = c.req.query('user_id');
+    const filterGroupId = c.req.query('group_id');
     const productType = c.req.query('product_type');
     const loanType = c.req.query('loan_type');
     const status = c.req.query('status');
@@ -1496,13 +1589,21 @@ reports.get('/caravan-releases', authMiddleware, requirePermission('reports', 'r
     whereClause += ` AND r.created_at <= $${paramIndex++}`;
     params.push(endDate + 'T23:59:59.999Z');
 
-    // Caravan agents see only their own; admin/staff can filter by user_id
+    // Caravan agents see only their own; admin/staff can filter by user_id or group_id
     if (user.role === 'caravan') {
       whereClause += ` AND r.user_id = $${paramIndex++}`;
       params.push(user.sub);
     } else if (filterUserId) {
       whereClause += ` AND r.user_id = $${paramIndex++}`;
       params.push(filterUserId);
+    } else if (filterGroupId) {
+      whereClause += ` AND r.user_id IN (
+        SELECT grm.user_id FROM group_role_members grm
+        WHERE grm.group_id = $${paramIndex++}
+          AND grm.role_in_group = 'caravan'
+          AND grm.deleted_at IS NULL
+      )`;
+      params.push(filterGroupId);
     }
 
     if (productType) {
