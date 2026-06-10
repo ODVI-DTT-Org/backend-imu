@@ -120,9 +120,15 @@ export function buildClientFilters(
 
   function applyMultiFilter(raw: string | string[] | undefined, col: string, castType: string = 'text') {
     if (!raw) return;
-    const values = Array.isArray(raw)
-      ? raw.filter(v => v && v !== 'all')
-      : raw.split(',').map(v => v.trim()).filter(v => v && v !== 'all');
+    // Mobile sometimes sends multi-value as `?col=A,B` (one param, comma-joined) and
+    // sometimes as `?col=A&col=B` (repeated param). Hono returns the latter as an array
+    // and the former as an array with one comma-joined element. Flatten both shapes by
+    // splitting each element on commas.
+    const rawArr = Array.isArray(raw) ? raw : [raw];
+    const values = rawArr
+      .flatMap(v => (v ?? '').split(','))
+      .map(v => v.trim())
+      .filter(v => v && v !== 'all');
     if (values.length === 0) return;
     conditions.push(`${col} = ANY($${idx}::${castType}[])`);
     params.push(values);
