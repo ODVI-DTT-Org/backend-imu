@@ -3,7 +3,8 @@ const fs = require('fs');
 const path = require('path');
 
 async function runMigrations() {
-  const connectionString = process.env.DATABASE_URL || 'postgresql://user:password@host:port/database';
+  const connectionString = (process.env.DATABASE_URL || 'postgresql://user:password@host:port/database')
+    .replace('sslmode=require', 'sslmode=no-verify');
 
   const client = new Client({
     connectionString: connectionString,
@@ -28,6 +29,42 @@ async function runMigrations() {
     const migration060 = fs.readFileSync(path.join(__dirname, 'src/migrations/060_add_rbac_for_addresses_phones.sql'), 'utf8');
     await client.query(migration060);
     console.log('✅ Migration 060 completed');
+
+    // Run migration 110a
+    console.log('\n📋 Running migration 110: Auto-populate clients.full_name...');
+    const migration110a = fs.readFileSync(path.join(__dirname, 'migrations/110_auto_populate_full_name.sql'), 'utf8');
+    await client.query(migration110a);
+    console.log('✅ Migration 110 (auto_populate_full_name) completed');
+
+    // Run migration 110b
+    console.log('\n📋 Running migration 110: Itinerary tombstones table...');
+    const migration110b = fs.readFileSync(path.join(__dirname, 'migrations/110_itinerary_tombstones.sql'), 'utf8');
+    await client.query(migration110b);
+    console.log('✅ Migration 110 (itinerary_tombstones) completed');
+
+    // Run migration 111
+    console.log('\n📋 Running migration 111: Release loan-detail fields optional...');
+    const migration111 = fs.readFileSync(path.join(__dirname, 'migrations/111_make_release_loan_detail_fields_optional.sql'), 'utf8');
+    await client.query(migration111);
+    console.log('✅ Migration 111 completed');
+
+    // Run migration 112
+    console.log('\n📋 Running migration 112: Visits kilometers_traveled column...');
+    const migration112 = fs.readFileSync(path.join(__dirname, 'migrations/112_add_kilometers_traveled.sql'), 'utf8');
+    await client.query(migration112);
+    console.log('✅ Migration 112 completed');
+
+    // Run migration 113
+    console.log('\n📋 Running migration 113: Clients geocode_method column...');
+    const migration113 = fs.readFileSync(path.join(__dirname, 'migrations/113_add_geocode_method.sql'), 'utf8');
+    await client.query(migration113);
+    console.log('✅ Migration 113 completed');
+
+    // Run migration 116 (required by 1107: adds touchpoints.touchpoint_day_manila)
+    console.log('\n📋 Running migration 116: Unique touchpoint per client/user/day...');
+    const migration116 = fs.readFileSync(path.join(__dirname, 'migrations/116_unique_touchpoint_per_client_user_day.sql'), 'utf8');
+    await client.query(migration116);
+    console.log('✅ Migration 116 completed');
 
     // Run migration 1100
     console.log('\n📋 Running migration 1100: Create agents table...');
