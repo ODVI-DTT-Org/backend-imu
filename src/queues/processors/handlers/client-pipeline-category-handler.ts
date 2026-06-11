@@ -36,6 +36,12 @@ const INTERESTED_REASONS_LOWER = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Parse "YYYY-MM-DD" → Date at local midnight (avoids UTC-shift on timezone offsets). */
+function parseDateLocal(dateStr: string): Date {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d); // local midnight, no UTC shift
+}
+
 /** Parse "YYYY-MM" → Date at midnight local (first day of month). */
 function firstDayOfMonth(ym: string): Date {
   const [y, m] = ym.split('-').map(Number);
@@ -172,7 +178,7 @@ async function generateReport(
 
     // loan_released_at: the first month where "existing" applies
     const loanReleasedAt = client.loan_released && client.loan_released_at
-      ? new Date(client.loan_released_at)
+      ? parseDateLocal(client.loan_released_at)
       : null;
 
     const summary: TouchpointEntry[] = Array.isArray(client.touchpoint_summary)
@@ -195,7 +201,7 @@ async function generateReport(
       const visitsThisMonth = summary.filter((tp) => {
         if (tp.type !== 'Visit') return false;
         if (!tp.date) return false;
-        const d = new Date(tp.date);
+        const d = parseDateLocal(tp.date);
         return d >= monthFirst && d <= monthLast;
       });
 

@@ -2335,12 +2335,25 @@ reports.post('/client-pipeline-category/generate', authMiddleware, requirePermis
     end_month:   z.string().regex(/^\d{4}-\d{2}$/, 'end_month must be YYYY-MM').optional(),
   });
 
-  const { start_month, end_month } = schema.parse(body);
+  const { start_month: startMonth, end_month: endMonth } = schema.parse(body);
+
+  if (startMonth && endMonth && startMonth > endMonth) {
+    return c.json({ error: 'start_month must be on or before end_month' }, 422);
+  }
+
+  if (startMonth && endMonth) {
+    const [sy, sm] = startMonth.split('-').map(Number);
+    const [ey, em] = endMonth.split('-').map(Number);
+    const monthCount = (ey - sy) * 12 + (em - sm) + 1;
+    if (monthCount > 36) {
+      return c.json({ error: 'Month range cannot exceed 36 months' }, 422);
+    }
+  }
 
   const job = await addReportJob(
     ReportJobType.REPORT_CLIENT_PIPELINE_CATEGORY,
     user.sub,
-    { startMonth: start_month, endMonth: end_month }
+    { startMonth, endMonth }
   );
 
   return c.json({ job_id: job.id }, 202);
