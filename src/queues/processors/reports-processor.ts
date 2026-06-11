@@ -38,6 +38,7 @@ import { generateTeleReleasesReport } from './handlers/tele-releases-handler.js'
 import { generateOdometerReport } from './handlers/odometer-handler.js';
 import { generateReleasesByLoanTypeReport } from './handlers/releases-by-loan-type-handler.js';
 import { generateTouchpointsToReleaseReport } from './handlers/touchpoints-to-release-handler.js';
+import { generateClientPipelineCategoryReport } from './handlers/client-pipeline-category-handler.js';
 
 /**
  * Builds a SQL expression that resolves a client's address with this priority:
@@ -320,6 +321,22 @@ export class ReportsProcessor extends BaseProcessor<ReportJobData, JobResult> {
             result: { reportType: 'touchpoints_to_release', format: 'excel', generatedAt: new Date(),
               parameters: { from, to, loanType: params?.loan_type, productType: params?.product_type },
               downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount },
+          };
+        }
+        case 'report_client_pipeline_category': {
+          const r = await generateClientPipelineCategoryReport(
+            pool, this.s3Client, this.s3Bucket,
+            { startMonth: params?.startMonth, endMonth: params?.endMonth },
+            onProgress
+          );
+          return {
+            success: true, total: 1, succeeded: ['report_client_pipeline_category'], failed: [],
+            startedAt, completedAt: new Date(), duration: Date.now() - startedAt.getTime(),
+            result: {
+              reportType: 'client_pipeline_category', format: 'excel', generatedAt: new Date(),
+              parameters: { startMonth: params?.startMonth, endMonth: params?.endMonth },
+              downloadUrl: r.downloadUrl, fileName: r.fileName, fileSize: r.buffer.byteLength, rowCount: r.rowCount,
+            },
           };
         }
         default:
