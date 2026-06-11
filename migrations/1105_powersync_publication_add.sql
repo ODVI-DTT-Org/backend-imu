@@ -4,7 +4,26 @@
 
 BEGIN;
 
-ALTER PUBLICATION powersync ADD TABLE agents, client_status_history;
+-- Idempotent: handles both fresh DBs (no publication yet) and existing DBs
+-- where powersync already includes the base 10 tables.
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'powersync') THEN
+    CREATE PUBLICATION powersync FOR TABLE
+      clients, itineraries, touchpoints, addresses, phone_numbers,
+      user_profiles, user_locations, approvals, psgc, touchpoint_reasons,
+      agents, client_status_history;
+  ELSE
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+                   WHERE pubname='powersync' AND tablename='agents') THEN
+      ALTER PUBLICATION powersync ADD TABLE agents;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_publication_tables
+                   WHERE pubname='powersync' AND tablename='client_status_history') THEN
+      ALTER PUBLICATION powersync ADD TABLE client_status_history;
+    END IF;
+  END IF;
+END $$;
 
 INSERT INTO migration_log (script_name, status, completed_at, details)
 VALUES (

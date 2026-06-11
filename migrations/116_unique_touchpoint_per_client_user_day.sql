@@ -15,7 +15,7 @@ ALTER TABLE touchpoints
     GENERATED ALWAYS AS ((created_at AT TIME ZONE 'Asia/Manila')::date) STORED;
 
 -- Step 3: Create partial unique index — only constrains non-legacy rows
-CREATE UNIQUE INDEX uq_touchpoints_client_user_day
+CREATE UNIQUE INDEX IF NOT EXISTS uq_touchpoints_client_user_day
   ON touchpoints (client_id, user_id, touchpoint_day_manila)
   WHERE is_legacy = false;
 
