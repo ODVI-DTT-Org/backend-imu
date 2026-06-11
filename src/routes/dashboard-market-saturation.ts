@@ -160,13 +160,23 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         AND ($3::text[] IS NULL OR c.municipality = ANY($3))
         AND ($4::text   IS NULL OR c.municipality = $4)
         AND ($5::text   IS NULL OR c.client_type  = $5::client_type_enum)
-        AND ($6::uuid   IS NULL OR c.user_id = $6::uuid)
-        AND ($7::uuid   IS NULL OR c.user_id IN (
-          SELECT grm2.user_id
-          FROM group_role_members grm2
-          WHERE grm2.group_id = $7::uuid
-            AND grm2.role_in_group = 'caravan'
-            AND grm2.deleted_at IS NULL
+        AND ($6::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM visits v2
+          WHERE v2.client_id = c.id
+            AND v2.user_id   = $6::uuid
+            AND v2.deleted_at IS NULL
+        ))
+        AND ($7::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM visits v2
+          WHERE v2.client_id = c.id
+            AND v2.deleted_at IS NULL
+            AND v2.user_id IN (
+              SELECT grm2.user_id
+              FROM group_role_members grm2
+              WHERE grm2.group_id       = $7::uuid
+                AND grm2.role_in_group  = 'caravan'
+                AND grm2.deleted_at     IS NULL
+            )
         ))
     ),
     client_data AS (
@@ -358,13 +368,23 @@ marketSaturation.get('/', authMiddleware, async (c) => {
           AND ($3::text[] IS NULL OR c.municipality = ANY($3))
           AND ($4::text   IS NULL OR c.municipality = $4)
           AND ($5::text   IS NULL OR c.client_type  = $5::client_type_enum)
-          AND ($6::uuid   IS NULL OR c.user_id = $6::uuid)
-          AND ($7::uuid   IS NULL OR c.user_id IN (
-            SELECT grm2.user_id
-            FROM group_role_members grm2
-            WHERE grm2.group_id = $7::uuid
-              AND grm2.role_in_group = 'caravan'
-              AND grm2.deleted_at IS NULL
+          AND ($6::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM visits v2
+            WHERE v2.client_id = c.id
+              AND v2.user_id   = $6::uuid
+              AND v2.deleted_at IS NULL
+          ))
+          AND ($7::uuid IS NULL OR EXISTS (
+            SELECT 1 FROM visits v2
+            WHERE v2.client_id = c.id
+              AND v2.deleted_at IS NULL
+              AND v2.user_id IN (
+                SELECT grm2.user_id
+                FROM group_role_members grm2
+                WHERE grm2.group_id       = $7::uuid
+                  AND grm2.role_in_group  = 'caravan'
+                  AND grm2.deleted_at     IS NULL
+              )
           ))
       ),
       client_data AS (
