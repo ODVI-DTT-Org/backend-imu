@@ -102,6 +102,12 @@ async function runMigrations() {
     await client.query(migration1105);
     console.log('✅ Migration 1105 completed');
 
+    // Run migration 1106
+    console.log('\n📋 Running migration 1106: Agents classification column...');
+    const migration1106 = fs.readFileSync(path.join(__dirname, 'migrations/1106_agents_classification_column.sql'), 'utf8');
+    await client.query(migration1106);
+    console.log('✅ Migration 1106 completed');
+
     // Run migration 1107
     console.log('\n📋 Running migration 1107: Touchpoints type loan release...');
     const migration1107 = fs.readFileSync(path.join(__dirname, 'migrations/1107_touchpoints_type_loan_release.sql'), 'utf8');
