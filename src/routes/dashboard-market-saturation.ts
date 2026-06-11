@@ -164,12 +164,14 @@ marketSaturation.get('/', authMiddleware, async (c) => {
           SELECT 1 FROM visits v2
           WHERE v2.client_id = c.id
             AND v2.user_id   = $6::uuid
-            AND v2.deleted_at IS NULL
+            AND ($1::date IS NULL OR v2.time_in::date >= $1::date)
+            AND ($2::date IS NULL OR v2.time_in::date <= $2::date)
         ))
         AND ($7::uuid IS NULL OR EXISTS (
           SELECT 1 FROM visits v2
           WHERE v2.client_id = c.id
-            AND v2.deleted_at IS NULL
+            AND ($1::date IS NULL OR v2.time_in::date >= $1::date)
+            AND ($2::date IS NULL OR v2.time_in::date <= $2::date)
             AND v2.user_id IN (
               SELECT grm2.user_id
               FROM group_role_members grm2
@@ -372,12 +374,14 @@ marketSaturation.get('/', authMiddleware, async (c) => {
             SELECT 1 FROM visits v2
             WHERE v2.client_id = c.id
               AND v2.user_id   = $6::uuid
-              AND v2.deleted_at IS NULL
+              AND ($1::date IS NULL OR v2.time_in::date >= $1::date)
+              AND ($2::date IS NULL OR v2.time_in::date <= $2::date)
           ))
           AND ($7::uuid IS NULL OR EXISTS (
             SELECT 1 FROM visits v2
             WHERE v2.client_id = c.id
-              AND v2.deleted_at IS NULL
+              AND ($1::date IS NULL OR v2.time_in::date >= $1::date)
+              AND ($2::date IS NULL OR v2.time_in::date <= $2::date)
               AND v2.user_id IN (
                 SELECT grm2.user_id
                 FROM group_role_members grm2
