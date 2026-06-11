@@ -220,6 +220,13 @@ streams:
           WHERE user_id = auth.user_id()
         )
 
+  agents:
+    auto_subscribe: true
+    query: |
+      SELECT id, name, classification, is_active, created_at, updated_at
+      FROM agents
+      WHERE is_active = true
+
   notifications:
     auto_subscribe: true
     query: |

@@ -219,4 +219,20 @@ export const tables: Table[] = [
       new Column({ name: 'is_active', type: ColumnType.BOOLEAN }),
     ],
   }),
+
+  // ============================================================
+  // AGENTS
+  // ============================================================
+
+  new Table({
+    name: 'agents',
+    columns: [
+      new Column({ name: 'id', type: ColumnType.TEXT, primary_key: true }),
+      new Column({ name: 'name', type: ColumnType.TEXT }),
+      new Column({ name: 'classification', type: ColumnType.TEXT }),
+      new Column({ name: 'is_active', type: ColumnType.BOOLEAN }),
+      new Column({ name: 'created_at', type: ColumnType.TEXT }),
+      new Column({ name: 'updated_at', type: ColumnType.TEXT }),
+    ],
+  }),
 ];
