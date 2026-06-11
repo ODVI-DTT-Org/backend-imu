@@ -33,7 +33,7 @@ agents.get('/', authMiddleware, async (c) => {
      WHERE is_active = true
      ORDER BY name ASC`,
   );
-  return c.json(result.rows);
+  return c.json({ agents: result.rows });
 });
 
 // POST /api/agents — create agent (admin only)
@@ -48,7 +48,7 @@ agents.post('/', authMiddleware, requireRole('admin'), async (c) => {
        RETURNING id, name, is_active, created_at, updated_at`,
       [validated.name],
     );
-    return c.json(result.rows[0], 201);
+    return c.json({ agent: result.rows[0] }, 201);
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       const ve = new ValidationError('Invalid input');
@@ -103,7 +103,7 @@ agents.patch('/:id', authMiddleware, requireRole('admin'), async (c) => {
     if (result.rows.length === 0) {
       return c.json({ error: 'Agent not found' }, 404);
     }
-    return c.json(result.rows[0]);
+    return c.json({ agent: result.rows[0] });
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       const ve = new ValidationError('Invalid input');
