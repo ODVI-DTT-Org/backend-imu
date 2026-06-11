@@ -120,6 +120,12 @@ async function runMigrations() {
     await client.query(migration1108);
     console.log('✅ Migration 1108 completed');
 
+    // Run migration 1109
+    console.log('\n📋 Running migration 1109: Seed official agents list (56 rows)...');
+    const migration1109 = fs.readFileSync(path.join(__dirname, 'migrations/1109_add_classification_seed_agents.sql'), 'utf8');
+    await client.query(migration1109);
+    console.log('✅ Migration 1109 completed');
+
     // Verify permissions
     console.log('\n🔍 Verifying permissions...');
     const result = await client.query(`
