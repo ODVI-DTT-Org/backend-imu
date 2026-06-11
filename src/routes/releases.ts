@@ -84,12 +84,17 @@ releases.get('/admin', authMiddleware, requireRole('admin'), async (c) => {
   v.time_out AS visit_time_out,
   v.kilometers_traveled AS visit_kilometers_traveled,
   v.photo_url AS visit_photo_url,
-  v.remarks  AS visit_remarks
+  v.remarks  AS visit_remarks,
+  r.with_agent,
+  r.agent_id AS loan_agent_id,
+  ag.name AS loan_agent_name,
+  r.no_agent_reason
 FROM releases r
 JOIN clients cl ON cl.id = r.client_id
 JOIN users u ON u.id = r.user_id
 LEFT JOIN visits v ON v.id = r.visit_id
 LEFT JOIN users ap ON ap.id = r.approved_by
+LEFT JOIN agents ag ON ag.id = r.agent_id
 ${where}
 ORDER BY r.created_at DESC
 LIMIT $${idx} OFFSET $${idx + 1}`,
