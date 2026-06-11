@@ -2193,7 +2193,7 @@ approvals.post('/loan-release-v2', authMiddleware, async (c) => {
             photo_url, remarks, reason, status
           ) VALUES (
             gen_random_uuid(), $1, $2, 'release_loan', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-            $16, $17, 'Loan Release', 'Completed'
+            $16, $17, 'LOAN_RELEASE', 'Completed'
           ) RETURNING id
         `, [validated.client_id, user.sub, validated.time_in, validated.time_out,
             validated.odometer_in ?? null, computedDeparture, computedKm,

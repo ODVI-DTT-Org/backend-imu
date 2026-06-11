@@ -85,14 +85,17 @@ export async function generateDailyVisitsReport(
       u.first_name                                 AS u_first_name,
       u.middle_name                                AS u_middle_name,
       u.last_name                                  AS u_last_name,
-      u.role,
+      COALESCE(g.name, 'UNASSIGNED')               AS team_name,
       COUNT(DISTINCT v.id)                                     AS visit_count,
       COUNT(DISTINCT v.id) FILTER (WHERE v.type = 'release_loan')   AS release_visit_count,
       COUNT(DISTINCT v.id) FILTER (WHERE v.type = 'regular_visit')  AS regular_visit_count
     FROM visits v
     JOIN users u ON u.id = v.user_id
+    LEFT JOIN group_role_members grm
+           ON grm.user_id = u.id AND grm.role_in_group = 'caravan' AND grm.deleted_at IS NULL
+    LEFT JOIN groups g ON g.id = grm.group_id
     ${whereClause}
-    GROUP BY date(v.time_in), v.user_id, u.first_name, u.middle_name, u.last_name, u.role
+    GROUP BY date(v.time_in), v.user_id, u.first_name, u.middle_name, u.last_name, g.name
     ORDER BY visit_date DESC, u.last_name, u.first_name
   `;
 
@@ -100,12 +103,13 @@ export async function generateDailyVisitsReport(
   const detailSql = `
     SELECT
       date(v.time_in)                              AS visit_date,
+      v.created_at,
       v.time_in,
       v.time_out,
       u.first_name                                 AS u_first_name,
       u.middle_name                                AS u_middle_name,
       u.last_name                                  AS u_last_name,
-      u.role,
+      COALESCE(g.name, 'UNASSIGNED')               AS team_name,
       cl.first_name                                AS c_first_name,
       cl.middle_name                               AS c_middle_name,
       cl.last_name                                 AS c_last_name,
@@ -116,24 +120,26 @@ export async function generateDailyVisitsReport(
       cl.market_type,
       cl.product_type                              AS client_product_type,
       v.type                                       AS visit_type,
-      v.reason,
+      tr.label                                     AS touchpoint_reason,
+      tr.category                                  AS touchpoint_category,
       v.status,
       v.address,
       v.barangay,
       v.municipality,
       v.province,
-      v.region,
-      v.latitude,
-      v.longitude,
       v.odometer_departure,
       v.odometer_arrival,
       v.kilometers_traveled,
-      v.remarks,
-      v.notes,
-      v.source
+      v.remarks
     FROM visits v
     JOIN users u ON u.id = v.user_id
     JOIN clients cl ON cl.id = v.client_id
+    LEFT JOIN group_role_members grm
+           ON grm.user_id = u.id AND grm.role_in_group = 'caravan' AND grm.deleted_at IS NULL
+    LEFT JOIN groups g ON g.id = grm.group_id
+    LEFT JOIN touchpoint_reasons tr
+           ON tr.reason_code = v.reason
+          AND tr.touchpoint_type = 'Visit'
     ${whereClause}
     ORDER BY v.time_in DESC, u.last_name, u.first_name
   `;
@@ -172,7 +178,7 @@ export async function generateDailyVisitsReport(
           { header: 'Visit Date',            key: 'visit_date',           width: 14 },
           { header: 'Caravan',               key: 'caravan',              width: 18 },
           { header: 'Caravan Name',          key: 'caravan_name',         width: 30 },
-          { header: 'Role',                  key: 'role',                 width: 14 },
+          { header: 'Team Name',             key: 'team_name',            width: 20 },
           { header: 'Visit Count',           key: 'visit_count',          width: 14 },
           { header: 'Regular Visit Count',   key: 'regular_visit_count',  width: 20 },
           { header: 'Release Visit Count',   key: 'release_visit_count',  width: 20 },
@@ -182,34 +188,31 @@ export async function generateDailyVisitsReport(
       {
         name: 'Per Visit',
         columns: [
-          { header: 'Visit Date',           key: 'visit_date',           width: 14 },
-          { header: 'Time In',              key: 'time_in',              width: 22 },
-          { header: 'Time Out',             key: 'time_out',             width: 22 },
-          { header: 'Caravan',              key: 'caravan',              width: 18 },
-          { header: 'Caravan Name',         key: 'caravan_name',         width: 30 },
-          { header: 'Role',                 key: 'role',                 width: 14 },
-          { header: 'Client Name',          key: 'client_name',          width: 28 },
-          { header: 'Client Phone',         key: 'client_phone',         width: 16 },
-          { header: 'Client Agency',        key: 'client_agency',        width: 28 },
-          { header: 'Pension Type',         key: 'pension_type',         width: 16 },
-          { header: 'Market Type',          key: 'market_type',          width: 16 },
-          { header: 'Product Type',         key: 'client_product_type',  width: 16 },
-          { header: 'Visit Type',           key: 'visit_type',           width: 16 },
-          { header: 'Reason',               key: 'reason',               width: 20 },
-          { header: 'Status',               key: 'status',               width: 14 },
-          { header: 'Address',              key: 'address',              width: 40 },
-          { header: 'Barangay',             key: 'barangay',             width: 20 },
-          { header: 'Municipality',         key: 'municipality',         width: 20 },
-          { header: 'Province',             key: 'province',             width: 20 },
-          { header: 'Region',               key: 'region',               width: 16 },
-          { header: 'Latitude',             key: 'latitude',             width: 14 },
-          { header: 'Longitude',            key: 'longitude',            width: 14 },
-          { header: 'Odometer Departure',   key: 'odometer_departure',   width: 20 },
-          { header: 'Odometer Arrival',     key: 'odometer_arrival',     width: 18 },
-          { header: 'KM Traveled',          key: 'kilometers_traveled',  width: 14 },
-          { header: 'Remarks',              key: 'remarks',              width: 30 },
-          { header: 'Notes',               key: 'notes',                width: 30 },
-          { header: 'Source',               key: 'source',               width: 16 },
+          { header: 'Visit Date',            key: 'visit_date',           width: 14 },
+          { header: 'Created At',            key: 'created_at',           width: 22 },
+          { header: 'Time In',               key: 'time_in',              width: 22 },
+          { header: 'Time Out',              key: 'time_out',             width: 22 },
+          { header: 'Caravan',               key: 'caravan',              width: 18 },
+          { header: 'Caravan Name',          key: 'caravan_name',         width: 30 },
+          { header: 'Team Name',             key: 'team_name',            width: 20 },
+          { header: 'Client Name',           key: 'client_name',          width: 28 },
+          { header: 'Client Phone',          key: 'client_phone',         width: 16 },
+          { header: 'Client Agency',         key: 'client_agency',        width: 28 },
+          { header: 'Pension Type',          key: 'pension_type',         width: 16 },
+          { header: 'Market Type',           key: 'market_type',          width: 16 },
+          { header: 'Product Type',          key: 'client_product_type',  width: 16 },
+          { header: 'Visit Type',            key: 'visit_type',           width: 16 },
+          { header: 'Touchpoint Reason',     key: 'touchpoint_reason',    width: 28 },
+          { header: 'Touchpoint Category',   key: 'touchpoint_category',  width: 20 },
+          { header: 'Status',                key: 'status',               width: 14 },
+          { header: 'Address',               key: 'address',              width: 40 },
+          { header: 'Barangay',              key: 'barangay',             width: 20 },
+          { header: 'Municipality',          key: 'municipality',         width: 20 },
+          { header: 'Province',              key: 'province',             width: 20 },
+          { header: 'Odometer Departure',    key: 'odometer_departure',   width: 20 },
+          { header: 'Odometer Arrival',      key: 'odometer_arrival',     width: 18 },
+          { header: 'KM Traveled',           key: 'kilometers_traveled',  width: 14 },
+          { header: 'Remarks',               key: 'remarks',              width: 30 },
         ],
         rows: detailRows,
       },
