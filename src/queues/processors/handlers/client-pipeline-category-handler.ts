@@ -58,11 +58,15 @@ function toDateStr(d: Date): string {
   return d.toISOString().split('T')[0];
 }
 
-/** Format a month header, e.g. "Jan 2026". */
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/** Format a month header, e.g. "January 2026". */
 function formatMonthHeader(ym: string): string {
   const [y, m] = ym.split('-').map(Number);
-  const d = new Date(y, m - 1, 1);
-  return d.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  return `${MONTH_NAMES[m - 1]} ${y}`;
 }
 
 /** Build a sorted list of "YYYY-MM" strings covering [startYM, endYM] inclusive. */
