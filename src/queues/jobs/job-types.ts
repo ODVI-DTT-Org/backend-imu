@@ -63,6 +63,7 @@ export enum ReportJobType {
   REPORT_ODOMETER = 'report_odometer',
   REPORT_RELEASES_BY_LOAN_TYPE = 'report_releases_by_loan_type',
   REPORT_TOUCHPOINTS_TO_RELEASE = 'report_touchpoints_to_release',
+  REPORT_CLIENT_PIPELINE_CATEGORY = 'report_client_pipeline_category',
 }
 
 /**
@@ -173,6 +174,9 @@ export interface ReportJobData extends BaseJobData {
     group_ids?: string[];
     user_ids?: string[];
     reason_category?: string;
+    // Params for client pipeline category report (YYYY-MM)
+    startMonth?: string;
+    endMonth?: string;
   };
 }
 
