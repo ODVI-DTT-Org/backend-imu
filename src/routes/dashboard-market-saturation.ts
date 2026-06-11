@@ -91,6 +91,8 @@ marketSaturation.get('/', authMiddleware, async (c) => {
   const dateTo = c.req.query('date_to') || null;
   const municipality = c.req.query('municipality') || null;
   const clientType = c.req.query('client_type') || null;
+  const caravanId = c.req.query('caravan_id') || null;
+  const teamId = c.req.query('team_id') || null;
   const segment = c.req.query('segment') || null;
 
   const muniPage = Math.max(1, parseInt(c.req.query('muni_page') || '1', 10));
@@ -119,12 +121,12 @@ marketSaturation.get('/', authMiddleware, async (c) => {
 
   // Cache key scoped per user to avoid area_manager cache collisions
   const scope = user.role === 'area_manager' ? user.sub : 'all';
-  const cacheKey = `msat:${scope}:${dateFrom}:${dateTo}:${municipality}:${clientType}:${muniFilters.join(',')}:${muniPage}:${muniPerPage}`;
+  const cacheKey = `msat:${scope}:${dateFrom}:${dateTo}:${municipality}:${clientType}:${caravanId}:${teamId}:${muniFilters.join(',')}:${muniPage}:${muniPerPage}`;
 
   const cache = getCacheService();
 
-  // Params: $1=date_from, $2=date_to, $3=territory[], $4=municipality, $5=client_type
-  const baseParams: any[] = [dateFrom, dateTo, territoryMunicipalities, municipality, clientType];
+  // Params: $1=date_from, $2=date_to, $3=territory[], $4=municipality, $5=client_type, $6=caravan_id, $7=team_id
+  const baseParams: any[] = [dateFrom, dateTo, territoryMunicipalities, municipality, clientType, caravanId, teamId];
 
   const baseCte = `
     WITH base AS (
@@ -158,6 +160,14 @@ marketSaturation.get('/', authMiddleware, async (c) => {
         AND ($3::text[] IS NULL OR c.municipality = ANY($3))
         AND ($4::text   IS NULL OR c.municipality = $4)
         AND ($5::text   IS NULL OR c.client_type  = $5::client_type_enum)
+        AND ($6::uuid   IS NULL OR c.user_id = $6::uuid)
+        AND ($7::uuid   IS NULL OR c.user_id IN (
+          SELECT grm2.user_id
+          FROM group_role_members grm2
+          WHERE grm2.group_id = $7::uuid
+            AND grm2.role_in_group = 'caravan'
+            AND grm2.deleted_at IS NULL
+        ))
     ),
     client_data AS (
       SELECT
@@ -273,7 +283,7 @@ marketSaturation.get('/', authMiddleware, async (c) => {
       ${muniAggCte}
       SELECT * FROM muni_agg
       ORDER BY municipality
-      LIMIT $6 OFFSET $7
+      LIMIT $8 OFFSET $9
     `;
 
     const [totalResult, muniCountResult, muniDataResult] = await Promise.all([
@@ -348,6 +358,14 @@ marketSaturation.get('/', authMiddleware, async (c) => {
           AND ($3::text[] IS NULL OR c.municipality = ANY($3))
           AND ($4::text   IS NULL OR c.municipality = $4)
           AND ($5::text   IS NULL OR c.client_type  = $5::client_type_enum)
+          AND ($6::uuid   IS NULL OR c.user_id = $6::uuid)
+          AND ($7::uuid   IS NULL OR c.user_id IN (
+            SELECT grm2.user_id
+            FROM group_role_members grm2
+            WHERE grm2.group_id = $7::uuid
+              AND grm2.role_in_group = 'caravan'
+              AND grm2.deleted_at IS NULL
+          ))
       ),
       client_data AS (
         SELECT
