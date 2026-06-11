@@ -2318,5 +2318,33 @@ reports.post('/itinerary-analysis/generate', authMiddleware, requirePermission('
   return c.json({ jobId: job.id }, 202);
 });
 
+// POST /api/reports/client-pipeline-category/generate
+//   start_month=YYYY-MM  (inclusive start; defaults to current month)
+//   end_month=YYYY-MM    (inclusive end;   defaults to current month)
+//
+// Returns a single XLSX sheet with one row per visited client and one column
+// per calendar month in the range, showing the pipeline category
+// (existing / favorable / others / blank).
+reports.post('/client-pipeline-category/generate', authMiddleware, requirePermission('reports', 'read'), async (c) => {
+  const user = c.get('user');
+  if (!user) return c.json({ message: 'Unauthorized' }, 401);
+
+  const body = await c.req.json().catch(() => ({}));
+  const schema = z.object({
+    start_month: z.string().regex(/^\d{4}-\d{2}$/, 'start_month must be YYYY-MM').optional(),
+    end_month:   z.string().regex(/^\d{4}-\d{2}$/, 'end_month must be YYYY-MM').optional(),
+  });
+
+  const { start_month, end_month } = schema.parse(body);
+
+  const job = await addReportJob(
+    ReportJobType.REPORT_CLIENT_PIPELINE_CATEGORY,
+    user.sub,
+    { startMonth: start_month, endMonth: end_month }
+  );
+
+  return c.json({ job_id: job.id }, 202);
+});
+
 export default reports;
 
