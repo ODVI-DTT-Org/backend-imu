@@ -140,6 +140,7 @@ export async function generateDailyVisitsReport(
     LEFT JOIN touchpoint_reasons tr
            ON tr.reason_code = v.reason
           AND tr.touchpoint_type = 'Visit'
+          AND tr.role = 'caravan'
     ${whereClause}
     ORDER BY v.time_in DESC, u.last_name, u.first_name
   `;
