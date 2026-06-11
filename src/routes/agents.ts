@@ -16,22 +16,26 @@ import { ValidationError } from '../errors/index.js';
 
 const agents = new Hono();
 
+const VALID_CLASSIFICATIONS = ['ORGANIC CARAVAN', 'ORGANIC MSS', 'SP AGENTS'] as const;
+
 const createAgentSchema = z.object({
   name: z.string().min(1, 'Name is required').max(255),
+  classification: z.enum(VALID_CLASSIFICATIONS).optional().default('ORGANIC CARAVAN'),
 });
 
 const updateAgentSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   is_active: z.boolean().optional(),
+  classification: z.enum(VALID_CLASSIFICATIONS).optional(),
 });
 
 // GET /api/agents — list active agents
 agents.get('/', authMiddleware, async (c) => {
   const result = await pool.query(
-    `SELECT id, name, is_active, created_at, updated_at
+    `SELECT id, name, classification, is_active, created_at, updated_at
      FROM agents
      WHERE is_active = true
-     ORDER BY name ASC`,
+     ORDER BY classification, name ASC`,
   );
   return c.json({ agents: result.rows });
 });
@@ -43,10 +47,10 @@ agents.post('/', authMiddleware, requireRole('admin'), async (c) => {
     const validated = createAgentSchema.parse(body);
 
     const result = await pool.query(
-      `INSERT INTO agents (name, is_active)
-       VALUES ($1, true)
-       RETURNING id, name, is_active, created_at, updated_at`,
-      [validated.name],
+      `INSERT INTO agents (name, classification, is_active)
+       VALUES ($1, $2, true)
+       RETURNING id, name, classification, is_active, created_at, updated_at`,
+      [validated.name, validated.classification],
     );
     return c.json({ agent: result.rows[0] }, 201);
   } catch (error: any) {
@@ -86,6 +90,10 @@ agents.patch('/:id', authMiddleware, requireRole('admin'), async (c) => {
       fields.push(`is_active = $${idx++}`);
       params.push(validated.is_active);
     }
+    if (validated.classification !== undefined) {
+      fields.push(`classification = $${idx++}`);
+      params.push(validated.classification);
+    }
 
     if (fields.length === 0) {
       return c.json({ error: 'No fields to update' }, 400);
@@ -96,7 +104,7 @@ agents.patch('/:id', authMiddleware, requireRole('admin'), async (c) => {
 
     const result = await pool.query(
       `UPDATE agents SET ${fields.join(', ')} WHERE id = $${idx}
-       RETURNING id, name, is_active, created_at, updated_at`,
+       RETURNING id, name, classification, is_active, created_at, updated_at`,
       params,
     );
 
