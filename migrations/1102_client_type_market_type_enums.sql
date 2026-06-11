@@ -1,8 +1,9 @@
 -- Migration 1102: Replace client_type and market_type TEXT columns with strict PG enums
 -- Old values remap:
---   market_type: 'VIRGIN'->'VIRGIN', 'FULLY PAID'->'FULLY-PAID', 'EXISTING'->'EXISTING', else NULL
---   client_type: 'POTENTIAL'->'POTENTIAL', 'EXISTING'->'GENERAL', else NULL
--- Both columns remain nullable so old APK inserts that omit these fields still work.
+--   market_type: 'VIRGIN'->'VIRGIN', 'FULLY PAID'->'FULLY-PAID', 'EXISTING'->'EXISTING', unknown/NULL -> 'VIRGIN'
+--   client_type: 'POTENTIAL'->'POTENTIAL', 'EXISTING'->'GENERAL', unknown/NULL -> 'POTENTIAL'
+-- Existing rows with NULL or unmapped values are defaulted (VIRGIN / POTENTIAL) rather than left NULL.
+-- Columns remain nullable in schema so old APK inserts that omit these fields still work.
 --
 -- NOTE: drops + recreates callable_clients_mv (depends on both columns).
 -- Definition mirrors COMPLETE_SCHEMA.sql lines 1152-1190.
@@ -42,11 +43,13 @@ ALTER TABLE clients
             WHEN 'FULLY PAID' THEN 'FULLY-PAID'::market_type_enum
             WHEN 'FULLY-PAID' THEN 'FULLY-PAID'::market_type_enum
             WHEN 'EXISTING'   THEN 'EXISTING'::market_type_enum
-            ELSE NULL
+            ELSE 'VIRGIN'::market_type_enum
         END
     );
 
--- Migrate client_type: map old text values to new enum, unknown -> NULL
+ALTER TABLE clients ALTER COLUMN market_type SET DEFAULT 'VIRGIN'::market_type_enum;
+
+-- Migrate client_type: map old text values to new enum, unknown -> 'POTENTIAL'
 ALTER TABLE clients
     ALTER COLUMN client_type DROP DEFAULT;
 
@@ -60,7 +63,7 @@ ALTER TABLE clients
             WHEN 'PROCESSING'   THEN 'PROCESSING'::client_type_enum
             WHEN 'GENERAL'      THEN 'GENERAL'::client_type_enum
             WHEN 'EXISTING'     THEN 'GENERAL'::client_type_enum
-            ELSE NULL
+            ELSE 'POTENTIAL'::client_type_enum
         END
     );
 
@@ -113,7 +116,7 @@ VALUES (
   'completed',
   now(),
   jsonb_build_object(
-    'note', 'Replaced client_type and market_type TEXT columns with PG ENUM types. Dropped+recreated callable_clients_mv. Old EXISTING->GENERAL, FULLY PAID->FULLY-PAID'
+    'note', 'Replaced client_type and market_type TEXT columns with PG ENUM types. Dropped+recreated callable_clients_mv. Old EXISTING->GENERAL, FULLY PAID->FULLY-PAID. NULL/unknown client_type->POTENTIAL, NULL/unknown market_type->VIRGIN. Added market_type default VIRGIN.'
   )
 );
 
